@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+# Keep data.db in repo (seed data for Railway); ignore WAL/SHM temp files
+*.db-shm
+*.db-wal
