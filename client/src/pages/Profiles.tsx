@@ -63,9 +63,8 @@ function isBreakBadTiming(breakStart: number, startUtc: number, endUtc: number):
   return breakRelStart < 1.0 || breakRelEnd > shiftDur - 1.0;
 }
 
-// Returns which days are off based on the agent's offWeekend setting
 function getOffDays(offWeekend: number): number[] {
-  return offWeekend === 1 ? [0, 6] : [4, 5]; // 1=Sat/Sun off, 0=Thu/Fri off
+  return offWeekend === 1 ? [0, 6] : [4, 5];
 }
 
 export default function Profiles() {
@@ -142,7 +141,6 @@ export default function Profiles() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-lg font-semibold">Agents</h1>
@@ -177,7 +175,6 @@ export default function Profiles() {
         </div>
       </div>
 
-      {/* Agent grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {agents.map(agent => {
           const agentShifts = allShifts.filter(s => s.agentId === agent.id);
@@ -189,7 +186,6 @@ export default function Profiles() {
               style={{ borderColor: agent.color + "25" }}
               data-testid={`card-agent-${agent.id}`}
             >
-              {/* Agent header */}
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <div
@@ -252,7 +248,6 @@ export default function Profiles() {
                 )}
               </div>
 
-              {/* Timezone */}
               <div className="flex items-center gap-1.5 mb-2">
                 <Clock size={11} className="text-muted-foreground" />
                 <span className="text-[10px] text-muted-foreground font-mono">{agent.timezone}</span>
@@ -261,10 +256,8 @@ export default function Profiles() {
                 </span>
               </div>
 
-              {/* Days-off toggle + Apply week row */}
               {isAdmin && (
                 <div className="flex items-center justify-between mb-3 gap-2">
-                  {/* Off-day toggle */}
                   <button
                     onClick={() => toggleOffDayMutation.mutate({ id: agent.id, offWeekend: (agent.offWeekend ?? 1) === 1 ? 0 : 1 })}
                     className={cn(
@@ -279,7 +272,6 @@ export default function Profiles() {
                     {(agent.offWeekend ?? 1) === 1 ? "Off: Sat/Sun" : "Off: Thu/Fri"}
                   </button>
 
-                  {/* Apply week template */}
                   <ApplyWeekRow
                     agentId={agent.id}
                     offWeekend={agent.offWeekend ?? 1}
@@ -289,7 +281,6 @@ export default function Profiles() {
                 </div>
               )}
 
-              {/* Shift pills */}
               <div className="flex flex-wrap gap-1">
                 {DAYS.map((day, di) => {
                   const shift = agentShifts.find(s => s.dayOfWeek === di);
@@ -331,7 +322,6 @@ function getLocalTime(tz: string) {
   }
 }
 
-// --- Apply Week Row ---
 function ApplyWeekRow({
   agentId, offWeekend, onApply, loading,
 }: {
@@ -349,8 +339,6 @@ function ApplyWeekRow({
     if (isNaN(s) || isNaN(e)) return;
     onApply(s, e);
   };
-
-  const offLabel = offWeekend === 1 ? "Mon–Wed+Fri" : "Mon–Wed+Sat/Sun";
 
   return (
     <div className="flex items-center gap-1">
@@ -373,7 +361,6 @@ function ApplyWeekRow({
         onClick={handleApply}
         disabled={loading}
         className="text-[9px] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
-        title={`Apply to all work days`}
       >
         <CalendarDays size={9} />
         Apply week
@@ -382,7 +369,6 @@ function ApplyWeekRow({
   );
 }
 
-// --- Agent Form ---
 function AgentForm({
   defaultValues,
   defaultColor = "#FFD700",
@@ -498,7 +484,6 @@ function AgentForm({
   );
 }
 
-// --- Shift Pill ---
 function ShiftPill({
   day, dayIdx, shift, agentId, color, isAdmin, isDayOff, onUpsert, onUpdateShift
 }: {
@@ -524,7 +509,6 @@ function ShiftPill({
     const s = parseFloat(startH);
     let e = parseFloat(endH);
     if (isNaN(s) || isNaN(e)) return;
-    // Overnight fix: if end <= start, treat as next-day by adding 24
     if (e <= s) e = e + 24;
     onUpsert({ agentId, dayOfWeek: dayIdx, startUtc: s, endUtc: e, activeStart: null, activeEnd: null, breakStart: null });
     setEditing(false);
@@ -568,7 +552,6 @@ function ShiftPill({
           onChange={e => setEndH(e.target.value)}
           className="w-8 bg-accent rounded text-center text-[9px] font-mono"
           placeholder="end"
-          title="Use >24 for overnight (e.g. 7 for 07:00 next day, saved as 31 when start=23)"
         />
         <button onClick={save} className="text-primary font-bold">✓</button>
         <button onClick={() => setEditing(false)} className="text-muted-foreground">✕</button>
@@ -616,7 +599,6 @@ function ShiftPill({
     );
   }
 
-  // Day-off pill: visually greyed, not clickable for editing
   if (isDayOff && !shift) {
     return (
       <div
@@ -667,7 +649,16 @@ function ShiftPill({
               savedBreak != null ? "opacity-100" : "opacity-30 hover:opacity-70",
               !isAdmin && "cursor-default pointer-events-none"
             )}
-            style={{ color: showBreakWarning ? "#F59E0B" : savedBreak != null ? color : "hsl(var(--muted-foreground))" }}
+            style={{
+              color: showBreakWarning
+                ? "#F59E0B"
+                : savedBreak != null
+                  ? "white"
+                  : "hsl(var(--muted-foreground))",
+              filter: savedBreak != null && !showBreakWarning
+                ? `drop-shadow(0 0 2px ${color})`
+                : undefined,
+            }}
           >
             <Coffee size={9} />
           </button>
