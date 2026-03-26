@@ -1,7 +1,7 @@
 import { db } from "./db";
-import { agents, shifts, overtimeLog } from "@shared/schema";
-import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog } from "@shared/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { agents, shifts, overtimeLog, agentLogs } from "@shared/schema";
+import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog, AgentLog, InsertAgentLog } from "@shared/schema";
+import { eq, and } from "drizzle-orm";
 
 export interface IStorage {
   // Agents
@@ -25,6 +25,12 @@ export interface IStorage {
   getOvertimeLogs(): OvertimeLog[];
   getOvertimeByAgent(agentId: number): OvertimeLog[];
   upsertOvertimeLog(agentId: number, date: string, data: Partial<InsertOvertimeLog>): OvertimeLog;
+
+  // Agent logs
+  getAgentLogs(): AgentLog[];
+  getAgentLogsByAgent(agentId: number): AgentLog[];
+  createAgentLog(data: InsertAgentLog): AgentLog;
+  deleteAgentLog(id: number): void;
 }
 
 export const storage: IStorage = {
@@ -67,11 +73,9 @@ export const storage: IStorage = {
   },
 
   applyWeekTemplate(agentId, startUtc, endUtc, offWeekend) {
-    // offWeekend=1 => days off are Sat(6) and Sun(0); offWeekend=0 => days off are Thu(4) and Fri(5)
     const offDays = offWeekend === 1 ? [0, 6] : [4, 5];
     const workDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !offDays.includes(d));
 
-    // Delete shifts for off-days (they should show as off)
     for (const day of offDays) {
       const existing = db.select().from(shifts)
         .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
@@ -81,7 +85,6 @@ export const storage: IStorage = {
       }
     }
 
-    // Upsert shifts for work days
     const result: Shift[] = [];
     for (const day of workDays) {
       const existing = db.select().from(shifts)
@@ -117,5 +120,18 @@ export const storage: IStorage = {
       return db.update(overtimeLog).set(data).where(eq(overtimeLog.id, existing.id)).returning().get()!;
     }
     return db.insert(overtimeLog).values({ agentId, date, overtimeHours: 0, releasedHours: 0, ...data }).returning().get();
+  },
+
+  getAgentLogs() {
+    return db.select().from(agentLogs).all();
+  },
+  getAgentLogsByAgent(agentId) {
+    return db.select().from(agentLogs).where(eq(agentLogs.agentId, agentId)).all();
+  },
+  createAgentLog(data) {
+    return db.insert(agentLogs).values(data).returning().get();
+  },
+  deleteAgentLog(id) {
+    db.delete(agentLogs).where(eq(agentLogs.id, id)).run();
   },
 };
