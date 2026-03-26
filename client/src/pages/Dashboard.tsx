@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Agent, Shift } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Clock, AlignLeft, Lock } from "lucide-react";
+import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import {
@@ -21,6 +21,7 @@ import {
 } from "@/lib/shiftUtils";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 function getUTCDay() { return new Date().getUTCDay(); }
 function getUTCHour() {
@@ -55,6 +56,58 @@ function hexToRgba(hex: string, alpha: number) {
 
 interface LeverState { activeStart: number; activeEnd: number; }
 
+// ── Week helpers ──────────────────────────────────────────────────────────────
+// Returns ISO date string (YYYY-MM-DD) for a given UTC date offset from today
+function utcDateOffset(offsetDays: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+// Returns the Monday of the week containing a given date
+function mondayOf(d: Date): Date {
+  const day = d.getUTCDay(); // 0=Sun
+  const diff = day === 0 ? -6 : 1 - day;
+  const m = new Date(d);
+  m.setUTCDate(d.getUTCDate() + diff);
+  return m;
+}
+
+// Build a list of 21 day descriptors: prev week + this week + next week
+interface DayDescriptor {
+  date: string;        // YYYY-MM-DD
+  dayOfWeek: number;   // 0-6
+  label: string;       // "Mon", "Tue" etc.
+  isToday: boolean;
+  weekOffset: -1 | 0 | 1; // -1 = prev, 0 = current, 1 = next
+}
+
+function build21Days(): DayDescriptor[] {
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const mon = mondayOf(today);
+  // Start from Monday of prev week
+  const start = new Date(mon);
+  start.setUTCDate(mon.getUTCDate() - 7);
+
+  const days: DayDescriptor[] = [];
+  for (let i = 0; i < 21; i++) {
+    const d = new Date(start);
+    d.setUTCDate(start.getUTCDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const dow = d.getUTCDay();
+    const weekOffset: -1 | 0 | 1 = i < 7 ? -1 : i < 14 ? 0 : 1;
+    days.push({
+      date: dateStr,
+      dayOfWeek: dow,
+      label: DAYS[dow],
+      isToday: dateStr === todayStr,
+      weekOffset,
+    });
+  }
+  return days;
+}
+
 export default function Dashboard() {
   const isAdmin = useAdminMode();
 
@@ -68,7 +121,7 @@ export default function Dashboard() {
   const [highlighted, setHighlighted] = useState<number | null>(null);
   const [leverState, setLeverState]   = useState<Record<number, LeverState>>({});
   const [utcHour, setUtcHour]         = useState(getUTCHour());
-  const [viewMode, setViewMode]       = useState<"clock" | "timeline">("clock");
+  const [viewMode, setViewMode]       = useState<"clock" | "timeline" | "week">("clock");
   const [tooltipInfo, setTooltipInfo] = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
 
   const { data: agents = [] }    = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
@@ -175,24 +228,32 @@ export default function Dashboard() {
             <h1 className="text-sm font-semibold">Coverage Command</h1>
             <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
           </div>
-          <div className="flex items-center gap-1">
-            {DAYS.map((d, i) => {
-              const hasShifts = allShifts.some(s => s.dayOfWeek === i);
-              return (
-                <button key={d} onClick={() => setSelectedDay(i)} data-testid={`day-${d}`}
-                  className={cn(
-                    "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
-                    selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                  )}
-                >
-                  {d}
-                  {hasShifts && selectedDay !== i && (
-                    <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          {/* Day selector — hidden in week view */}
+          {viewMode !== "week" && (
+            <div className="flex items-center gap-1">
+              {DAYS.map((d, i) => {
+                const hasShifts = allShifts.some(s => s.dayOfWeek === i);
+                return (
+                  <button key={d} onClick={() => setSelectedDay(i)} data-testid={`day-${d}`}
+                    className={cn(
+                      "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
+                      selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                    )}
+                  >
+                    {d}
+                    {hasShifts && selectedDay !== i && (
+                      <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {viewMode === "week" && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground font-mono">3-week scroll · click a day to focus</span>
+            </div>
+          )}
           <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
             <button onClick={() => setViewMode("clock")}
               className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
@@ -206,10 +267,17 @@ export default function Dashboard() {
               data-testid="view-timeline">
               <AlignLeft size={13} /> Timeline
             </button>
+            <button onClick={() => setViewMode("week")}
+              className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
+                viewMode === "week" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+              data-testid="view-week">
+              <CalendarRange size={13} /> Week
+            </button>
           </div>
         </header>
 
-        {selectedDay === todayUTCDay && (
+        {/* Online now strip — hidden in week view */}
+        {viewMode !== "week" && selectedDay === todayUTCDay && (
           <div className="flex items-center gap-3 px-6 py-2 border-b border-border bg-card/20 shrink-0">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
             {onlineAgents.length === 0 ? (
@@ -229,134 +297,147 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
-            {!hasShiftsToday ? (
-              <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
-            ) : viewMode === "clock" ? (
-              <ClockVisualizer
-                agents={agents}
-                shifts={todayShifts}
-                visible={visible}
-                highlighted={highlighted}
-                setHighlighted={setHighlighted}
-                leverState={leverState}
-                utcHour={utcHour}
-                coverage={coverage}
-                maxCoverage={maxCoverage}
-                tooltipInfo={tooltipInfo}
-                setTooltipInfo={setTooltipInfo}
-                selectedDay={selectedDay}
-              />
-            ) : (
-              <TimelineView
-                agents={agents}
-                shifts={todayShifts}
-                visible={visible}
-                highlighted={highlighted}
-                setHighlighted={setHighlighted}
-                leverState={leverState}
-                utcHour={utcHour}
-                coverage={coverage}
-                selectedDay={selectedDay}
-              />
-            )}
-
-            {hasShiftsToday && (
-              <div className="flex flex-wrap gap-1.5 justify-center mt-3 max-w-2xl">
-                <button onClick={toggleAll}
-                  className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
-                  {visible.size === agents.length ? "Hide all" : "Show all"}
-                </button>
-                {agents.map(agent => (
-                  <button key={agent.id}
-                    onClick={() => toggleVisible(agent.id)}
-                    onMouseEnter={() => setHighlighted(agent.id)}
-                    onMouseLeave={() => setHighlighted(null)}
-                    data-testid={`toggle-agent-${agent.id}`}
-                    className={cn(
-                      "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
-                      visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
-                    )}
-                    style={{
-                      borderColor: agent.color + "60",
-                      backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
-                      color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
-                      boxShadow: highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
-                    }}
-                  >
-                    {agent.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
-            <div className="grid grid-cols-3 border-b border-border shrink-0">
-              <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
-              <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
-              <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${formatDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
-            </div>
-
-            <div className="relative flex-1 min-h-0">
-              <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {DAYS[selectedDay]}</p>
-                    {!isAdmin && (
-                      <span className="flex items-center gap-1 text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5">
-                        <Lock size={8} /> View-only
-                      </span>
-                    )}
-                  </div>
-                  {isAdmin && (
-                    <button onClick={resetLevers} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
-                      <RotateCcw size={10} /> Reset
-                    </button>
-                  )}
-                </div>
-
-                {agentSummaries.filter(s => s.shifts.length > 0).map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
-                  <ShiftLever
-                    key={agent.id}
-                    agent={agent}
-                    shift={agentShifts[0]}
-                    leverState={leverState[agentShifts[0]?.id]}
-                    onLeverChange={(id, start, end) =>
-                      setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }))
-                    }
-                    highlighted={highlighted === agent.id}
-                    onHighlight={() => setHighlighted(agent.id)}
-                    onUnhighlight={() => setHighlighted(null)}
-                    baseHours={baseHours}
-                    overtimeHours={overtimeHours}
-                    releasedHours={releasedHours}
-                    isAdmin={isAdmin}
-                    utcHour={utcHour}
-                    selectedDay={selectedDay}
-                  />
-                ))}
-                {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (
-                  <p className="text-[11px] text-muted-foreground text-center py-2">
-                    {agentSummaries.filter(s => s.shifts.length === 0).length} agents off today
-                  </p>
-                )}
-                <div className="h-8" />
-              </div>
-              <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
-            </div>
-
-            <SummaryPanel
-              agentSummaries={agentSummaries}
-              selectedDay={selectedDay}
-              zeroCoverageHours={zeroCoverageHours}
-              peakCoverageHour={peakCoverageHour}
-              totalOvertimeHours={totalOvertimeHours}
-              totalReleasedHours={totalReleasedHours}
+        {/* ── Week view takes full canvas ── */}
+        {viewMode === "week" ? (
+          <div className="flex-1 overflow-hidden">
+            <WeekView
+              agents={agents}
+              allShifts={allShifts}
+              visible={visible}
+              utcHour={utcHour}
+              onSelectDay={(dow) => { setSelectedDay(dow); setViewMode("timeline"); }}
             />
           </div>
-        </div>
+        ) : (
+          <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
+              {!hasShiftsToday ? (
+                <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
+              ) : viewMode === "clock" ? (
+                <ClockVisualizer
+                  agents={agents}
+                  shifts={todayShifts}
+                  visible={visible}
+                  highlighted={highlighted}
+                  setHighlighted={setHighlighted}
+                  leverState={leverState}
+                  utcHour={utcHour}
+                  coverage={coverage}
+                  maxCoverage={maxCoverage}
+                  tooltipInfo={tooltipInfo}
+                  setTooltipInfo={setTooltipInfo}
+                  selectedDay={selectedDay}
+                />
+              ) : (
+                <TimelineView
+                  agents={agents}
+                  shifts={todayShifts}
+                  visible={visible}
+                  highlighted={highlighted}
+                  setHighlighted={setHighlighted}
+                  leverState={leverState}
+                  utcHour={utcHour}
+                  coverage={coverage}
+                  selectedDay={selectedDay}
+                />
+              )}
+
+              {hasShiftsToday && (
+                <div className="flex flex-wrap gap-1.5 justify-center mt-3 max-w-2xl">
+                  <button onClick={toggleAll}
+                    className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
+                    {visible.size === agents.length ? "Hide all" : "Show all"}
+                  </button>
+                  {agents.map(agent => (
+                    <button key={agent.id}
+                      onClick={() => toggleVisible(agent.id)}
+                      onMouseEnter={() => setHighlighted(agent.id)}
+                      onMouseLeave={() => setHighlighted(null)}
+                      data-testid={`toggle-agent-${agent.id}`}
+                      className={cn(
+                        "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
+                        visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
+                      )}
+                      style={{
+                        borderColor: agent.color + "60",
+                        backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
+                        color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
+                        boxShadow: highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
+                      }}
+                    >
+                      {agent.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
+              <div className="grid grid-cols-3 border-b border-border shrink-0">
+                <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
+                <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
+                <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${formatDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
+              </div>
+
+              <div className="relative flex-1 min-h-0">
+                <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {DAYS[selectedDay]}</p>
+                      {!isAdmin && (
+                        <span className="flex items-center gap-1 text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5">
+                          <Lock size={8} /> View-only
+                        </span>
+                      )}
+                    </div>
+                    {isAdmin && (
+                      <button onClick={resetLevers} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
+                        <RotateCcw size={10} /> Reset
+                      </button>
+                    )}
+                  </div>
+
+                  {agentSummaries.filter(s => s.shifts.length > 0).map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
+                    <ShiftLever
+                      key={agent.id}
+                      agent={agent}
+                      shift={agentShifts[0]}
+                      leverState={leverState[agentShifts[0]?.id]}
+                      onLeverChange={(id, start, end) =>
+                        setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }))
+                      }
+                      highlighted={highlighted === agent.id}
+                      onHighlight={() => setHighlighted(agent.id)}
+                      onUnhighlight={() => setHighlighted(null)}
+                      baseHours={baseHours}
+                      overtimeHours={overtimeHours}
+                      releasedHours={releasedHours}
+                      isAdmin={isAdmin}
+                      utcHour={utcHour}
+                      selectedDay={selectedDay}
+                    />
+                  ))}
+                  {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (
+                    <p className="text-[11px] text-muted-foreground text-center py-2">
+                      {agentSummaries.filter(s => s.shifts.length === 0).length} agents off today
+                    </p>
+                  )}
+                  <div className="h-8" />
+                </div>
+                <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
+              </div>
+
+              <SummaryPanel
+                agentSummaries={agentSummaries}
+                selectedDay={selectedDay}
+                zeroCoverageHours={zeroCoverageHours}
+                peakCoverageHour={peakCoverageHour}
+                totalOvertimeHours={totalOvertimeHours}
+                totalReleasedHours={totalReleasedHours}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </TooltipProvider>
   );
@@ -377,6 +458,290 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
             ? "No shifts are scheduled on weekends. Head to Agents to add weekend coverage."
             : "No agents have shifts scheduled for this day. Go to Agents to set up shifts."}
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Week View ─────────────────────────────────────────────────────────────────
+function WeekView({
+  agents, allShifts, visible, utcHour, onSelectDay,
+}: {
+  agents: Agent[];
+  allShifts: Shift[];
+  visible: Set<number>;
+  utcHour: number;
+  onSelectDay: (dow: number) => void;
+}) {
+  const days = build21Days();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const todayIdx  = days.findIndex(d => d.isToday);
+
+  // Column dimensions
+  const COL_W    = 110; // px per day column
+  const LABEL_H  = 52;  // header height
+  const ROW_H    = 18;  // agent row height
+  const COV_H    = 10;  // coverage strip
+  const AGENT_COUNT = agents.length;
+  const TOTAL_H  = LABEL_H + AGENT_COUNT * (ROW_H + 2) + COV_H + 24;
+
+  // Scroll today into center on mount
+  useEffect(() => {
+    if (!scrollRef.current || todayIdx < 0) return;
+    const el = scrollRef.current;
+    const targetScrollLeft = todayIdx * COL_W - el.clientWidth / 2 + COL_W / 2;
+    el.scrollLeft = Math.max(0, targetScrollLeft);
+  }, [todayIdx]);
+
+  const scrollToToday = () => {
+    if (!scrollRef.current || todayIdx < 0) return;
+    const el = scrollRef.current;
+    const targetScrollLeft = todayIdx * COL_W - el.clientWidth / 2 + COL_W / 2;
+    el.scrollTo({ left: Math.max(0, targetScrollLeft), behavior: "smooth" });
+  };
+
+  // Week label positions (Mon of each week)
+  const weekLabels = [
+    { label: "Last week",    startIdx: 0  },
+    { label: "This week",    startIdx: 7  },
+    { label: "Next week",    startIdx: 14 },
+  ];
+
+  return (
+    <div className="flex flex-col h-full bg-background">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-muted-foreground">
+            3-week view · shifts by day pattern · click any day → Timeline
+          </span>
+        </div>
+        <button
+          onClick={scrollToToday}
+          className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-md bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-all font-medium"
+        >
+          <Clock size={11} /> Today
+        </button>
+      </div>
+
+      {/* Scrollable canvas */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-x-auto overflow-y-auto overscroll-x-contain"
+        style={{ scrollBehavior: "smooth" }}
+      >
+        <div style={{ width: days.length * COL_W + 120, minHeight: TOTAL_H, position: "relative" }}>
+
+          {/* Week band labels */}
+          {weekLabels.map(({ label, startIdx }) => (
+            <div
+              key={label}
+              className="absolute top-0 flex items-center justify-center"
+              style={{
+                left: startIdx * COL_W + 120,
+                width: 7 * COL_W,
+                height: 20,
+                borderBottom: "1px solid hsl(var(--border))",
+              }}
+            >
+              <span className="text-[9px] text-muted-foreground uppercase tracking-widest font-medium">{label}</span>
+            </div>
+          ))}
+
+          {/* Agent name column (sticky left) */}
+          <div
+            className="absolute top-0 bottom-0 bg-background z-20 border-r border-border"
+            style={{ left: 0, width: 120, top: 0 }}
+          >
+            {/* spacer for header */}
+            <div style={{ height: LABEL_H }} />
+            {agents.map((agent, ai) => (
+              <div
+                key={agent.id}
+                className="flex items-center gap-1.5 px-2"
+                style={{ height: ROW_H + 2, opacity: visible.has(agent.id) ? 1 : 0.3 }}
+              >
+                <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
+                <span className="text-[10px] font-medium truncate" style={{ color: agent.color }}>{agent.name}</span>
+              </div>
+            ))}
+            {/* Coverage label */}
+            <div className="flex items-center px-2" style={{ height: COV_H + 8 }}>
+              <span className="text-[9px] text-muted-foreground uppercase tracking-wider">Cov</span>
+            </div>
+          </div>
+
+          {/* Day columns */}
+          {days.map((day, di) => {
+            const shiftsForDay = allShifts.filter(s => s.dayOfWeek === day.dayOfWeek);
+            const coverageInput = shiftsForDay.map(s => ({
+              activeStart: s.activeStart ?? s.startUtc,
+              activeEnd:   s.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc),
+            }));
+            const coverage  = calcCoverageForDay(coverageInput);
+            const maxCov    = Math.max(...coverage, 1);
+            const isToday   = day.isToday;
+            const isWeekend = day.dayOfWeek === 0 || day.dayOfWeek === 6;
+            const x         = di * COL_W + 120;
+
+            return (
+              <div
+                key={day.date}
+                className="absolute top-0"
+                style={{
+                  left: x,
+                  width: COL_W,
+                  height: TOTAL_H,
+                  borderRight: "1px solid hsl(var(--border) / 0.4)",
+                  backgroundColor: isToday
+                    ? "rgba(255,215,0,0.04)"
+                    : isWeekend
+                    ? "rgba(255,255,255,0.01)"
+                    : undefined,
+                }}
+              >
+                {/* Day header */}
+                <div
+                  className="flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-accent/40 select-none"
+                  style={{ height: LABEL_H, paddingTop: 20 }}
+                  onClick={() => onSelectDay(day.dayOfWeek)}
+                  title={`${DAY_FULL[day.dayOfWeek]} — click to open Timeline`}
+                >
+                  <span
+                    className={cn(
+                      "text-[10px] font-semibold uppercase tracking-wider",
+                      isToday ? "text-primary" : isWeekend ? "text-muted-foreground/50" : "text-muted-foreground"
+                    )}
+                  >
+                    {day.label}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-[9px] font-mono mt-0.5",
+                      isToday ? "text-primary font-bold" : "text-muted-foreground/60"
+                    )}
+                  >
+                    {day.date.slice(5)} {/* MM-DD */}
+                  </span>
+                  {isToday && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary mt-0.5 animate-pulse" />
+                  )}
+                </div>
+
+                {/* Today time needle (full column height) */}
+                {isToday && (
+                  <div
+                    className="absolute z-10 pointer-events-none"
+                    style={{
+                      top: LABEL_H,
+                      left: (utcHour / 24) * COL_W,
+                      width: 1,
+                      bottom: 0,
+                      backgroundColor: "hsl(var(--primary))",
+                      opacity: 0.6,
+                    }}
+                  />
+                )}
+
+                {/* Agent rows */}
+                {agents.map((agent, ai) => {
+                  const shift = shiftsForDay.find(s => s.agentId === agent.id);
+                  const isVis = visible.has(agent.id);
+                  const top   = LABEL_H + ai * (ROW_H + 2);
+
+                  if (!shift || isWeekend) {
+                    return (
+                      <div
+                        key={agent.id}
+                        style={{ position: "absolute", top, left: 2, right: 2, height: ROW_H }}
+                      />
+                    );
+                  }
+
+                  const normEnd  = normaliseEndUtc(shift.startUtc, shift.endUtc);
+                  const segments = segmentShift(shift.startUtc, normEnd);
+                  const hasBreak = shift.breakStart != null;
+
+                  return (
+                    <div
+                      key={agent.id}
+                      style={{
+                        position: "absolute",
+                        top,
+                        left: 2,
+                        right: 2,
+                        height: ROW_H,
+                        opacity: isVis ? 1 : 0.2,
+                      }}
+                    >
+                      {segments.map((seg, si) => {
+                        const barLeft  = (seg.start / 24) * (COL_W - 4);
+                        const barWidth = Math.max(2, ((seg.end - seg.start) / 24) * (COL_W - 4));
+                        return (
+                          <div
+                            key={si}
+                            className="absolute rounded-sm"
+                            style={{
+                              left: barLeft,
+                              width: barWidth,
+                              top: 3,
+                              height: ROW_H - 6,
+                              backgroundColor: agent.color,
+                              opacity: seg.isOverflow ? 0.5 : 0.8,
+                            }}
+                          />
+                        );
+                      })}
+                      {/* Break dot */}
+                      {hasBreak && (
+                        <div
+                          className="absolute z-10 rounded-full bg-white"
+                          style={{
+                            left: ((shift.breakStart! / 24) * (COL_W - 4)) - 1,
+                            top: ROW_H / 2 - 2,
+                            width: 4,
+                            height: 4,
+                          }}
+                          title={`Break at ${formatUtcHour(shift.breakStart!)}`}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Coverage strip */}
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 2,
+                    right: 2,
+                    top: LABEL_H + AGENT_COUNT * (ROW_H + 2) + 4,
+                    height: COV_H,
+                  }}
+                >
+                  {coverage.map((cov, h) => {
+                    const cellW = (COL_W - 4) / 24;
+                    const color = cov === 0 ? "rgba(230,57,70,0.5)" : hexToRgba("#FFD700", 0.12 + (cov / maxCov) * 0.6);
+                    return (
+                      <div
+                        key={h}
+                        style={{
+                          position: "absolute",
+                          left: h * cellW,
+                          width: Math.max(1, cellW - 0.5),
+                          top: 0,
+                          height: COV_H,
+                          backgroundColor: color,
+                          borderRadius: 1,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -449,7 +814,7 @@ function ClockVisualizer({
               fontFamily="Space Mono, monospace"
               fontWeight={isMajor ? "700" : "400"}
             >
-              {h.toString().padStart(2, "0")}
+              {h.toString().padStart(2, "00")}
             </text>
           );
         })}
@@ -736,7 +1101,6 @@ function TimelineView({
   leverState: Record<number, LeverState>; utcHour: number;
   coverage: number[]; selectedDay: number;
 }) {
-  // Phase 3: adaptive row height — shrink when many agents to keep all visible
   const agentCount = agents.length;
   const ROW_H   = agentCount > 12 ? 20 : agentCount > 8 ? 24 : 28;
   const LABEL_W = 80;
@@ -744,7 +1108,6 @@ function TimelineView({
   const gridHours = [0, 3, 6, 9, 12, 15, 18, 21, 24];
   const containerRef = useRef<HTMLDivElement>(null);
   const [chartW, setChartW] = useState(520);
-  // Phase 3: bar tooltip for narrow segments
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
@@ -761,15 +1124,12 @@ function TimelineView({
   const pxPerHr = chartW / HOURS;
   const maxCov  = Math.max(...coverage, 1);
   const isToday = selectedDay === getUTCDay();
-
-  // Phase 3: current hour column highlight index (floor)
   const currentHourCol = Math.floor(utcHour);
 
   return (
     <div ref={containerRef} className="w-full flex flex-col" style={{ minWidth: 0, maxWidth: "100%" }}
       onMouseLeave={() => setBarTooltip(null)}
     >
-      {/* Top ruler */}
       <div className="flex shrink-0 mb-1" style={{ paddingLeft: LABEL_W }}>
         <div className="relative" style={{ width: chartW, height: 16 }}>
           {gridHours.map(h => (
@@ -788,10 +1148,7 @@ function TimelineView({
         </div>
       </div>
 
-      {/* Grid + rows */}
       <div className="relative flex-1">
-
-        {/* Phase 3: UTC hour column highlight */}
         {isToday && (
           <div
             className="absolute top-0 bottom-0 pointer-events-none z-0"
@@ -805,21 +1162,18 @@ function TimelineView({
           />
         )}
 
-        {/* Grid lines */}
         <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: LABEL_W, right: 0 }}>
           {gridHours.map(h => (
             <div key={h} className="absolute top-0 bottom-0 border-l border-border/40"
               style={{ left: h * pxPerHr }}
             />
           ))}
-          {/* Current time needle */}
           <div className="absolute top-0 bottom-0 z-20" style={{ left: utcHour * pxPerHr, width: 1 }}>
             <div className="w-full h-full" style={{ backgroundColor: "hsl(var(--primary))", opacity: 0.9 }} />
             <div className="absolute -top-1 -left-1.5 w-3 h-3 rounded-full bg-primary" />
           </div>
         </div>
 
-        {/* Agent rows */}
         {agents.map(agent => {
           const agentShifts = shifts.filter(s => s.agentId === agent.id);
           const isVis  = visible.has(agent.id);
@@ -847,14 +1201,10 @@ function TimelineView({
                   const activeSegs = segmentShift(as_, ae);
                   const normBaseEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
                   const isOvernight = baseSegs.length > 1;
-
-                  // Phase 3: tooltip label for this shift
                   const barLabel = `${agent.name}: ${shiftLabel(shift.startUtc, shift.endUtc)} · ${formatDuration(resolved.baseDuration)}`;
 
                   return (
                     <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
-
-                      {/* Ghost base — segments */}
                       {baseSegs.map((seg, si) => (
                         <div key={`ghost-${si}`} className="absolute rounded-sm"
                           style={{
@@ -866,73 +1216,45 @@ function TimelineView({
                           }}
                         />
                       ))}
-
-                      {/* Phase 3: overnight segment connector — faint dashed line at row midpoint */}
                       {isOvernight && (() => {
                         const seg0 = baseSegs[0];
-                        const seg1 = baseSegs[1];
                         const x1 = seg0.end * pxPerHr;
-                        const x2 = seg1.start * pxPerHr; // always 0 for day+1, wraps to left edge
-                        // Connect right edge of seg0 to left edge (0) at row mid via a curved SVG
                         const midY = ROW_H / 2;
                         return (
-                          <svg
-                            className="absolute pointer-events-none"
-                            style={{ left: 0, top: 0, width: "100%", height: ROW_H, overflow: "visible" }}
-                          >
-                            {/* Right edge dot */}
+                          <svg className="absolute pointer-events-none"
+                            style={{ left: 0, top: 0, width: "100%", height: ROW_H, overflow: "visible" }}>
                             <circle cx={x1} cy={midY} r={2.5} fill={agent.color} opacity={0.5} />
-                            {/* Left edge dot (wraps to col 0) */}
-                            <circle cx={x2 === 0 ? 0 : x2} cy={midY} r={2.5} fill={agent.color} opacity={0.5} />
-                            {/* Dashed connector line from right edge toward 24h boundary */}
-                            <line
-                              x1={x1} y1={midY}
-                              x2={chartW} y2={midY}
-                              stroke={agent.color} strokeWidth={1}
-                              strokeDasharray="3 3" opacity={0.35}
-                            />
-                            {/* +1 label at right edge */}
-                            <text x={x1 + 3} y={midY - 4}
-                              fontSize="7" fill={agent.color} opacity={0.7}
-                              fontFamily="monospace"
-                            >+1</text>
+                            <circle cx={0} cy={midY} r={2.5} fill={agent.color} opacity={0.5} />
+                            <line x1={x1} y1={midY} x2={chartW} y2={midY}
+                              stroke={agent.color} strokeWidth={1} strokeDasharray="3 3" opacity={0.35} />
+                            <text x={x1 + 3} y={midY - 4} fontSize="7" fill={agent.color} opacity={0.7} fontFamily="monospace">+1</text>
                           </svg>
                         );
                       })()}
-
-                      {/* Active bars */}
                       {activeSegs.map((seg, si) => {
-                        const segEnd = resolved.hasOvertime
-                          ? seg.end
-                          : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
+                        const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
                         if (segEnd <= seg.start) return null;
                         const barW = Math.max(2, (segEnd - seg.start) * pxPerHr);
                         const showLabel = barW > 52;
                         return (
-                          <div key={`active-${si}`}
-                            className="absolute rounded-sm transition-all duration-150"
+                          <div key={`active-${si}`} className="absolute rounded-sm transition-all duration-150"
                             style={{
-                              left: seg.start * pxPerHr,
-                              width: barW,
+                              left: seg.start * pxPerHr, width: barW,
                               top: 4, height: ROW_H - 8,
                               backgroundColor: agent.color,
                               opacity: isHigh ? 0.95 : 0.75,
                               boxShadow: isHigh ? `0 0 8px ${agent.color}60` : undefined,
-                              cursor: "default",
                             }}
-                            // Phase 3: show rich tooltip on narrow bars
                             onMouseEnter={!showLabel ? (e) => {
                               const rect = containerRef.current?.getBoundingClientRect();
                               if (rect) setBarTooltip({ text: barLabel, x: e.clientX - rect.left, y: e.clientY - rect.top });
                             } : undefined}
                             onMouseLeave={!showLabel ? () => setBarTooltip(null) : undefined}
                           >
-                            {/* Phase 3: inline label only on wide-enough bars */}
                             {showLabel && (
                               <span className="absolute inset-0 flex items-center px-1.5 pointer-events-none overflow-hidden">
                                 <span className="text-[10px] font-mono font-bold whitespace-nowrap"
-                                  style={{ color: "white", mixBlendMode: "difference", opacity: 0.9 }}
-                                >
+                                  style={{ color: "white", mixBlendMode: "difference", opacity: 0.9 }}>
                                   {formatUtcHour(shift.startUtc)}–{formatUtcHour(shift.endUtc)}
                                 </span>
                               </span>
@@ -940,8 +1262,6 @@ function TimelineView({
                           </div>
                         );
                       })}
-
-                      {/* Break notch */}
                       {resolved.breakStart != null && (() => {
                         const bk  = resolved.breakStart;
                         const bkL = bk * pxPerHr;
@@ -952,13 +1272,10 @@ function TimelineView({
                               style={{ left: bkL, width: bkW, top: 2, height: ROW_H - 4, backgroundColor: "rgba(255,255,255,0.92)" }}
                             />
                             <div className="absolute z-20 flex items-center justify-center pointer-events-none"
-                              style={{ left: bkL + bkW / 2 - 5, top: 0, width: 10, height: ROW_H, fontSize: 8 }}
-                            >☕</div>
+                              style={{ left: bkL + bkW / 2 - 5, top: 0, width: 10, height: ROW_H, fontSize: 8 }}>☕</div>
                           </>
                         );
                       })()}
-
-                      {/* Overtime neon glow */}
                       {resolved.hasOvertime && (() => {
                         const otSegs = segmentShift(normBaseEnd, ae);
                         return otSegs.map((seg, si) => (
@@ -973,8 +1290,6 @@ function TimelineView({
                           />
                         ));
                       })()}
-
-                      {/* Shrink dashed */}
                       {resolved.hasShrink && (() => {
                         const shrinkSegs = segmentShift(ae, normBaseEnd);
                         return shrinkSegs.map((seg, si) => (
@@ -1002,7 +1317,6 @@ function TimelineView({
           );
         })}
 
-        {/* Coverage strip */}
         <div className="flex items-center mt-1 border-t border-border/40 pt-1 shrink-0">
           <div className="text-[9px] text-muted-foreground uppercase shrink-0 pr-2" style={{ width: LABEL_W }}>Coverage</div>
           <div className="relative" style={{ width: chartW, height: 10 }}>
@@ -1035,7 +1349,6 @@ function TimelineView({
         </div>
       </div>
 
-      {/* Bottom ruler */}
       <div className="flex shrink-0 mt-1" style={{ paddingLeft: LABEL_W }}>
         <div className="relative" style={{ width: chartW, height: 16 }}>
           {gridHours.map(h => (
@@ -1049,7 +1362,6 @@ function TimelineView({
         </div>
       </div>
 
-      {/* Phase 3: bar tooltip for narrow segments */}
       {barTooltip && (
         <div
           className="fixed z-50 pointer-events-none px-2.5 py-1.5 rounded-md bg-card border border-border shadow-lg text-xs whitespace-nowrap"
