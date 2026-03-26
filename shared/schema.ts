@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -65,7 +66,7 @@ export const agentLogs = sqliteTable("agent_logs", {
   // Who picked up the uncovered portion (nullable)
   coveredByAgentId: integer("covered_by_agent_id"),
   notes: text("notes"),
-  createdAt: text("created_at").notNull(),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
 });
 
 export const insertAgentLogSchema = createInsertSchema(agentLogs).omit({ id: true });
