@@ -52,3 +52,22 @@ export const overtimeLog = sqliteTable("overtime_log", {
 export const insertOvertimeLogSchema = createInsertSchema(overtimeLog).omit({ id: true });
 export type InsertOvertimeLog = z.infer<typeof insertOvertimeLogSchema>;
 export type OvertimeLog = typeof overtimeLog.$inferSelect;
+
+// Agent logs — tracks absences, partial coverage, who covered whom
+export const agentLogs = sqliteTable("agent_logs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  agentId: integer("agent_id").notNull(),
+  date: text("date").notNull(),         // ISO date string YYYY-MM-DD
+  // Type: sick | vacation | partial | overtime-taken
+  type: text("type").notNull(),
+  // For partial: how much of the shift was covered (0–100)
+  coverPct: real("cover_pct"),
+  // Who picked up the uncovered portion (nullable)
+  coveredByAgentId: integer("covered_by_agent_id"),
+  notes: text("notes"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertAgentLogSchema = createInsertSchema(agentLogs).omit({ id: true });
+export type InsertAgentLog = z.infer<typeof insertAgentLogSchema>;
+export type AgentLog = typeof agentLogs.$inferSelect;
