@@ -80,11 +80,22 @@ async function seedDefaultData() {
 }
 
 function runMigrations() {
-  // Safe migrations: each wrapped in try/catch — column already existing is fine
   const safeAlter = (sql: string) => { try { db.run(sql); } catch { /* already exists */ } };
   safeAlter("ALTER TABLE shifts ADD COLUMN break_start REAL");
   safeAlter("ALTER TABLE agents ADD COLUMN off_weekend INTEGER NOT NULL DEFAULT 1");
   safeAlter("ALTER TABLE agents ADD COLUMN off_cycle_start TEXT");
+  safeAlter(`
+    CREATE TABLE IF NOT EXISTS agent_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      type TEXT NOT NULL,
+      cover_pct REAL,
+      covered_by_agent_id INTEGER,
+      notes TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
 }
 
 export async function registerRoutes(httpServer: Server, app: Express) {
@@ -113,8 +124,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // --- Apply week template ---
-  // POST /api/agents/:id/apply-week  { startUtc: number, endUtc: number }
-  // Uses the agent's current offWeekend setting to decide which days to skip.
   app.post("/api/agents/:id/apply-week", (req, res) => {
     const agentId = Number(req.params.id);
     const agent = storage.getAgent(agentId);
@@ -123,7 +132,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (typeof startUtc !== "number" || typeof endUtc !== "number") {
       return res.status(400).json({ message: "startUtc and endUtc required" });
     }
-    // Normalise overnight: if endUtc <= startUtc, treat end as next-day (add 24)
     const normEnd = endUtc <= startUtc ? endUtc + 24 : endUtc;
     const updatedShifts = storage.applyWeekTemplate(agentId, startUtc, normEnd, agent.offWeekend ?? 1);
     res.json(updatedShifts);
@@ -159,5 +167,36 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const { agentId, date, ...rest } = req.body;
     const log = storage.upsertOvertimeLog(agentId, date, rest);
     res.json(log);
+  });
+
+  // --- Agent Logs ---
+  app.get("/api/agent-logs", (_req, res) => {
+    res.json(storage.getAgentLogs());
+  });
+
+  app.get("/api/agent-logs/:agentId", (req, res) => {
+    res.json(storage.getAgentLogsByAgent(Number(req.params.agentId)));
+  });
+
+  app.post("/api/agent-logs", (req, res) => {
+    const { agentId, date, type, coverPct, coveredByAgentId, notes } = req.body;
+    if (!agentId || !date || !type) {
+      return res.status(400).json({ message: "agentId, date and type are required" });
+    }
+    const log = storage.createAgentLog({
+      agentId,
+      date,
+      type,
+      coverPct: coverPct ?? null,
+      coveredByAgentId: coveredByAgentId ?? null,
+      notes: notes ?? null,
+      createdAt: new Date().toISOString(),
+    });
+    res.json(log);
+  });
+
+  app.delete("/api/agent-logs/:id", (req, res) => {
+    storage.deleteAgentLog(Number(req.params.id));
+    res.json({ ok: true });
   });
 }
