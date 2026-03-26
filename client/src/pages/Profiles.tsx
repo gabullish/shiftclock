@@ -44,35 +44,29 @@ interface AgentFormData {
   avatarUrl: string;
 }
 
-// Generate every half-hour slot 0–23.5 as display options
-const HALF_HOUR_OPTIONS = Array.from({ length: 48 }, (_, i) => i * 0.5); // 0, 0.5, 1 ... 23.5
+const HALF_HOUR_OPTIONS = Array.from({ length: 48 }, (_, i) => i * 0.5);
 
 function formatHour(h: number) {
-  const norm = ((h % 24) + 24) % 24; // normalise to 0–23.x
+  const norm = ((h % 24) + 24) % 24;
   const hh = Math.floor(norm);
   const mm = Math.round((norm % 1) * 60);
-  return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
+  return `${hh.toString().padStart(2, "00")}:${mm.toString().padStart(2, "0")}`;
 }
 
-// Is this an overnight shift? endUtc < startUtc means it crosses midnight.
 function isOvernight(startUtc: number, endUtc: number) {
   return endUtc < startUtc;
 }
 
-// Human-readable shift description, e.g. "23:00 – 07:00 (+1)"
 function shiftLabel(startUtc: number, endUtc: number) {
-  const overnight = isOvernight(startUtc, endUtc);
-  return `${formatHour(startUtc)} – ${formatHour(endUtc)}${overnight ? " (+1)" : ""}`;
+  return `${formatHour(startUtc)} \u2013 ${formatHour(endUtc)}${isOvernight(startUtc, endUtc) ? " (+1)" : ""}`;
 }
 
-// Duration in hours accounting for overnight
 function shiftDurH(startUtc: number, endUtc: number) {
   return endUtc > startUtc ? endUtc - startUtc : 24 - startUtc + endUtc;
 }
 
 function isBreakBadTiming(breakStart: number, startUtc: number, endUtc: number): boolean {
   const dur = shiftDurH(startUtc, endUtc);
-  // Normalise breakStart relative to shift start
   let rel = breakStart - startUtc;
   if (rel < 0) rel += 24;
   return rel < 1.0 || rel + 0.5 > dur - 1.0;
@@ -80,6 +74,16 @@ function isBreakBadTiming(breakStart: number, startUtc: number, endUtc: number):
 
 function getOffDays(offWeekend: number): number[] {
   return offWeekend === 1 ? [0, 6] : [4, 5];
+}
+
+// Pick any existing shift's start/end as a seed; fallback to 9/17
+function seedFromShifts(shifts: Shift[]): { start: number; end: number } {
+  const s = shifts.find(sh => sh.startUtc != null && sh.endUtc != null);
+  if (!s) return { start: 9, end: 17 };
+  return {
+    start: ((s.startUtc % 24) + 24) % 24,
+    end:   ((s.endUtc   % 24) + 24) % 24,
+  };
 }
 
 export default function Profiles() {
@@ -159,7 +163,7 @@ export default function Profiles() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-lg font-semibold">Agents</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">{agents.length} agents · global team</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{agents.length} agents \u00b7 global team</p>
         </div>
         <div className="flex items-center gap-2">
           {!isAdmin && (
@@ -289,6 +293,7 @@ export default function Profiles() {
 
                   <ApplyWeekRow
                     agentId={agent.id}
+                    agentShifts={agentShifts}
                     offWeekend={agent.offWeekend ?? 1}
                     onApply={(startUtc, endUtc) => applyWeekMutation.mutate({ id: agent.id, startUtc, endUtc })}
                     loading={applyWeekMutation.isPending}
@@ -310,6 +315,7 @@ export default function Profiles() {
                       color={agent.color}
                       isAdmin={isAdmin}
                       isDayOff={isDayOff}
+                      agentShifts={agentShifts}
                       onUpsert={upsertShiftMutation.mutate}
                       onUpdateShift={(id, data) => updateShiftMutation.mutate({ id, data })}
                     />
@@ -338,26 +344,22 @@ function getLocalTime(tz: string) {
 }
 
 // ── Apply Week Row ────────────────────────────────────────────────────────────
-// Uses two <select> dropdowns clamped to 0–23.5 (half-hour steps).
-// Overnight is detected automatically: if end <= start, it wraps midnight.
 function ApplyWeekRow({
-  agentId, offWeekend, onApply, loading,
+  agentId, agentShifts, offWeekend, onApply, loading,
 }: {
   agentId: number;
+  agentShifts: Shift[];
   offWeekend: number;
   onApply: (startUtc: number, endUtc: number) => void;
   loading: boolean;
 }) {
-  const [startH, setStartH] = useState<number>(9);
-  const [endH, setEndH]     = useState<number>(17);
+  // Seed from agent's existing shifts so the default is never wrong
+  const seed = seedFromShifts(agentShifts);
+  const [startH, setStartH] = useState<number>(seed.start);
+  const [endH, setEndH]     = useState<number>(seed.end);
 
   const overnight = endH <= startH;
   const dur       = overnight ? 24 - startH + endH : endH - startH;
-
-  const handleApply = () => {
-    // Always store raw 0-23 values; overnight detection is endUtc < startUtc
-    onApply(startH, endH);
-  };
 
   return (
     <div className="flex items-center gap-1">
@@ -371,7 +373,7 @@ function ApplyWeekRow({
           <option key={h} value={h}>{formatHour(h)}</option>
         ))}
       </select>
-      <span className="text-[9px] text-muted-foreground">–</span>
+      <span className="text-[9px] text-muted-foreground">\u2013</span>
       <select
         value={endH}
         onChange={e => setEndH(parseFloat(e.target.value))}
@@ -383,10 +385,10 @@ function ApplyWeekRow({
         ))}
       </select>
       {overnight && (
-        <span className="text-[9px] text-amber-400 font-mono" title={`${dur}h overnight shift`}>+1 {dur}h</span>
+        <span className="text-[9px] text-amber-400 font-mono" title={`${dur}h overnight`}>+1 {dur}h</span>
       )}
       <button
-        onClick={handleApply}
+        onClick={() => onApply(startH, endH)}
         disabled={loading || dur <= 0}
         className="text-[9px] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
       >
@@ -502,7 +504,7 @@ function AgentForm({
         </div>
         <div>
           <p className="text-sm font-medium">{form.name || "Agent name"}</p>
-          <p className="text-[10px] text-muted-foreground">{form.role} · {form.timezone}</p>
+          <p className="text-[10px] text-muted-foreground">{form.role} \u00b7 {form.timezone}</p>
         </div>
       </div>
 
@@ -514,9 +516,9 @@ function AgentForm({
 }
 
 // ── Shift Pill ────────────────────────────────────────────────────────────────
-// All times stored as 0–23.5 (half-hour steps). Overnight = endUtc < startUtc.
 function ShiftPill({
-  day, dayIdx, shift, agentId, color, isAdmin, isDayOff, onUpsert, onUpdateShift
+  day, dayIdx, shift, agentId, color, isAdmin, isDayOff,
+  agentShifts, onUpsert, onUpdateShift,
 }: {
   day: string;
   dayIdx: number;
@@ -525,35 +527,46 @@ function ShiftPill({
   color: string;
   isAdmin: boolean;
   isDayOff: boolean;
+  agentShifts: Shift[];          // all shifts for this agent, used to seed empty pills
   onUpsert: (data: any) => void;
   onUpdateShift: (id: number, data: any) => void;
 }) {
   const [editing, setEditing] = useState(false);
-
-  // Initialise from stored values, normalised to 0–23.5
-  const initStart = shift ? ((shift.startUtc % 24 + 24) % 24) : 9;
-  const initEnd   = shift ? ((shift.endUtc   % 24 + 24) % 24) : 17;
-
-  const [startH, setStartH] = useState<number>(initStart);
-  const [endH, setEndH]     = useState<number>(initEnd);
   const [settingBreak, setSettingBreak] = useState(false);
+
+  // If this pill has a saved shift, seed from it.
+  // If not, seed from any other shift this agent has (so empty days start at the agent's time).
+  function resolveDefaults() {
+    if (shift) {
+      return {
+        s: ((shift.startUtc % 24) + 24) % 24,
+        e: ((shift.endUtc   % 24) + 24) % 24,
+      };
+    }
+    const seed = seedFromShifts(agentShifts);
+    return { s: seed.start, e: seed.end };
+  }
+
+  const def = resolveDefaults();
+  const [startH, setStartH] = useState<number>(def.s);
+  const [endH, setEndH]     = useState<number>(def.e);
   const [breakH, setBreakH] = useState<string>(
-    shift?.breakStart != null ? String((shift.breakStart % 24 + 24) % 24) : ""
+    shift?.breakStart != null ? String(((shift.breakStart % 24) + 24) % 24) : ""
   );
 
-  // Reopen with fresh values when shift prop changes
+  // Always re-seed from the current shift when opening the editor
   const openEdit = () => {
-    setStartH(shift ? ((shift.startUtc % 24 + 24) % 24) : 9);
-    setEndH(shift   ? ((shift.endUtc   % 24 + 24) % 24) : 17);
+    const d = resolveDefaults();
+    setStartH(d.s);
+    setEndH(d.e);
     setEditing(true);
   };
 
-  const overnight = endH <= startH; // e.g. start=23, end=7
+  const overnight = endH <= startH;
   const dur       = overnight ? 24 - startH + endH : endH - startH;
 
   const save = () => {
     if (dur <= 0) return;
-    // Store raw 0–23 values. Overnight is inferred by endUtc < startUtc in Dashboard.
     onUpsert({
       agentId,
       dayOfWeek: dayIdx,
@@ -569,9 +582,7 @@ function ShiftPill({
   const saveBreak = () => {
     if (!shift) return;
     const b = parseFloat(breakH);
-    if (!isNaN(b)) {
-      onUpdateShift(shift.id, { breakStart: b % 24 });
-    }
+    if (!isNaN(b)) onUpdateShift(shift.id, { breakStart: b % 24 });
     setSettingBreak(false);
   };
 
@@ -601,7 +612,7 @@ function ShiftPill({
               <option key={h} value={h}>{formatHour(h)}</option>
             ))}
           </select>
-          <span className="text-muted-foreground">–</span>
+          <span className="text-muted-foreground">\u2013</span>
           <select
             value={endH}
             onChange={e => setEndH(parseFloat(e.target.value))}
@@ -613,15 +624,12 @@ function ShiftPill({
               </option>
             ))}
           </select>
-          <button onClick={save} disabled={dur <= 0} className="text-primary font-bold disabled:opacity-40">✓</button>
-          <button onClick={() => setEditing(false)} className="text-muted-foreground">✕</button>
+          <button onClick={save} disabled={dur <= 0} className="text-primary font-bold disabled:opacity-40">\u2713</button>
+          <button onClick={() => setEditing(false)} className="text-muted-foreground">\u2715</button>
         </div>
-        {/* Preview */}
         <div className="flex items-center gap-1 px-0.5">
-          {overnight && (
-            <span className="text-amber-400 font-mono">+1</span>
-          )}
-          <span className="text-muted-foreground">{shiftLabel(startH, endH)} · {dur}h</span>
+          {overnight && <span className="text-amber-400 font-mono">+1</span>}
+          <span className="text-muted-foreground">{shiftLabel(startH, endH)} \u00b7 {dur}h</span>
         </div>
       </div>
     );
@@ -630,7 +638,6 @@ function ShiftPill({
   // ── Break time selector ──
   if (settingBreak && isAdmin && shift) {
     const dur2 = shiftDurH(shift.startUtc, shift.endUtc);
-    // Build break options: only times that fall within the shift, skip first/last hour
     const breakOptions = HALF_HOUR_OPTIONS.filter(h => {
       let rel = h - shift.startUtc;
       if (rel < 0) rel += 24;
@@ -656,17 +663,17 @@ function ShiftPill({
               <option key={h} value={h}>{formatHour(h)}</option>
             ))}
           </select>
-          <button onClick={saveBreak} disabled={breakH === ""} className="text-primary font-bold disabled:opacity-40">✓</button>
-          <button onClick={() => setSettingBreak(false)} className="text-muted-foreground">✕</button>
+          <button onClick={saveBreak} disabled={breakH === ""} className="text-primary font-bold disabled:opacity-40">\u2713</button>
+          <button onClick={() => setSettingBreak(false)} className="text-muted-foreground">\u2715</button>
         </div>
         {warnNow && (
           <div className="flex items-center gap-1 text-amber-400">
             <AlertTriangle size={8} />
-            <span>First or last hour — not ideal</span>
+            <span>First or last hour \u2014 not ideal</span>
           </div>
         )}
         <div className="text-muted-foreground opacity-60">
-          {shiftLabel(shift.startUtc, shift.endUtc)} · {dur2}h
+          {shiftLabel(shift.startUtc, shift.endUtc)} \u00b7 {dur2}h
         </div>
       </div>
     );
@@ -708,7 +715,7 @@ function ShiftPill({
             border: "1px dashed hsl(var(--border))",
           }}
           data-testid={`shift-pill-${agentId}-${dayIdx}`}
-          title={shift ? shiftLabel(shift.startUtc, shift.endUtc) + " UTC" : "No shift — click to add"}
+          title={shift ? shiftLabel(shift.startUtc, shift.endUtc) + " UTC" : "No shift \u2014 click to add"}
         >
           {shift
             ? `${day} ${formatHour(shift.startUtc)}${isOvernight(shift.startUtc, shift.endUtc) ? "*" : ""}`
@@ -725,14 +732,8 @@ function ShiftPill({
               !isAdmin && "cursor-default pointer-events-none"
             )}
             style={{
-              color: showBreakWarning
-                ? "#F59E0B"
-                : savedBreak != null
-                  ? "white"
-                  : "hsl(var(--muted-foreground))",
-              filter: savedBreak != null && !showBreakWarning
-                ? `drop-shadow(0 0 2px ${color})`
-                : undefined,
+              color: showBreakWarning ? "#F59E0B" : savedBreak != null ? "white" : "hsl(var(--muted-foreground))",
+              filter: savedBreak != null && !showBreakWarning ? `drop-shadow(0 0 2px ${color})` : undefined,
             }}
           >
             <Coffee size={9} />
@@ -758,7 +759,7 @@ function ShiftPill({
           {showBreakWarning && <AlertTriangle size={7} />}
           <Coffee size={7} />
           <span>{formatHour(savedBreak)}</span>
-          {showBreakWarning && <span>· not ideal</span>}
+          {showBreakWarning && <span>\u00b7 not ideal</span>}
         </div>
       )}
     </div>
