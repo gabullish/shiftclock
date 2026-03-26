@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
+import type { Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { agents, shifts } from "@shared/schema";
@@ -93,7 +93,7 @@ function runMigrations() {
       cover_pct REAL,
       covered_by_agent_id INTEGER,
       notes TEXT,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 }
