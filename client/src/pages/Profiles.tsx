@@ -14,14 +14,23 @@ import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 
 const TIMEZONES = [
-  "UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-  "America/Sao_Paulo", "America/Mexico_City", "America/Toronto",
-  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Madrid", "Europe/Moscow",
+  "UTC",
+  // Americas
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Sao_Paulo", "America/Bogota", "America/Santo_Domingo",
+  "America/Mexico_City", "America/Toronto",
+  // Europe
+  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
+  "Europe/Zagreb", "Europe/Moscow",
+  // Africa
+  "Africa/Johannesburg", "Africa/Casablanca", "Africa/Lagos",
+  "Africa/Nairobi", "Africa/Addis_Ababa",
+  // Middle East & Asia
   "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok", "Asia/Singapore",
-  "Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai",
+  "Asia/Manila", "Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai",
+  // Pacific & Oceania
   "Australia/Sydney", "Australia/Melbourne",
   "Pacific/Auckland", "Pacific/Honolulu",
-  "Africa/Nairobi", "Africa/Lagos",
 ];
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
