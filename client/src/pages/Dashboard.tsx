@@ -50,7 +50,7 @@ function formatH(h: number) {
 
 // ── Human-readable duration (e.g. 30m, 1h, 1h 30m, 8h) ─────────────────────
 function fmtDuration(hours: number): string {
-  const totalMins = Math.round(hours * 60); // rounds away float noise like 1.4e-15
+  const totalMins = Math.round(hours * 60);
   if (totalMins <= 0) return "";
   const h = Math.floor(totalMins / 60);
   const m = totalMins % 60;
@@ -76,19 +76,16 @@ function calcCoverage(
       const ls = leverState[shift.id];
       const start = ls?.activeStart ?? shift.startUtc;
       const end   = ls?.activeEnd   ?? shift.endUtc;
-      // Handle overnight shifts (end < start means it wraps past midnight)
       if (end >= start) {
         for (let h = Math.floor(start); h < Math.ceil(end); h++) {
           const overlap = Math.min(end, h + 1) - Math.max(start, h);
           if (overlap > 0) slots[h % 24] += overlap;
         }
       } else {
-        // From start to midnight
         for (let h = Math.floor(start); h < 24; h++) {
           const overlap = Math.min(24, h + 1) - Math.max(start, h);
           if (overlap > 0) slots[h] += overlap;
         }
-        // From midnight to end
         for (let h = 0; h < Math.ceil(end); h++) {
           const overlap = Math.min(end, h + 1) - Math.max(0, h);
           if (overlap > 0) slots[h] += overlap;
@@ -116,19 +113,16 @@ export default function Dashboard() {
   const [leverState, setLeverState]   = useState<Record<number, LeverState>>({});
   const [utcHour, setUtcHour]         = useState(getUTCHour());
   const [viewMode, setViewMode]       = useState<"clock" | "timeline">("clock");
-  // Tooltip state for clock ring hover
   const [tooltipInfo, setTooltipInfo] = useState<{ agent: Agent; shift: Shift; x: number; y: number } | null>(null);
 
   const { data: agents = [] }    = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
 
-  // Init visible
   useEffect(() => {
     if (agents.length > 0 && visible.size === 0)
       setVisible(new Set(agents.map(a => a.id)));
   }, [agents]);
 
-  // Live UTC clock
   useEffect(() => {
     const t = setInterval(() => setUtcHour(getUTCHour()), 10000);
     return () => clearInterval(t);
@@ -136,7 +130,6 @@ export default function Dashboard() {
 
   const todayShifts = allShifts.filter(s => s.dayOfWeek === selectedDay);
 
-  // Init lever state
   useEffect(() => {
     const init: Record<number, LeverState> = {};
     for (const s of allShifts)
@@ -158,7 +151,6 @@ export default function Dashboard() {
   const coverage    = calcCoverage(agents, todayShifts, visible, leverState);
   const maxCoverage = Math.max(...coverage, 1);
 
-  // ── Agent summaries ──────────────────────────────────────────────────────
   const agentSummaries = agents.map(agent => {
     const agentTodayShifts = todayShifts.filter(s => s.agentId === agent.id);
     let baseHours = 0, activeHours = 0, overtimeHours = 0, releasedHours = 0;
@@ -179,7 +171,6 @@ export default function Dashboard() {
   const totalOvertimeHours = agentSummaries.reduce((a, s) => a + s.overtimeHours, 0);
   const totalReleasedHours = agentSummaries.reduce((a, s) => a + s.releasedHours, 0);
 
-  // ── Currently online ─────────────────────────────────────────────────────
   const todayUTCDay = getUTCDay();
   const onlineAgents = agents.filter(agent => {
     if (selectedDay !== todayUTCDay) return false;
@@ -188,7 +179,6 @@ export default function Dashboard() {
       const ls = leverState[s.id];
       const start = ls?.activeStart ?? s.startUtc;
       const end   = ls?.activeEnd   ?? s.endUtc;
-      // Handle overnight shifts
       if (end >= start) return utcHour >= start && utcHour <= end;
       return utcHour >= start || utcHour <= end;
     });
@@ -214,7 +204,6 @@ export default function Dashboard() {
             <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
           </div>
 
-          {/* Day selector */}
           <div className="flex items-center gap-1">
             {DAYS.map((d, i) => {
               const hasShifts = allShifts.some(s => s.dayOfWeek === i);
@@ -239,7 +228,6 @@ export default function Dashboard() {
             })}
           </div>
 
-          {/* View toggle */}
           <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
             <button
               onClick={() => setViewMode("clock")}
@@ -321,7 +309,6 @@ export default function Dashboard() {
               />
             )}
 
-            {/* Agent toggle pills — shown in both modes */}
             {hasShiftsToday && (
               <div className="flex flex-wrap gap-1.5 justify-center mt-4 max-w-2xl">
                 <button
@@ -357,14 +344,12 @@ export default function Dashboard() {
 
           {/* ── Right: Levers + Summary ── */}
           <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
-            {/* KPI strip */}
             <div className="grid grid-cols-3 border-b border-border shrink-0">
               <KpiCell label="No Cover"  value={`${zeroCoverageHours}h`}                  warn={zeroCoverageHours > 0} />
               <KpiCell label="Peak Hr"   value={peakCoverageHour.toString().padStart(2,"0") + ":00"} />
               <KpiCell label="Overtime"  value={totalOvertimeHours > 0 ? `+${fmtDuration(totalOvertimeHours)}` : "+0"}     accent={totalOvertimeHours > 0} />
             </div>
 
-            {/* Lever list with fade */}
             <div className="relative flex-1 min-h-0">
               <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
                 <div className="flex items-center justify-between mb-2">
@@ -408,14 +393,11 @@ export default function Dashboard() {
                     {agentSummaries.filter(s => s.shifts.length === 0).length} agents off today
                   </p>
                 )}
-                {/* Spacer so fade doesn't cover last item */}
                 <div className="h-8" />
               </div>
-              {/* Fade gradient — indicates more content below */}
               <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
             </div>
 
-            {/* Text summary panel */}
             <SummaryPanel
               agentSummaries={agentSummaries}
               selectedDay={selectedDay}
@@ -482,12 +464,9 @@ function ClockVisualizer({
         style={{ filter: "drop-shadow(0 0 30px rgba(0,0,0,0.8))" }}
         onMouseLeave={() => { setHighlighted(null); setTooltipInfo(null); }}
       >
-        {/* Outer boundary ring */}
         <circle cx={CX} cy={CY} r={HEAT_R + 18} fill="none" stroke="hsl(224 14% 16%)" strokeWidth="1" opacity="0.6"/>
-        {/* Clock face */}
         <circle cx={CX} cy={CY} r={BASE_R - 8} fill="hsl(224 18% 11%)" stroke="hsl(224 14% 22%)" strokeWidth="1.5"/>
 
-        {/* Hour ticks */}
         {Array.from({ length: 24 }, (_, h) => {
           const angle = hourToAngle(h);
           const p1 = polarToCartesian(CX, CY, BASE_R - 16, angle);
@@ -500,7 +479,6 @@ function ClockVisualizer({
           );
         })}
 
-        {/* Hour labels 00 06 12 18 */}
         {[0, 6, 12, 18].map(h => {
           const p = polarToCartesian(CX, CY, BASE_R - 28, hourToAngle(h));
           return (
@@ -511,7 +489,6 @@ function ClockVisualizer({
           );
         })}
 
-        {/* Coverage heatmap */}
         {coverage.map((cov, h) => {
           const intensity = cov / maxCoverage;
           const path = describeArc(CX, CY, HEAT_R, h, h + 1);
@@ -523,7 +500,6 @@ function ClockVisualizer({
           );
         })}
 
-        {/* Agent rings */}
         {agents.map((agent, idx) => {
           const isVis  = visible.has(agent.id);
           const isHigh = highlighted === agent.id;
@@ -537,7 +513,6 @@ function ClockVisualizer({
               onMouseLeave={() => setHighlighted(null)}
               style={{ cursor: "pointer" }}
             >
-              {/* Track */}
               <circle cx={CX} cy={CY} r={r} fill="none"
                 stroke={hexToRgba(agent.color, 0.12)} strokeWidth={RING_W}
               />
@@ -549,18 +524,15 @@ function ClockVisualizer({
                 const actDur  = ae - as_;
                 const hasOT   = actDur > baseDur;
                 const hasRel  = actDur < baseDur;
-                // Break: 30-min gap
                 const bk = shift.breakStart;
                 const bkEnd = bk != null ? bk + 0.5 : null;
 
                 return (
                   <g key={shift.id}>
-                    {/* Base outline */}
                     <path d={describeArc(CX, CY, r, shift.startUtc, shift.endUtc)}
                       fill="none" stroke={hexToRgba(agent.color, isVis ? 0.22 : 0.06)}
                       strokeWidth={RING_W}
                     />
-                    {/* Invisible hit area for tooltip */}
                     <path d={describeArc(CX, CY, r, shift.startUtc, shift.endUtc)}
                       fill="none" stroke="white" strokeWidth={RING_W + 6}
                       strokeOpacity={0}
@@ -571,7 +543,6 @@ function ClockVisualizer({
                       }}
                       onMouseLeave={() => setTooltipInfo(null)}
                     />
-                    {/* Active arc — split around break gap if break is set */}
                     {isVis && bk == null && (
                       <path d={describeArc(CX, CY, r, as_, Math.min(ae, shift.endUtc))}
                         fill="none" stroke={hexToRgba(agent.color, alpha)}
@@ -580,19 +551,16 @@ function ClockVisualizer({
                     )}
                     {isVis && bk != null && bkEnd != null && (
                       <>
-                        {/* Before break */}
                         <path d={describeArc(CX, CY, r, as_, Math.min(bk, Math.min(ae, shift.endUtc)))}
                           fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
                         />
-                        {/* After break */}
                         <path d={describeArc(CX, CY, r, Math.min(bkEnd, Math.min(ae, shift.endUtc)), Math.min(ae, shift.endUtc))}
                           fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
                         />
-                        {/* Break gap marker — dark notch on background track */}
+                        {/* Break gap — white notch for visibility */}
                         <path d={describeArc(CX, CY, r, bk, bkEnd)}
-                          fill="none" stroke="hsl(224 18% 8%)" strokeWidth={strokeW + 2}
+                          fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth={strokeW + 2}
                         />
-                        {/* Break tick dots */}
                         {[bk, bkEnd].map((pt, pi) => {
                           const p = polarToCartesian(CX, CY, r, hourToAngle(pt));
                           return <circle key={pi} cx={p.x} cy={p.y} r={2}
@@ -600,7 +568,6 @@ function ClockVisualizer({
                         })}
                       </>
                     )}
-                    {/* Overtime glow */}
                     {isVis && hasOT && (
                       <path d={describeArc(CX, CY, r, shift.endUtc, ae)}
                         fill="none" stroke={agent.color} strokeWidth={strokeW}
@@ -608,7 +575,6 @@ function ClockVisualizer({
                         style={{ filter: `drop-shadow(0 0 3px ${agent.color})` }}
                       />
                     )}
-                    {/* Released dashes */}
                     {isVis && hasRel && (
                       <path d={describeArc(CX, CY, r, ae, shift.endUtc)}
                         fill="none" stroke="rgba(255,100,100,0.7)"
@@ -622,7 +588,6 @@ function ClockVisualizer({
           );
         })}
 
-        {/* UTC time hand */}
         {(() => {
           const angle = hourToAngle(utcHour);
           const tip  = polarToCartesian(CX, CY, HEAT_R + 12, angle);
@@ -637,12 +602,10 @@ function ClockVisualizer({
           );
         })()}
 
-        {/* Center hub */}
         <circle cx={CX} cy={CY} r={6} fill="hsl(51 100% 50%)" />
         <circle cx={CX} cy={CY} r={3} fill="hsl(224 16% 8%)" />
       </svg>
 
-      {/* Hover tooltip */}
       {tooltipInfo && (
         <div
           className="absolute pointer-events-none z-50 px-2.5 py-1.5 rounded-md bg-card border border-border shadow-lg text-xs"
@@ -661,7 +624,6 @@ function ClockVisualizer({
         </div>
       )}
 
-      {/* Legend */}
       <div className="absolute top-0 right-0 flex flex-col gap-1 bg-card/70 rounded-lg p-2 border border-border">
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-1.5 rounded-full bg-yellow-400 opacity-70" />
@@ -701,14 +663,12 @@ function TimelineView({
   const HOURS    = 24;
   const pxPerHr  = CHART_W / HOURS;
 
-  // Hour gridlines
   const gridHours = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 
   return (
     <div className="w-full max-w-3xl overflow-x-auto">
       <div style={{ width: TOTAL_W, minWidth: TOTAL_W }}>
 
-        {/* Header row: hour labels */}
         <div className="flex items-end mb-1" style={{ paddingLeft: LABEL_W }}>
           {gridHours.map(h => (
             <div key={h}
@@ -720,16 +680,13 @@ function TimelineView({
           ))}
         </div>
 
-        {/* Rows */}
         <div className="relative">
-          {/* Gridlines background */}
           <div className="absolute inset-0 pointer-events-none" style={{ left: LABEL_W }}>
             {gridHours.map(h => (
               <div key={h} className="absolute top-0 bottom-0 border-l border-border/50"
                 style={{ left: h * pxPerHr }}
               />
             ))}
-            {/* Current time line */}
             <div className="absolute top-0 bottom-0 border-l-2 border-primary z-10"
               style={{ left: utcHour * pxPerHr }}
             >
@@ -752,13 +709,11 @@ function TimelineView({
                 onMouseLeave={() => setHighlighted(null)}
                 style={{ opacity: isVis ? 1 : 0.25 }}
               >
-                {/* Label */}
                 <div className="flex items-center gap-1.5 shrink-0" style={{ width: LABEL_W }}>
                   <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
                   <span className="text-[11px] font-medium truncate">{agent.name}</span>
                 </div>
 
-                {/* Bar area */}
                 <div className="relative" style={{ width: CHART_W, height: ROW_H }}>
                   {agentShifts.map(shift => {
                     const ls = leverState[shift.id];
@@ -769,16 +724,13 @@ function TimelineView({
                     const hasOT  = actDur > baseDur;
                     const hasRel = actDur < baseDur;
 
-                    // base bar
                     const baseLeft  = shift.startUtc * pxPerHr;
                     const baseWidth = baseDur * pxPerHr;
-                    // active bar
                     const actLeft  = as_ * pxPerHr;
                     const actWidth = actDur * pxPerHr;
 
                     return (
                       <g key={shift.id} style={{ position: "absolute", inset: 0 }}>
-                        {/* Base outline */}
                         <div className="absolute rounded-sm"
                           style={{
                             left: baseLeft, width: baseWidth,
@@ -787,7 +739,6 @@ function TimelineView({
                             border: `1px solid ${agent.color}30`,
                           }}
                         />
-                        {/* Active / reduced bar */}
                         <div className="absolute rounded-sm transition-all duration-150"
                           style={{
                             left: actLeft,
@@ -798,7 +749,7 @@ function TimelineView({
                             boxShadow: isHigh ? `0 0 8px ${agent.color}60` : undefined,
                           }}
                         />
-                        {/* Break gap — dark notch cut into active bar */}
+                        {/* Break gap — white notch for visibility */}
                         {shift.breakStart != null && (() => {
                           const bkL = shift.breakStart * pxPerHr;
                           const bkW = 0.5 * pxPerHr;
@@ -808,10 +759,9 @@ function TimelineView({
                                 style={{
                                   left: bkL, width: Math.max(2, bkW),
                                   top: 2, height: ROW_H - 4,
-                                  backgroundColor: "hsl(224 18% 8%)",
+                                  backgroundColor: "rgba(255,255,255,0.9)",
                                 }}
                               />
-                              {/* Coffee icon label */}
                               <div className="absolute z-20 flex items-center justify-center"
                                 style={{
                                   left: bkL + bkW / 2 - 4, top: 0, width: 8, height: ROW_H,
@@ -823,7 +773,6 @@ function TimelineView({
                             </>
                           );
                         })()}
-                        {/* Overtime extension */}
                         {hasOT && (
                           <div className="absolute rounded-sm transition-all duration-150"
                             style={{
@@ -836,7 +785,6 @@ function TimelineView({
                             }}
                           />
                         )}
-                        {/* Released / up for grabs */}
                         {hasRel && (
                           <div className="absolute rounded-sm"
                             style={{
@@ -848,7 +796,6 @@ function TimelineView({
                             }}
                           />
                         )}
-                        {/* Shift hours label inside bar */}
                         {baseWidth > 40 && (
                           <div className="absolute flex items-center pointer-events-none"
                             style={{ left: baseLeft + 4, top: 6, height: ROW_H - 12 }}
@@ -872,7 +819,6 @@ function TimelineView({
             );
           })}
 
-          {/* Coverage density row */}
           <div className="flex items-center mt-2 border-t border-border/50 pt-2">
             <div className="text-[9px] text-muted-foreground uppercase shrink-0" style={{ width: LABEL_W }}>
               Coverage
@@ -893,7 +839,6 @@ function TimelineView({
           </div>
         </div>
 
-        {/* Hour axis */}
         <div className="relative mt-1" style={{ paddingLeft: LABEL_W }}>
           {gridHours.map(h => (
             <span key={h}
@@ -940,7 +885,6 @@ function ShiftLever({
   const adjustEnd   = (delta: number) => { if (!isAdmin) return; onLeverChange(shift.id, activeStart, Math.max(activeStart + 0.5, Math.min(24, activeEnd + delta))); };
   const adjustStart = (delta: number) => { if (!isAdmin) return; onLeverChange(shift.id, Math.max(0, Math.min(activeEnd - 0.5, activeStart + delta)), activeEnd); };
 
-  // Draggable bar refs
   const barRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<{ type: "start" | "end" | "move"; startX: number; startVal: number; startEnd: number } | null>(null);
 
@@ -948,7 +892,7 @@ function ShiftLever({
     if (!isAdmin) return;
     e.preventDefault();
     dragging.current = { type, startX: e.clientX, startVal: activeStart, startEnd: activeEnd };
-    const snap = (h: number) => Math.round(h * 2) / 2; // snap to nearest 30 min
+    const snap = (h: number) => Math.round(h * 2) / 2;
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current || !barRef.current) return;
       const rect  = barRef.current.getBoundingClientRect();
@@ -981,7 +925,6 @@ function ShiftLever({
       onMouseEnter={onHighlight} onMouseLeave={onUnhighlight}
       data-testid={`lever-agent-${agent.id}`}
     >
-      {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
@@ -1007,13 +950,10 @@ function ShiftLever({
         </div>
       </div>
 
-      {/* Draggable lever bar */}
       <div ref={barRef} className="relative h-5 bg-muted rounded-sm overflow-visible mb-2 select-none">
-        {/* Base outline */}
         <div className="absolute h-full rounded-sm opacity-20"
           style={{ left: `${baseLeft}%`, width: `${baseWidth}%`, backgroundColor: agent.color }}
         />
-        {/* Released dashes */}
         {hasReleased && (
           <div className="absolute h-3 top-1 rounded-sm"
             style={{
@@ -1023,7 +963,6 @@ function ShiftLever({
             }}
           />
         )}
-        {/* Active bar — draggable body */}
         <div
           className="absolute h-full rounded-sm transition-none"
           style={{
@@ -1036,7 +975,6 @@ function ShiftLever({
           }}
           onMouseDown={e => onMouseDown(e, "move")}
         />
-        {/* Overtime extension */}
         {hasOvertime && (
           <div className="absolute h-full rounded-sm"
             style={{
@@ -1047,18 +985,17 @@ function ShiftLever({
             }}
           />
         )}
-        {/* Break notch on lever bar */}
+        {/* Break notch on lever bar — white for visibility */}
         {shift.breakStart != null && (() => {
           const bkLeft = (shift.breakStart / barMax) * 100;
           const bkWidth = (0.5 / barMax) * 100;
           return (
             <div className="absolute top-0 bottom-0 z-20 rounded-sm"
-              style={{ left: `${bkLeft}%`, width: `${Math.max(1, bkWidth)}%`, backgroundColor: "hsl(224 18% 10%)", opacity: 0.9 }}
+              style={{ left: `${bkLeft}%`, width: `${Math.max(1, bkWidth)}%`, backgroundColor: "rgba(255,255,255,0.9)", opacity: 0.9 }}
               title={`Break: ${formatH(shift.breakStart)}–${formatH(shift.breakStart + 0.5)}`}
             />
           );
         })()}
-        {/* Drag handles: start (left edge) and end (right edge) */}
         {isAdmin && (
           <div
             className="absolute top-0 bottom-0 w-2 rounded-l-sm hover:opacity-100 opacity-0 bg-white/30 cursor-col-resize z-10"
@@ -1075,7 +1012,6 @@ function ShiftLever({
         )}
       </div>
 
-      {/* Time labels + fine-tune buttons */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
           {isAdmin && <button onClick={() => adjustStart(-0.5)} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
