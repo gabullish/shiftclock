@@ -22,6 +22,7 @@ import {
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 function getUTCDay() { return new Date().getUTCDay(); }
 function getUTCHour() {
@@ -56,56 +57,36 @@ function hexToRgba(hex: string, alpha: number) {
 
 interface LeverState { activeStart: number; activeEnd: number; }
 
-// ── Week helpers ──────────────────────────────────────────────────────────────
-// Returns ISO date string (YYYY-MM-DD) for a given UTC date offset from today
-function utcDateOffset(offsetDays: number): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
-}
-
-// Returns the Monday of the week containing a given date
-function mondayOf(d: Date): Date {
-  const day = d.getUTCDay(); // 0=Sun
-  const diff = day === 0 ? -6 : 1 - day;
-  const m = new Date(d);
-  m.setUTCDate(d.getUTCDate() + diff);
-  return m;
-}
-
-// Build a list of 21 day descriptors: prev week + this week + next week
-interface DayDescriptor {
-  date: string;        // YYYY-MM-DD
-  dayOfWeek: number;   // 0-6
-  label: string;       // "Mon", "Tue" etc.
+// ── Continuous timeline day descriptors ───────────────────────────────────────
+interface DayDesc {
+  date: string;       // YYYY-MM-DD
+  dayOfWeek: number;  // 0-6
+  label: string;      // "Mon"
+  dateLabel: string;  // "Mar 26"
   isToday: boolean;
-  weekOffset: -1 | 0 | 1; // -1 = prev, 0 = current, 1 = next
+  dayIndex: number;   // 0-based index in the window
 }
 
-function build21Days(): DayDescriptor[] {
+function buildDays(pastDays: number, futureDays: number): DayDesc[] {
   const today = new Date();
   const todayStr = today.toISOString().slice(0, 10);
-  const mon = mondayOf(today);
-  // Start from Monday of prev week
-  const start = new Date(mon);
-  start.setUTCDate(mon.getUTCDate() - 7);
-
-  const days: DayDescriptor[] = [];
-  for (let i = 0; i < 21; i++) {
-    const d = new Date(start);
-    d.setUTCDate(start.getUTCDate() + i);
+  const result: DayDesc[] = [];
+  const total = pastDays + 1 + futureDays;
+  for (let i = 0; i < total; i++) {
+    const d = new Date(today);
+    d.setUTCDate(today.getUTCDate() - pastDays + i);
     const dateStr = d.toISOString().slice(0, 10);
     const dow = d.getUTCDay();
-    const weekOffset: -1 | 0 | 1 = i < 7 ? -1 : i < 14 ? 0 : 1;
-    days.push({
+    result.push({
       date: dateStr,
       dayOfWeek: dow,
       label: DAYS[dow],
+      dateLabel: `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`,
       isToday: dateStr === todayStr,
-      weekOffset,
+      dayIndex: i,
     });
   }
-  return days;
+  return result;
 }
 
 export default function Dashboard() {
@@ -121,7 +102,7 @@ export default function Dashboard() {
   const [highlighted, setHighlighted] = useState<number | null>(null);
   const [leverState, setLeverState]   = useState<Record<number, LeverState>>({});
   const [utcHour, setUtcHour]         = useState(getUTCHour());
-  const [viewMode, setViewMode]       = useState<"clock" | "timeline" | "week">("clock");
+  const [viewMode, setViewMode]       = useState<"clock" | "timeline" | "continuous">("clock");
   const [tooltipInfo, setTooltipInfo] = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
 
   const { data: agents = [] }    = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
@@ -228,8 +209,7 @@ export default function Dashboard() {
             <h1 className="text-sm font-semibold">Coverage Command</h1>
             <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
           </div>
-          {/* Day selector — hidden in week view */}
-          {viewMode !== "week" && (
+          {viewMode !== "continuous" && (
             <div className="flex items-center gap-1">
               {DAYS.map((d, i) => {
                 const hasShifts = allShifts.some(s => s.dayOfWeek === i);
@@ -249,10 +229,8 @@ export default function Dashboard() {
               })}
             </div>
           )}
-          {viewMode === "week" && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground font-mono">3-week scroll · click a day to focus</span>
-            </div>
+          {viewMode === "continuous" && (
+            <span className="text-xs text-muted-foreground font-mono">14-day view · scroll to navigate · click day → Timeline</span>
           )}
           <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
             <button onClick={() => setViewMode("clock")}
@@ -267,17 +245,16 @@ export default function Dashboard() {
               data-testid="view-timeline">
               <AlignLeft size={13} /> Timeline
             </button>
-            <button onClick={() => setViewMode("week")}
+            <button onClick={() => setViewMode("continuous")}
               className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
-                viewMode === "week" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-              data-testid="view-week">
-              <CalendarRange size={13} /> Week
+                viewMode === "continuous" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+              data-testid="view-continuous">
+              <CalendarRange size={13} /> 14-Day
             </button>
           </div>
         </header>
 
-        {/* Online now strip — hidden in week view */}
-        {viewMode !== "week" && selectedDay === todayUTCDay && (
+        {viewMode !== "continuous" && selectedDay === todayUTCDay && (
           <div className="flex items-center gap-3 px-6 py-2 border-b border-border bg-card/20 shrink-0">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
             {onlineAgents.length === 0 ? (
@@ -297,10 +274,9 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Week view takes full canvas ── */}
-        {viewMode === "week" ? (
+        {viewMode === "continuous" ? (
           <div className="flex-1 overflow-hidden">
-            <WeekView
+            <ContinuousTimeline
               agents={agents}
               allShifts={allShifts}
               visible={visible}
@@ -463,8 +439,8 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
   );
 }
 
-// ── Week View ─────────────────────────────────────────────────────────────────
-function WeekView({
+// ── Continuous 14-Day Timeline ────────────────────────────────────────────────
+function ContinuousTimeline({
   agents, allShifts, visible, utcHour, onSelectDay,
 }: {
   agents: Agent[];
@@ -473,89 +449,82 @@ function WeekView({
   utcHour: number;
   onSelectDay: (dow: number) => void;
 }) {
-  const days = build21Days();
+  const PAST_DAYS   = 7;
+  const FUTURE_DAYS = 6;
+  const days = buildDays(PAST_DAYS, FUTURE_DAYS);
+  const todayIndex = PAST_DAYS; // index of today in the days array
+
+  const PX_PER_HOUR = 42;       // pixels per UTC hour
+  const LABEL_W     = 88;       // agent name column width
+  const RULER_H     = 40;       // top ruler height
+  const COV_H       = 12;       // coverage strip height
+  const ROW_H       = agents.length > 12 ? 22 : agents.length > 8 ? 26 : 30;
+  const TOTAL_HOURS = days.length * 24;
+  const CANVAS_W    = TOTAL_HOURS * PX_PER_HOUR;
+  const CANVAS_H    = RULER_H + agents.length * (ROW_H + 2) + COV_H + 16;
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const todayIdx  = days.findIndex(d => d.isToday);
 
-  // Column dimensions
-  const COL_W    = 110; // px per day column
-  const LABEL_H  = 52;  // header height
-  const ROW_H    = 18;  // agent row height
-  const COV_H    = 10;  // coverage strip
-  const AGENT_COUNT = agents.length;
-  const TOTAL_H  = LABEL_H + AGENT_COUNT * (ROW_H + 2) + COV_H + 24;
-
-  // Scroll today into center on mount
+  // Auto-scroll to center "now" on mount
   useEffect(() => {
-    if (!scrollRef.current || todayIdx < 0) return;
-    const el = scrollRef.current;
-    const targetScrollLeft = todayIdx * COL_W - el.clientWidth / 2 + COL_W / 2;
-    el.scrollLeft = Math.max(0, targetScrollLeft);
-  }, [todayIdx]);
+    if (!scrollRef.current) return;
+    const nowPx = (todayIndex * 24 + utcHour) * PX_PER_HOUR;
+    const containerW = scrollRef.current.clientWidth;
+    scrollRef.current.scrollLeft = Math.max(0, nowPx - containerW / 2 + LABEL_W);
+  }, []);
 
-  const scrollToToday = () => {
-    if (!scrollRef.current || todayIdx < 0) return;
-    const el = scrollRef.current;
-    const targetScrollLeft = todayIdx * COL_W - el.clientWidth / 2 + COL_W / 2;
-    el.scrollTo({ left: Math.max(0, targetScrollLeft), behavior: "smooth" });
+  const scrollToNow = () => {
+    if (!scrollRef.current) return;
+    const nowPx = (todayIndex * 24 + utcHour) * PX_PER_HOUR;
+    const containerW = scrollRef.current.clientWidth;
+    scrollRef.current.scrollTo({
+      left: Math.max(0, nowPx - containerW / 2 + LABEL_W),
+      behavior: "smooth",
+    });
   };
 
-  // Week label positions (Mon of each week)
-  const weekLabels = [
-    { label: "Last week",    startIdx: 0  },
-    { label: "This week",    startIdx: 7  },
-    { label: "Next week",    startIdx: 14 },
-  ];
+  // Now needle position in canvas px (relative to scrollable area, not LABEL_W)
+  const nowCanvasPx = (todayIndex * 24 + utcHour) * PX_PER_HOUR;
 
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
-        <div className="flex items-center gap-3">
-          <span className="text-[11px] text-muted-foreground">
-            3-week view · shifts by day pattern · click any day → Timeline
-          </span>
-        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {days[0].dateLabel} — {days[days.length - 1].dateLabel} · UTC · click any day label → Timeline
+        </span>
         <button
-          onClick={scrollToToday}
+          onClick={scrollToNow}
           className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-md bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-all font-medium"
         >
-          <Clock size={11} /> Today
+          <Clock size={11} /> Now
         </button>
       </div>
 
       {/* Scrollable canvas */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-x-auto overflow-y-auto overscroll-x-contain"
-        style={{ scrollBehavior: "smooth" }}
+        className="flex-1 overflow-x-auto overflow-y-hidden"
+        style={{ scrollBehavior: "auto" }}
       >
-        <div style={{ width: days.length * COL_W + 120, minHeight: TOTAL_H, position: "relative" }}>
+        <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
 
-          {/* Week band labels */}
-          {weekLabels.map(({ label, startIdx }) => (
-            <div
-              key={label}
-              className="absolute top-0 flex items-center justify-center"
-              style={{
-                left: startIdx * COL_W + 120,
-                width: 7 * COL_W,
-                height: 20,
-                borderBottom: "1px solid hsl(var(--border))",
-              }}
-            >
-              <span className="text-[9px] text-muted-foreground uppercase tracking-widest font-medium">{label}</span>
-            </div>
-          ))}
-
-          {/* Agent name column (sticky left) */}
+          {/* Sticky agent name column */}
           <div
-            className="absolute top-0 bottom-0 bg-background z-20 border-r border-border"
-            style={{ left: 0, width: 120, top: 0 }}
+            style={{
+              position: "sticky",
+              left: 0,
+              width: LABEL_W,
+              minWidth: LABEL_W,
+              zIndex: 20,
+              background: "hsl(var(--background))",
+              borderRight: "1px solid hsl(var(--border))",
+              display: "flex",
+              flexDirection: "column",
+            }}
           >
-            {/* spacer for header */}
-            <div style={{ height: LABEL_H }} />
-            {agents.map((agent, ai) => (
+            <div style={{ height: RULER_H }} />
+            {agents.map(agent => (
               <div
                 key={agent.id}
                 className="flex items-center gap-1.5 px-2"
@@ -565,182 +534,265 @@ function WeekView({
                 <span className="text-[10px] font-medium truncate" style={{ color: agent.color }}>{agent.name}</span>
               </div>
             ))}
-            {/* Coverage label */}
             <div className="flex items-center px-2" style={{ height: COV_H + 8 }}>
               <span className="text-[9px] text-muted-foreground uppercase tracking-wider">Cov</span>
             </div>
           </div>
 
-          {/* Day columns */}
-          {days.map((day, di) => {
-            const shiftsForDay = allShifts.filter(s => s.dayOfWeek === day.dayOfWeek);
-            const coverageInput = shiftsForDay.map(s => ({
-              activeStart: s.activeStart ?? s.startUtc,
-              activeEnd:   s.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc),
-            }));
-            const coverage  = calcCoverageForDay(coverageInput);
-            const maxCov    = Math.max(...coverage, 1);
-            const isToday   = day.isToday;
-            const isWeekend = day.dayOfWeek === 0 || day.dayOfWeek === 6;
-            const x         = di * COL_W + 120;
+          {/* Time canvas */}
+          <div style={{ position: "relative", width: CANVAS_W, flexShrink: 0 }}>
 
-            return (
-              <div
-                key={day.date}
-                className="absolute top-0"
-                style={{
-                  left: x,
-                  width: COL_W,
-                  height: TOTAL_H,
-                  borderRight: "1px solid hsl(var(--border) / 0.4)",
-                  backgroundColor: isToday
-                    ? "rgba(255,215,0,0.04)"
-                    : isWeekend
-                    ? "rgba(255,255,255,0.01)"
-                    : undefined,
-                }}
-              >
-                {/* Day header */}
-                <div
-                  className="flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-accent/40 select-none"
-                  style={{ height: LABEL_H, paddingTop: 20 }}
-                  onClick={() => onSelectDay(day.dayOfWeek)}
-                  title={`${DAY_FULL[day.dayOfWeek]} — click to open Timeline`}
-                >
-                  <span
-                    className={cn(
-                      "text-[10px] font-semibold uppercase tracking-wider",
-                      isToday ? "text-primary" : isWeekend ? "text-muted-foreground/50" : "text-muted-foreground"
-                    )}
-                  >
-                    {day.label}
-                  </span>
-                  <span
-                    className={cn(
-                      "text-[9px] font-mono mt-0.5",
-                      isToday ? "text-primary font-bold" : "text-muted-foreground/60"
-                    )}
-                  >
-                    {day.date.slice(5)} {/* MM-DD */}
-                  </span>
-                  {isToday && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-primary mt-0.5 animate-pulse" />
-                  )}
-                </div>
-
-                {/* Today time needle (full column height) */}
-                {isToday && (
-                  <div
-                    className="absolute z-10 pointer-events-none"
-                    style={{
-                      top: LABEL_H,
-                      left: (utcHour / 24) * COL_W,
-                      width: 1,
+            {/* Top ruler — hour ticks + day labels */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: RULER_H, zIndex: 10, borderBottom: "1px solid hsl(var(--border) / 0.6)" }}>
+              {/* Hour ticks every 3h */}
+              {Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
+                if (h % 3 !== 0) return null;
+                const x = h * PX_PER_HOUR;
+                const localH = h % 24;
+                const isMidnight = localH === 0;
+                return (
+                  <div key={h} style={{ position: "absolute", left: x, top: 0, bottom: 0 }}>
+                    <div style={{
+                      position: "absolute",
+                      top: isMidnight ? 0 : RULER_H - 8,
                       bottom: 0,
-                      backgroundColor: "hsl(var(--primary))",
-                      opacity: 0.6,
-                    }}
-                  />
-                )}
-
-                {/* Agent rows */}
-                {agents.map((agent, ai) => {
-                  const shift = shiftsForDay.find(s => s.agentId === agent.id);
-                  const isVis = visible.has(agent.id);
-                  const top   = LABEL_H + ai * (ROW_H + 2);
-
-                  if (!shift || isWeekend) {
-                    return (
-                      <div
-                        key={agent.id}
-                        style={{ position: "absolute", top, left: 2, right: 2, height: ROW_H }}
-                      />
-                    );
-                  }
-
-                  const normEnd  = normaliseEndUtc(shift.startUtc, shift.endUtc);
-                  const segments = segmentShift(shift.startUtc, normEnd);
-                  const hasBreak = shift.breakStart != null;
-
-                  return (
-                    <div
-                      key={agent.id}
-                      style={{
+                      width: 1,
+                      backgroundColor: isMidnight ? "hsl(var(--border))" : "hsl(var(--border) / 0.4)",
+                    }} />
+                    {!isMidnight && (
+                      <span style={{
                         position: "absolute",
-                        top,
+                        bottom: 2,
                         left: 2,
-                        right: 2,
-                        height: ROW_H,
-                        opacity: isVis ? 1 : 0.2,
-                      }}
-                    >
-                      {segments.map((seg, si) => {
-                        const barLeft  = (seg.start / 24) * (COL_W - 4);
-                        const barWidth = Math.max(2, ((seg.end - seg.start) / 24) * (COL_W - 4));
-                        return (
-                          <div
-                            key={si}
-                            className="absolute rounded-sm"
-                            style={{
-                              left: barLeft,
-                              width: barWidth,
-                              top: 3,
-                              height: ROW_H - 6,
-                              backgroundColor: agent.color,
-                              opacity: seg.isOverflow ? 0.5 : 0.8,
-                            }}
-                          />
-                        );
-                      })}
-                      {/* Break dot */}
-                      {hasBreak && (
-                        <div
-                          className="absolute z-10 rounded-full bg-white"
-                          style={{
-                            left: ((shift.breakStart! / 24) * (COL_W - 4)) - 1,
-                            top: ROW_H / 2 - 2,
-                            width: 4,
-                            height: 4,
-                          }}
-                          title={`Break at ${formatUtcHour(shift.breakStart!)}`}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
+                        fontSize: 8,
+                        fontFamily: "monospace",
+                        color: "hsl(var(--muted-foreground))",
+                        whiteSpace: "nowrap",
+                      }}>{localH.toString().padStart(2, "0")}</span>
+                    )}
+                  </div>
+                );
+              })}
+              {/* Day labels at each midnight */}
+              {days.map(day => {
+                const x = day.dayIndex * 24 * PX_PER_HOUR;
+                const isToday = day.isToday;
+                const isWeekend = day.dayOfWeek === 0 || day.dayOfWeek === 6;
+                return (
+                  <div
+                    key={day.date}
+                    onClick={() => onSelectDay(day.dayOfWeek)}
+                    title={`Open ${DAY_FULL[day.dayOfWeek]} in Timeline`}
+                    style={{
+                      position: "absolute",
+                      left: x + 4,
+                      top: 4,
+                      cursor: "pointer",
+                      userSelect: "none",
+                    }}
+                  >
+                    <span style={{
+                      fontSize: isToday ? 11 : 10,
+                      fontWeight: isToday ? 700 : 500,
+                      color: isToday
+                        ? "hsl(var(--primary))"
+                        : isWeekend
+                        ? "hsl(var(--muted-foreground) / 0.5)"
+                        : "hsl(var(--muted-foreground))",
+                      fontFamily: "monospace",
+                    }}>
+                      {day.label} {day.dateLabel}
+                    </span>
+                    {isToday && (
+                      <span style={{
+                        display: "inline-block",
+                        width: 5,
+                        height: 5,
+                        borderRadius: "50%",
+                        backgroundColor: "hsl(var(--primary))",
+                        marginLeft: 4,
+                        verticalAlign: "middle",
+                        animation: "pulse 2s infinite",
+                      }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
 
-                {/* Coverage strip */}
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 2,
-                    right: 2,
-                    top: LABEL_H + AGENT_COUNT * (ROW_H + 2) + 4,
-                    height: COV_H,
-                  }}
-                >
-                  {coverage.map((cov, h) => {
-                    const cellW = (COL_W - 4) / 24;
-                    const color = cov === 0 ? "rgba(230,57,70,0.5)" : hexToRgba("#FFD700", 0.12 + (cov / maxCov) * 0.6);
+            {/* Background: today column highlight + day separators */}
+            {days.map(day => {
+              const x = day.dayIndex * 24 * PX_PER_HOUR;
+              const isWeekend = day.dayOfWeek === 0 || day.dayOfWeek === 6;
+              return (
+                <div key={day.date} style={{
+                  position: "absolute",
+                  left: x,
+                  top: RULER_H,
+                  width: 24 * PX_PER_HOUR,
+                  bottom: 0,
+                  backgroundColor: day.isToday
+                    ? "rgba(255,215,0,0.03)"
+                    : isWeekend
+                    ? "rgba(255,255,255,0.008)"
+                    : undefined,
+                  borderLeft: day.dayIndex > 0 ? "1px solid hsl(var(--border) / 0.3)" : undefined,
+                }} />
+              );
+            })}
+
+            {/* Vertical grid lines every 3h */}
+            {Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
+              if (h % 3 !== 0 || h % 24 === 0) return null;
+              return (
+                <div key={h} style={{
+                  position: "absolute",
+                  left: h * PX_PER_HOUR,
+                  top: RULER_H,
+                  bottom: 0,
+                  width: 1,
+                  backgroundColor: "hsl(var(--border) / 0.2)",
+                  pointerEvents: "none",
+                }} />
+              );
+            })}
+
+            {/* Agent rows */}
+            {agents.map((agent, ai) => {
+              const rowTop = RULER_H + ai * (ROW_H + 2);
+              const isVis  = visible.has(agent.id);
+
+              return (
+                <div key={agent.id} style={{
+                  position: "absolute",
+                  top: rowTop,
+                  left: 0,
+                  right: 0,
+                  height: ROW_H,
+                  opacity: isVis ? 1 : 0.2,
+                }}>
+                  {days.map(day => {
+                    const shift = allShifts.find(s => s.agentId === agent.id && s.dayOfWeek === day.dayOfWeek);
+                    if (!shift) return null;
+
+                    const normEnd  = normaliseEndUtc(shift.startUtc, shift.endUtc);
+                    const dayOffsetPx = day.dayIndex * 24 * PX_PER_HOUR;
+
+                    // base ghost bar
+                    const baseLeft = dayOffsetPx + shift.startUtc * PX_PER_HOUR;
+                    const baseW    = Math.max(2, shiftDuration(shift.startUtc, normEnd) * PX_PER_HOUR);
+
+                    // If overnight, the bar extends into next day — clamp visually at canvas edge
+                    const hasBreak = shift.breakStart != null;
+
                     return (
-                      <div
-                        key={h}
-                        style={{
+                      <div key={day.date} style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H }}>
+                        {/* Ghost base bar */}
+                        <div style={{
                           position: "absolute",
-                          left: h * cellW,
-                          width: Math.max(1, cellW - 0.5),
-                          top: 0,
-                          height: COV_H,
-                          backgroundColor: color,
-                          borderRadius: 1,
-                        }}
-                      />
+                          left: baseLeft,
+                          width: baseW,
+                          top: Math.floor(ROW_H * 0.2),
+                          height: Math.floor(ROW_H * 0.6),
+                          backgroundColor: agent.color,
+                          opacity: 0.25,
+                          borderRadius: 3,
+                        }} />
+                        {/* Active bar */}
+                        <div style={{
+                          position: "absolute",
+                          left: baseLeft,
+                          width: baseW,
+                          top: Math.floor(ROW_H * 0.15),
+                          height: Math.floor(ROW_H * 0.7),
+                          backgroundColor: agent.color,
+                          opacity: 0.82,
+                          borderRadius: 3,
+                        }} />
+                        {/* Break notch */}
+                        {hasBreak && (
+                          <div style={{
+                            position: "absolute",
+                            left: dayOffsetPx + shift.breakStart! * PX_PER_HOUR,
+                            width: Math.max(3, 0.5 * PX_PER_HOUR),
+                            top: Math.floor(ROW_H * 0.1),
+                            height: Math.floor(ROW_H * 0.8),
+                            backgroundColor: "rgba(255,255,255,0.92)",
+                            borderRadius: 2,
+                            zIndex: 2,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 7,
+                          }}>☕</div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+
+            {/* Coverage strip */}
+            <div style={{
+              position: "absolute",
+              top: RULER_H + agents.length * (ROW_H + 2) + 4,
+              left: 0,
+              right: 0,
+              height: COV_H,
+            }}>
+              {days.map(day => {
+                const shiftsForDay = allShifts.filter(s => s.dayOfWeek === day.dayOfWeek);
+                const covInput = shiftsForDay
+                  .filter(s => visible.has(s.agentId))
+                  .map(s => ({
+                    activeStart: s.activeStart ?? s.startUtc,
+                    activeEnd:   s.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc),
+                  }));
+                const cov    = calcCoverageForDay(covInput);
+                const maxCov = Math.max(...cov, 1);
+                const dayOffsetPx = day.dayIndex * 24 * PX_PER_HOUR;
+
+                return cov.map((c, h) => (
+                  <div key={`${day.date}-${h}`} style={{
+                    position: "absolute",
+                    left: dayOffsetPx + h * PX_PER_HOUR,
+                    width: Math.max(1, PX_PER_HOUR - 1),
+                    top: 0,
+                    height: COV_H,
+                    backgroundColor: c === 0
+                      ? "rgba(230,57,70,0.4)"
+                      : hexToRgba("#FFD700", 0.1 + (c / maxCov) * 0.55),
+                    borderRadius: 1,
+                  }} />
+                ));
+              })}
+            </div>
+
+            {/* Now needle */}
+            <div style={{
+              position: "absolute",
+              left: nowCanvasPx,
+              top: 0,
+              bottom: 0,
+              width: 1,
+              backgroundColor: "hsl(var(--primary))",
+              opacity: 0.85,
+              zIndex: 15,
+              pointerEvents: "none",
+            }}>
+              <div style={{
+                position: "absolute",
+                top: RULER_H - 6,
+                left: -4,
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                backgroundColor: "hsl(var(--primary))",
+              }} />
+            </div>
+
+          </div>
         </div>
       </div>
     </div>
