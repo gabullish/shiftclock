@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { agents, shifts, overtimeLog } from "@shared/schema";
 import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Agents
@@ -17,6 +17,9 @@ export interface IStorage {
   upsertShift(data: InsertShift): Shift;
   updateShift(id: number, data: Partial<InsertShift>): Shift | undefined;
   deleteShift(id: number): void;
+
+  // Weekly template apply
+  applyWeekTemplate(agentId: number, startUtc: number, endUtc: number, offWeekend: number): Shift[];
 
   // Overtime
   getOvertimeLogs(): OvertimeLog[];
@@ -48,7 +51,6 @@ export const storage: IStorage = {
     return db.select().from(shifts).where(eq(shifts.agentId, agentId)).all();
   },
   upsertShift(data) {
-    // Check if shift exists for agent+day
     const existing = db.select().from(shifts)
       .where(and(eq(shifts.agentId, data.agentId), eq(shifts.dayOfWeek, data.dayOfWeek)))
       .get();
@@ -62,6 +64,43 @@ export const storage: IStorage = {
   },
   deleteShift(id) {
     db.delete(shifts).where(eq(shifts.id, id)).run();
+  },
+
+  applyWeekTemplate(agentId, startUtc, endUtc, offWeekend) {
+    // offWeekend=1 => days off are Sat(6) and Sun(0); offWeekend=0 => days off are Thu(4) and Fri(5)
+    const offDays = offWeekend === 1 ? [0, 6] : [4, 5];
+    const workDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !offDays.includes(d));
+
+    // Delete shifts for off-days (they should show as off)
+    for (const day of offDays) {
+      const existing = db.select().from(shifts)
+        .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
+        .get();
+      if (existing) {
+        db.delete(shifts).where(eq(shifts.id, existing.id)).run();
+      }
+    }
+
+    // Upsert shifts for work days
+    const result: Shift[] = [];
+    for (const day of workDays) {
+      const existing = db.select().from(shifts)
+        .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
+        .get();
+      if (existing) {
+        const updated = db.update(shifts)
+          .set({ startUtc, endUtc, activeStart: null, activeEnd: null })
+          .where(eq(shifts.id, existing.id))
+          .returning().get()!;
+        result.push(updated);
+      } else {
+        const created = db.insert(shifts)
+          .values({ agentId, dayOfWeek: day, startUtc, endUtc, activeStart: null, activeEnd: null, breakStart: null })
+          .returning().get();
+        result.push(created);
+      }
+    }
+    return result;
   },
 
   getOvertimeLogs() {

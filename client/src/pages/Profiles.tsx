@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock } from "lucide-react";
+import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 
@@ -46,15 +46,17 @@ function formatHour(h: number) {
   return `${hh.toString().padStart(2,"0")}:${mm.toString().padStart(2,"0")}`;
 }
 
-// Returns true if breakStart is within first or last hour of the shift
 function isBreakBadTiming(breakStart: number, startUtc: number, endUtc: number): boolean {
   const shiftDur = endUtc > startUtc ? endUtc - startUtc : 24 - startUtc + endUtc;
   const breakEnd = breakStart + 0.5;
-  // Too early: break starts in first hour
   const breakRelStart = breakStart >= startUtc ? breakStart - startUtc : 24 - startUtc + breakStart;
-  // Too late: break ends in last hour (within 1h of end)
   const breakRelEnd = breakEnd >= startUtc ? breakEnd - startUtc : 24 - startUtc + breakEnd;
   return breakRelStart < 1.0 || breakRelEnd > shiftDur - 1.0;
+}
+
+// Returns which days are off based on the agent's offWeekend setting
+function getOffDays(offWeekend: number): number[] {
+  return offWeekend === 1 ? [0, 6] : [4, 5]; // 1=Sat/Sun off, 0=Thu/Fri off
 }
 
 export default function Profiles() {
@@ -104,6 +106,31 @@ export default function Profiles() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
   });
 
+  const toggleOffDayMutation = useMutation({
+    mutationFn: ({ id, offWeekend }: { id: number; offWeekend: number }) => {
+      const today = new Date();
+      const dayOfWeek = today.getUTCDay();
+      const daysToMonday = (dayOfWeek === 0 ? -6 : 1 - dayOfWeek);
+      const monday = new Date(today);
+      monday.setUTCDate(today.getUTCDate() + daysToMonday);
+      const offCycleStart = monday.toISOString().split("T")[0];
+      return apiRequest("PATCH", `/api/agents/${id}`, { offWeekend, offCycleStart });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      toast({ title: "Days off updated" });
+    },
+  });
+
+  const applyWeekMutation = useMutation({
+    mutationFn: ({ id, startUtc, endUtc }: { id: number; startUtc: number; endUtc: number }) =>
+      apiRequest("POST", `/api/agents/${id}/apply-week`, { startUtc, endUtc }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      toast({ title: "Week template applied" });
+    },
+  });
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       {/* Header */}
@@ -145,6 +172,7 @@ export default function Profiles() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {agents.map(agent => {
           const agentShifts = allShifts.filter(s => s.agentId === agent.id);
+          const offDays = getOffDays(agent.offWeekend ?? 1);
           return (
             <div
               key={agent.id}
@@ -155,7 +183,6 @@ export default function Profiles() {
               {/* Agent header */}
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
-                  {/* Avatar */}
                   <div
                     className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
                     style={{
@@ -175,7 +202,6 @@ export default function Profiles() {
                 </div>
                 {isAdmin && (
                   <div className="flex items-center gap-1">
-                    {/* Edit */}
                     <Dialog open={editingAgent?.id === agent.id} onOpenChange={open => !open && setEditingAgent(null)}>
                       <DialogTrigger asChild>
                         <button
@@ -218,7 +244,7 @@ export default function Profiles() {
               </div>
 
               {/* Timezone */}
-              <div className="flex items-center gap-1.5 mb-3">
+              <div className="flex items-center gap-1.5 mb-2">
                 <Clock size={11} className="text-muted-foreground" />
                 <span className="text-[10px] text-muted-foreground font-mono">{agent.timezone}</span>
                 <span className="text-[10px] text-muted-foreground ml-1">
@@ -226,10 +252,39 @@ export default function Profiles() {
                 </span>
               </div>
 
+              {/* Days-off toggle + Apply week row */}
+              {isAdmin && (
+                <div className="flex items-center justify-between mb-3 gap-2">
+                  {/* Off-day toggle */}
+                  <button
+                    onClick={() => toggleOffDayMutation.mutate({ id: agent.id, offWeekend: (agent.offWeekend ?? 1) === 1 ? 0 : 1 })}
+                    className={cn(
+                      "flex items-center gap-1.5 text-[9px] px-2 py-1 rounded-md border transition-all font-medium",
+                      (agent.offWeekend ?? 1) === 1
+                        ? "border-border bg-muted text-muted-foreground"
+                        : "border-primary/40 bg-primary/10 text-primary"
+                    )}
+                    title="Toggle days off: Weekend (Sat/Sun) or Midweek (Thu/Fri)"
+                  >
+                    <CalendarDays size={10} />
+                    {(agent.offWeekend ?? 1) === 1 ? "Off: Sat/Sun" : "Off: Thu/Fri"}
+                  </button>
+
+                  {/* Apply week template */}
+                  <ApplyWeekRow
+                    agentId={agent.id}
+                    offWeekend={agent.offWeekend ?? 1}
+                    onApply={(startUtc, endUtc) => applyWeekMutation.mutate({ id: agent.id, startUtc, endUtc })}
+                    loading={applyWeekMutation.isPending}
+                  />
+                </div>
+              )}
+
               {/* Shift pills */}
               <div className="flex flex-wrap gap-1">
                 {DAYS.map((day, di) => {
                   const shift = agentShifts.find(s => s.dayOfWeek === di);
+                  const isDayOff = offDays.includes(di);
                   return (
                     <ShiftPill
                       key={di}
@@ -239,6 +294,7 @@ export default function Profiles() {
                       agentId={agent.id}
                       color={agent.color}
                       isAdmin={isAdmin}
+                      isDayOff={isDayOff}
                       onUpsert={upsertShiftMutation.mutate}
                       onUpdateShift={(id, data) => updateShiftMutation.mutate({ id, data })}
                     />
@@ -264,6 +320,57 @@ function getLocalTime(tz: string) {
   } catch {
     return "??:??";
   }
+}
+
+// --- Apply Week Row ---
+function ApplyWeekRow({
+  agentId, offWeekend, onApply, loading,
+}: {
+  agentId: number;
+  offWeekend: number;
+  onApply: (startUtc: number, endUtc: number) => void;
+  loading: boolean;
+}) {
+  const [startH, setStartH] = useState("9");
+  const [endH, setEndH] = useState("17");
+
+  const handleApply = () => {
+    const s = parseFloat(startH);
+    const e = parseFloat(endH);
+    if (isNaN(s) || isNaN(e)) return;
+    onApply(s, e);
+  };
+
+  const offLabel = offWeekend === 1 ? "Mon–Wed+Fri" : "Mon–Wed+Sat/Sun";
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="number" min="0" max="23" step="0.5"
+        value={startH}
+        onChange={e => setStartH(e.target.value)}
+        className="w-10 text-[9px] bg-muted border border-border rounded px-1 py-0.5 font-mono text-center"
+        title="Start UTC"
+      />
+      <span className="text-[9px] text-muted-foreground">–</span>
+      <input
+        type="number" min="0" max="47" step="0.5"
+        value={endH}
+        onChange={e => setEndH(e.target.value)}
+        className="w-10 text-[9px] bg-muted border border-border rounded px-1 py-0.5 font-mono text-center"
+        title="End UTC (use >24 for overnight, e.g. 31 = 07:00 next day)"
+      />
+      <button
+        onClick={handleApply}
+        disabled={loading}
+        className="text-[9px] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
+        title={`Apply to all work days`}
+      >
+        <CalendarDays size={9} />
+        Apply week
+      </button>
+    </div>
+  );
 }
 
 // --- Agent Form ---
@@ -362,7 +469,6 @@ function AgentForm({
         />
       </div>
 
-      {/* Preview */}
       <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/40 border border-border">
         <div
           className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
@@ -385,7 +491,7 @@ function AgentForm({
 
 // --- Shift Pill ---
 function ShiftPill({
-  day, dayIdx, shift, agentId, color, isAdmin, onUpsert, onUpdateShift
+  day, dayIdx, shift, agentId, color, isAdmin, isDayOff, onUpsert, onUpdateShift
 }: {
   day: string;
   dayIdx: number;
@@ -393,6 +499,7 @@ function ShiftPill({
   agentId: number;
   color: string;
   isAdmin: boolean;
+  isDayOff: boolean;
   onUpsert: (data: any) => void;
   onUpdateShift: (id: number, data: any) => void;
 }) {
@@ -406,10 +513,11 @@ function ShiftPill({
 
   const save = () => {
     const s = parseFloat(startH);
-    const e = parseFloat(endH);
-    if (!isNaN(s) && !isNaN(e) && e > s) {
-      onUpsert({ agentId, dayOfWeek: dayIdx, startUtc: s, endUtc: e, activeStart: null, activeEnd: null, breakStart: null });
-    }
+    let e = parseFloat(endH);
+    if (isNaN(s) || isNaN(e)) return;
+    // Overnight fix: if end <= start, treat as next-day by adding 24
+    if (e <= s) e = e + 24;
+    onUpsert({ agentId, dayOfWeek: dayIdx, startUtc: s, endUtc: e, activeStart: null, activeEnd: null, breakStart: null });
     setEditing(false);
   };
 
@@ -429,10 +537,7 @@ function ShiftPill({
     setBreakH("");
   };
 
-  // Sync local state when shift data changes from server
   const savedBreak = shift?.breakStart;
-
-  // Warning: break in first/last hour
   const showBreakWarning = shift && savedBreak != null &&
     isBreakBadTiming(savedBreak, shift.startUtc, shift.endUtc);
 
@@ -445,13 +550,16 @@ function ShiftPill({
           value={startH}
           onChange={e => setStartH(e.target.value)}
           className="w-8 bg-accent rounded text-center text-[9px] font-mono"
+          placeholder="start"
         />
         <span>-</span>
         <input
-          type="number" min="0.5" max="24" step="0.5"
+          type="number" min="0" max="47" step="0.5"
           value={endH}
           onChange={e => setEndH(e.target.value)}
           className="w-8 bg-accent rounded text-center text-[9px] font-mono"
+          placeholder="end"
+          title="Use >24 for overnight (e.g. 7 for 07:00 next day, saved as 31 when start=23)"
         />
         <button onClick={save} className="text-primary font-bold">✓</button>
         <button onClick={() => setEditing(false)} className="text-muted-foreground">✕</button>
@@ -459,7 +567,6 @@ function ShiftPill({
     );
   }
 
-  // Break input form
   if (settingBreak && isAdmin && shift) {
     const shiftDur = shift.endUtc > shift.startUtc
       ? shift.endUtc - shift.startUtc
@@ -500,6 +607,24 @@ function ShiftPill({
     );
   }
 
+  // Day-off pill: visually greyed, not clickable for editing
+  if (isDayOff && !shift) {
+    return (
+      <div
+        className="text-[9px] px-1.5 py-0.5 rounded"
+        style={{
+          backgroundColor: "hsl(var(--muted))",
+          color: "hsl(var(--muted-foreground))",
+          border: "1px solid hsl(var(--border))",
+          opacity: 0.4,
+        }}
+        title="Day off"
+      >
+        {day}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center gap-0.5">
@@ -519,12 +644,11 @@ function ShiftPill({
             border: "1px dashed hsl(var(--border))",
           }}
           data-testid={`shift-pill-${agentId}-${dayIdx}`}
-          title={shift ? `${formatHour(shift.startUtc)} – ${formatHour(shift.endUtc)} UTC` : "No shift"}
+          title={shift ? `${formatHour(shift.startUtc)} – ${formatHour(shift.endUtc % 24 === shift.endUtc ? shift.endUtc : shift.endUtc)} UTC` : "No shift"}
         >
           {shift ? `${day} ${formatHour(shift.startUtc)}` : day}
         </button>
 
-        {/* Break button — only shown if shift exists */}
         {shift && (
           <button
             onClick={() => isAdmin && setSettingBreak(true)}
@@ -540,7 +664,6 @@ function ShiftPill({
           </button>
         )}
 
-        {/* Clear break — only if break is set and admin */}
         {shift && savedBreak != null && isAdmin && (
           <button
             onClick={clearBreak}
@@ -552,7 +675,6 @@ function ShiftPill({
         )}
       </div>
 
-      {/* Break info row */}
       {shift && savedBreak != null && (
         <div className={cn(
           "flex items-center gap-1 text-[8px] px-1",

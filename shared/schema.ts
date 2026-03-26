@@ -10,6 +10,10 @@ export const agents = sqliteTable("agents", {
   avatarUrl: text("avatar_url"),
   timezone: text("timezone").notNull().default("UTC"),
   role: text("role").notNull().default("Agent"),
+  // 1 = Sat/Sun off (default), 0 = Thu/Fri off
+  offWeekend: integer("off_weekend").notNull().default(1),
+  // ISO date string of the Monday when the toggle was last changed
+  offCycleStart: text("off_cycle_start"),
 });
 
 export const insertAgentSchema = createInsertSchema(agents).omit({ id: true });
@@ -17,13 +21,13 @@ export type InsertAgent = z.infer<typeof insertAgentSchema>;
 export type Agent = typeof agents.$inferSelect;
 
 // Shifts table — per agent, per weekday (0=Sun, 1=Mon ... 6=Sat)
-// start/end are hours in UTC (0–24, end can be > 24 for overnight)
+// start/end are hours in UTC (0–23.99, endUtc can exceed 24 for overnight e.g. 23–7 stored as 23–31)
 export const shifts = sqliteTable("shifts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   agentId: integer("agent_id").notNull(),
   dayOfWeek: integer("day_of_week").notNull(), // 0-6
   startUtc: real("start_utc").notNull(), // 0..23.99
-  endUtc: real("end_utc").notNull(),   // start..start+16 (can exceed 24 for overnight)
+  endUtc: real("end_utc").notNull(),     // can exceed 24 for overnight (e.g. 31 = 07:00 next day)
   // Lever adjustments for today's override
   activeStart: real("active_start"),   // null = same as startUtc
   activeEnd: real("active_end"),       // null = same as endUtc
