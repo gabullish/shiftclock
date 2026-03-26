@@ -6,6 +6,19 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RotateCcw, Clock, AlignLeft, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
+import {
+  segmentShift,
+  resolveShift,
+  resolveBreak,
+  shiftProgress,
+  calcCoverageForDay,
+  formatUtcHour,
+  formatDuration,
+  shiftLabel,
+  shiftDuration,
+  normaliseEndUtc,
+  displayHour,
+} from "@/lib/shiftUtils";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -40,85 +53,6 @@ function hexToRgba(hex: string, alpha: number) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-function formatH(h: number) {
-  const hh = Math.floor(h) % 24;
-  const mm = Math.round((h % 1) * 60);
-  return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
-}
-
-function fmtDuration(hours: number): string {
-  const totalMins = Math.round(hours * 60);
-  if (totalMins <= 0) return "";
-  const h = Math.floor(totalMins / 60);
-  const m = totalMins % 60;
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
-}
-
-function shiftDuration(startUtc: number, endUtc: number): number {
-  return endUtc > startUtc ? endUtc - startUtc : 24 - startUtc + endUtc;
-}
-
-// Shift % elapsed: 0–100 for normal shift, >100 for overtime portion
-function shiftPercent(startUtc: number, endUtc: number, activeStart: number, activeEnd: number, utcHour: number): { pct: number; otPct: number } {
-  const baseDur = shiftDuration(startUtc, endUtc);
-  const actDur  = shiftDuration(activeStart, activeEnd);
-  if (baseDur <= 0) return { pct: 0, otPct: 0 };
-
-  // How many hours elapsed within activeStart..activeEnd
-  let elapsed = 0;
-  // Handle non-overnight only for simplicity (overnight handled as full wrap)
-  if (activeEnd >= activeStart) {
-    if (utcHour < activeStart) elapsed = 0;
-    else if (utcHour > activeEnd) elapsed = actDur;
-    else elapsed = utcHour - activeStart;
-  } else {
-    if (utcHour >= activeStart) elapsed = utcHour - activeStart;
-    else if (utcHour <= activeEnd) elapsed = (24 - activeStart) + utcHour;
-    else elapsed = actDur;
-  }
-
-  const normalElapsed = Math.min(elapsed, baseDur);
-  const otElapsed     = Math.max(0, elapsed - baseDur);
-  const otTotal       = Math.max(0, actDur - baseDur);
-  return {
-    pct:   Math.round((normalElapsed / baseDur) * 100),
-    otPct: otTotal > 0 ? Math.round((otElapsed / otTotal) * 100) : 0,
-  };
-}
-
-function calcCoverage(
-  agents: Agent[], shifts: Shift[], visible: Set<number>,
-  leverState: Record<number, LeverState>
-) {
-  const slots = Array(24).fill(0);
-  for (const agent of agents) {
-    if (!visible.has(agent.id)) continue;
-    for (const shift of shifts.filter(s => s.agentId === agent.id)) {
-      const ls = leverState[shift.id];
-      const start = ls?.activeStart ?? shift.startUtc;
-      const end   = ls?.activeEnd   ?? shift.endUtc;
-      if (end >= start) {
-        for (let h = Math.floor(start); h < Math.ceil(end); h++) {
-          const overlap = Math.min(end, h + 1) - Math.max(start, h);
-          if (overlap > 0) slots[h % 24] += overlap;
-        }
-      } else {
-        for (let h = Math.floor(start); h < 24; h++) {
-          const overlap = Math.min(24, h + 1) - Math.max(start, h);
-          if (overlap > 0) slots[h] += overlap;
-        }
-        for (let h = 0; h < Math.ceil(end); h++) {
-          const overlap = Math.min(end, h + 1) - Math.max(0, h);
-          if (overlap > 0) slots[h] += overlap;
-        }
-      }
-    }
-  }
-  return slots;
-}
-
 interface LeverState { activeStart: number; activeEnd: number; }
 
 export default function Dashboard() {
@@ -135,7 +69,7 @@ export default function Dashboard() {
   const [leverState, setLeverState]   = useState<Record<number, LeverState>>({});
   const [utcHour, setUtcHour]         = useState(getUTCHour());
   const [viewMode, setViewMode]       = useState<"clock" | "timeline">("clock");
-  const [tooltipInfo, setTooltipInfo] = useState<{ agent: Agent; shift: Shift; x: number; y: number } | null>(null);
+  const [tooltipInfo, setTooltipInfo] = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
 
   const { data: agents = [] }    = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
@@ -145,7 +79,6 @@ export default function Dashboard() {
       setVisible(new Set(agents.map(a => a.id)));
   }, [agents]);
 
-  // Update every second for smooth second hand
   useEffect(() => {
     const t = setInterval(() => setUtcHour(getUTCHour()), 1000);
     return () => clearInterval(t);
@@ -155,8 +88,13 @@ export default function Dashboard() {
 
   useEffect(() => {
     const init: Record<number, LeverState> = {};
-    for (const s of allShifts)
-      init[s.id] = { activeStart: s.activeStart ?? s.startUtc, activeEnd: s.activeEnd ?? s.endUtc };
+    for (const s of allShifts) {
+      const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
+      init[s.id] = {
+        activeStart: s.activeStart ?? s.startUtc,
+        activeEnd:   s.activeEnd   ?? normEnd,
+      };
+    }
     setLeverState(init);
   }, [allShifts]);
 
@@ -171,20 +109,33 @@ export default function Dashboard() {
     setVisible(visible.size === agents.length ? new Set() : new Set(agents.map(a => a.id)));
   };
 
-  const coverage    = calcCoverage(agents, todayShifts, visible, leverState);
+  // Build coverage using shiftUtils — overnight tails now counted correctly
+  const coverageInput = todayShifts
+    .filter(s => visible.has(s.agentId))
+    .map(s => {
+      const ls = leverState[s.id];
+      return {
+        activeStart: ls?.activeStart ?? s.startUtc,
+        activeEnd:   ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc),
+      };
+    });
+  const coverage    = calcCoverageForDay(coverageInput);
   const maxCoverage = Math.max(...coverage, 1);
 
   const agentSummaries = agents.map(agent => {
     const agentTodayShifts = todayShifts.filter(s => s.agentId === agent.id);
     let baseHours = 0, activeHours = 0, overtimeHours = 0, releasedHours = 0;
     for (const s of agentTodayShifts) {
-      const base   = shiftDuration(s.startUtc, s.endUtc);
-      const ls     = leverState[s.id];
-      const active = ls ? shiftDuration(ls.activeStart, ls.activeEnd) : base;
-      baseHours   += base;
-      activeHours += active;
-      if (active > base) overtimeHours  += active - base;
-      if (active < base) releasedHours  += base - active;
+      const ls = leverState[s.id];
+      const resolved = resolveShift(
+        s.startUtc, s.endUtc,
+        ls?.activeStart ?? null, ls?.activeEnd ?? null,
+        s.breakStart ?? null
+      );
+      baseHours     += resolved.baseDuration;
+      activeHours   += resolved.activeDuration;
+      overtimeHours += resolved.overtimeHours;
+      releasedHours += resolved.shrinkHours;
     }
     return { agent, baseHours, activeHours, overtimeHours, releasedHours, shifts: agentTodayShifts };
   });
@@ -201,9 +152,9 @@ export default function Dashboard() {
       if (s.agentId !== agent.id) return false;
       const ls = leverState[s.id];
       const start = ls?.activeStart ?? s.startUtc;
-      const end   = ls?.activeEnd   ?? s.endUtc;
-      if (end >= start) return utcHour >= start && utcHour <= end;
-      return utcHour >= start || utcHour <= end;
+      const end   = ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc);
+      if (end <= 24) return utcHour >= start && utcHour <= end;
+      return utcHour >= start || utcHour <= (end - 24);
     });
   });
 
@@ -213,7 +164,7 @@ export default function Dashboard() {
   const resetLevers = () => {
     const reset: Record<number, LeverState> = { ...leverState };
     for (const s of todayShifts)
-      reset[s.id] = { activeStart: s.startUtc, activeEnd: s.endUtc };
+      reset[s.id] = { activeStart: s.startUtc, activeEnd: normaliseEndUtc(s.startUtc, s.endUtc) };
     setLeverState(reset);
   };
 
@@ -345,7 +296,7 @@ export default function Dashboard() {
             <div className="grid grid-cols-3 border-b border-border shrink-0">
               <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
               <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
-              <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${fmtDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
+              <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${formatDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
             </div>
 
             <div className="relative flex-1 min-h-0">
@@ -431,7 +382,7 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
   );
 }
 
-// ── Clock Visualizer ──────────────────────────────────────────────────────────
+// ── Clock Visualizer ────────────────────────────────────────────────────────────────────
 function ClockVisualizer({
   agents, shifts, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage, maxCoverage,
@@ -454,13 +405,8 @@ function ClockVisualizer({
 
   const todayUTCDay = getUTCDay();
   const isToday     = selectedDay === todayUTCDay;
-
-  // Second hand angle — full rotation every 60s
-  const now      = new Date();
-  const secAngle = (now.getUTCSeconds() / 60) * 360 - 90;
-
-  // Rainbow coverage gradient: each hour gets the color of the most-covered agent or yellow
-  const agentColors = agents.map(a => a.color);
+  const now         = new Date();
+  const secAngle    = (now.getUTCSeconds() / 60) * 360 - 90;
 
   return (
     <div className="relative flex items-center justify-center">
@@ -477,12 +423,12 @@ function ClockVisualizer({
         {/* Clock face */}
         <circle cx={CX} cy={CY} r={BASE_R - 8} fill="hsl(224 18% 11%)" stroke="hsl(224 14% 22%)" strokeWidth="1.5" />
 
-        {/* ── Tick marks: every half hour, emphasis on full hours, big on 0/6/12/18 ── */}
+        {/* Tick marks */}
         {Array.from({ length: 48 }, (_, i) => {
           const h = i / 2;
           const angle = hourToAngle(h);
           const isFullHour = i % 2 === 0;
-          const isMajor    = i % 12 === 0; // 0, 6, 12, 18
+          const isMajor    = i % 12 === 0;
           const outer = BASE_R - 9;
           const inner = isMajor ? BASE_R - 20 : isFullHour ? BASE_R - 16 : BASE_R - 13;
           const p1 = polarToCartesian(CX, CY, outer, angle);
@@ -495,7 +441,7 @@ function ClockVisualizer({
           );
         })}
 
-        {/* ── Hour labels: all 24 ── */}
+        {/* Hour labels */}
         {Array.from({ length: 24 }, (_, h) => {
           const isMajor = h % 6 === 0;
           const labelR  = BASE_R - (isMajor ? 30 : 26);
@@ -512,7 +458,7 @@ function ClockVisualizer({
           );
         })}
 
-        {/* ── Coverage arc: rainbow per agent color, blended by presence ── */}
+        {/* Coverage arc */}
         {coverage.map((cov, h) => {
           if (cov === 0) {
             return (
@@ -522,7 +468,6 @@ function ClockVisualizer({
               />
             );
           }
-          // Find agents covering this hour
           const coveringColors: string[] = [];
           for (const agent of agents) {
             if (!visible.has(agent.id)) continue;
@@ -530,12 +475,13 @@ function ClockVisualizer({
             if (!agentShift) continue;
             const ls = leverState[agentShift.id];
             const start = ls?.activeStart ?? agentShift.startUtc;
-            const end   = ls?.activeEnd   ?? agentShift.endUtc;
-            const covers = end >= start ? (h >= start && h < end) : (h >= start || h < end);
+            const end   = ls?.activeEnd   ?? normaliseEndUtc(agentShift.startUtc, agentShift.endUtc);
+            // Use segmentation to correctly check coverage for this hour
+            const segs = segmentShift(start, end);
+            const covers = segs.some(seg => h >= seg.start && h < seg.end);
             if (covers) coveringColors.push(agent.color);
           }
           if (coveringColors.length === 0) coveringColors.push("#FFD700");
-          // Use first agent's color at full intensity for single, blend for multi
           const intensity = cov / maxCoverage;
           const color = coveringColors[0];
           return (
@@ -548,7 +494,7 @@ function ClockVisualizer({
           );
         })}
 
-        {/* ── Agent rings ── */}
+        {/* Agent rings — now using segmentShift for overnight arcs */}
         {agents.map((agent, idx) => {
           const isVis  = visible.has(agent.id);
           const isHigh = highlighted === agent.id;
@@ -562,95 +508,133 @@ function ClockVisualizer({
               onMouseLeave={() => setHighlighted(null)}
               style={{ cursor: "pointer" }}
             >
-              {/* Track */}
               <circle cx={CX} cy={CY} r={r} fill="none"
                 stroke={hexToRgba(agent.color, 0.12)} strokeWidth={RING_W}
               />
               {shifts.filter(s => s.agentId === agent.id).map(shift => {
                 const ls  = leverState[shift.id];
                 const as_ = ls?.activeStart ?? shift.startUtc;
-                const ae  = ls?.activeEnd   ?? shift.endUtc;
-                const baseDur = shiftDuration(shift.startUtc, shift.endUtc);
-                const actDur  = shiftDuration(as_, ae);
-                const hasOT   = actDur > baseDur;
-                const hasRel  = actDur < baseDur;
-                const bk    = shift.breakStart;
-                const bkEnd = bk != null ? bk + 0.5 : null;
-
-                // Shift % for inner label
+                const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
+                const resolved = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
+                const bk = resolved.breakStart;
                 const { pct, otPct } = isToday
-                  ? shiftPercent(shift.startUtc, shift.endUtc, as_, ae, utcHour)
+                  ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)
                   : { pct: 0, otPct: 0 };
+
+                // Render base ghost arc using segments (fixes overnight)
+                const baseSegs = segmentShift(shift.startUtc, normaliseEndUtc(shift.startUtc, shift.endUtc));
+                // Render active arc using segments
+                const activeSegs = segmentShift(as_, ae);
+                // OT only exists beyond base endUtc
+                const normBaseEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
 
                 return (
                   <g key={shift.id}>
-                    {/* Ghost base shift */}
-                    <path d={describeArc(CX, CY, r, shift.startUtc, shift.endUtc)}
-                      fill="none" stroke={hexToRgba(agent.color, isVis ? 0.22 : 0.06)}
-                      strokeWidth={RING_W}
-                    />
-                    {/* Invisible fat hit area for tooltip */}
-                    <path d={describeArc(CX, CY, r, shift.startUtc, shift.endUtc)}
-                      fill="none" stroke="white" strokeWidth={RING_W + 6} strokeOpacity={0}
-                      style={{ cursor: "pointer", pointerEvents: "all" }}
-                      onMouseEnter={(e) => {
-                        const rect = svgRef.current?.getBoundingClientRect();
-                        if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
-                      }}
-                      onMouseLeave={() => setTooltipInfo(null)}
-                    />
-                    {/* Active shift arc — with or without break */}
-                    {isVis && bk == null && (
-                      <path d={describeArc(CX, CY, r, as_, Math.min(ae, hasOT ? shift.endUtc : ae))}
-                        fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
+                    {/* Ghost base shift — all segments */}
+                    {baseSegs.map((seg, si) => (
+                      <path key={`ghost-${si}`}
+                        d={describeArc(CX, CY, r, seg.start, seg.end)}
+                        fill="none" stroke={hexToRgba(agent.color, isVis ? 0.22 : 0.06)}
+                        strokeWidth={RING_W}
                       />
-                    )}
-                    {isVis && bk != null && bkEnd != null && (
-                      <>
-                        <path d={describeArc(CX, CY, r, as_, Math.min(bk, ae))}
-                          fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
-                        />
-                        <path d={describeArc(CX, CY, r, Math.min(bkEnd, ae), Math.min(ae, shift.endUtc))}
-                          fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
-                        />
-                        {/* Break: white filled segment */}
-                        <path d={describeArc(CX, CY, r, bk, bkEnd)}
-                          fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth={strokeW + 2}
-                        />
-                        {/* Coffee cup emoji inside the break white segment */}
-                        {(() => {
-                          const midH = bk + 0.25;
-                          const p = polarToCartesian(CX, CY, r, hourToAngle(midH));
-                          return (
-                            <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-                              fontSize="5" style={{ pointerEvents: "none", userSelect: "none" }}>
-                              ☕
-                            </text>
-                          );
-                        })()}
-                        {[bk, bkEnd].map((pt, pi) => {
-                          const p = polarToCartesian(CX, CY, r, hourToAngle(pt));
-                          return <circle key={pi} cx={p.x} cy={p.y} r={1.5} fill={hexToRgba(agent.color, 0.7)} />;
-                        })}
-                      </>
-                    )}
-                    {/* Overtime: agent color + white neon glow border */}
-                    {isVis && hasOT && (
-                      <path d={describeArc(CX, CY, r, shift.endUtc, ae)}
-                        fill="none" stroke={agent.color} strokeWidth={strokeW + 2}
-                        strokeOpacity={isHigh ? 1 : 0.9}
-                        style={{
-                          filter: `drop-shadow(0 0 3px white) drop-shadow(0 0 6px ${agent.color})`,
+                    ))}
+
+                    {/* Invisible hit area for tooltip */}
+                    {baseSegs.map((seg, si) => (
+                      <path key={`hit-${si}`}
+                        d={describeArc(CX, CY, r, seg.start, seg.end)}
+                        fill="none" stroke="white" strokeWidth={RING_W + 6} strokeOpacity={0}
+                        style={{ cursor: "pointer", pointerEvents: "all" }}
+                        onMouseEnter={(e) => {
+                          const rect = svgRef.current?.getBoundingClientRect();
+                          if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
                         }}
+                        onMouseLeave={() => setTooltipInfo(null)}
                       />
-                    )}
-                    {/* Released (up for grabs): orange dashed */}
-                    {isVis && hasRel && (
-                      <path d={describeArc(CX, CY, r, ae, shift.endUtc)}
-                        fill="none" stroke="rgba(255,140,0,0.85)"
-                        strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
-                      />
-                    )}
+                    ))}
+
+                    {/* Active arcs (without break notch for now) */}
+                    {isVis && bk == null && activeSegs.map((seg, si) => {
+                      // Clamp active segment to base end if no OT
+                      const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
+                      if (segEnd <= seg.start) return null;
+                      return (
+                        <path key={`active-${si}`}
+                          d={describeArc(CX, CY, r, seg.start, segEnd)}
+                          fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
+                        />
+                      );
+                    })}
+
+                    {/* Active arcs with break */}
+                    {isVis && bk != null && activeSegs.map((seg, si) => {
+                      const bkEnd = bk + 0.5;
+                      const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
+                      if (segEnd <= seg.start) return null;
+                      // Before break
+                      const beforeEnd = Math.min(bk, segEnd);
+                      // After break
+                      const afterStart = Math.min(bkEnd, segEnd);
+                      return (
+                        <g key={`bk-${si}`}>
+                          {beforeEnd > seg.start && (
+                            <path d={describeArc(CX, CY, r, seg.start, beforeEnd)}
+                              fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
+                            />
+                          )}
+                          {afterStart < segEnd && (
+                            <path d={describeArc(CX, CY, r, afterStart, segEnd)}
+                              fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
+                            />
+                          )}
+                          {/* Break: white segment */}
+                          <path d={describeArc(CX, CY, r, bk, Math.min(bkEnd, segEnd))}
+                            fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth={strokeW + 2}
+                          />
+                          {(() => {
+                            const midH = bk + 0.25;
+                            const p = polarToCartesian(CX, CY, r, hourToAngle(midH));
+                            return (
+                              <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
+                                fontSize="5" style={{ pointerEvents: "none", userSelect: "none" }}>
+                                ☕
+                              </text>
+                            );
+                          })()}
+                          {[bk, bkEnd].map((pt, pi) => {
+                            const p = polarToCartesian(CX, CY, r, hourToAngle(pt));
+                            return <circle key={pi} cx={p.x} cy={p.y} r={1.5} fill={hexToRgba(agent.color, 0.7)} />;
+                          })}
+                        </g>
+                      );
+                    })}
+
+                    {/* Overtime: neon glow beyond base end */}
+                    {isVis && resolved.hasOvertime && (() => {
+                      const otSegs = segmentShift(normBaseEnd, ae);
+                      return otSegs.map((seg, si) => (
+                        <path key={`ot-${si}`}
+                          d={describeArc(CX, CY, r, seg.start, seg.end)}
+                          fill="none" stroke={agent.color} strokeWidth={strokeW + 2}
+                          strokeOpacity={isHigh ? 1 : 0.9}
+                          style={{ filter: `drop-shadow(0 0 3px white) drop-shadow(0 0 6px ${agent.color})` }}
+                        />
+                      ));
+                    })()}
+
+                    {/* Shrink: orange dashed */}
+                    {isVis && resolved.hasShrink && (() => {
+                      const shrinkStart = ae;
+                      const shrinkEnd   = normBaseEnd;
+                      const shrinkSegs  = segmentShift(shrinkStart, shrinkEnd);
+                      return shrinkSegs.map((seg, si) => (
+                        <path key={`shrink-${si}`}
+                          d={describeArc(CX, CY, r, seg.start, seg.end)}
+                          fill="none" stroke="rgba(255,140,0,0.85)"
+                          strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
+                        />
+                      ));
+                    })()}
                   </g>
                 );
               })}
@@ -658,7 +642,7 @@ function ClockVisualizer({
           );
         })}
 
-        {/* ── Seconds hand (decorative, transparent, non-interactive) ── */}
+        {/* Seconds hand */}
         {isToday && (() => {
           const secTip  = polarToCartesian(CX, CY, HEAT_R + 14, secAngle);
           const secBase = polarToCartesian(CX, CY, 14, secAngle + 180);
@@ -670,7 +654,7 @@ function ClockVisualizer({
           );
         })()}
 
-        {/* ── Hour hand ── */}
+        {/* Hour hand */}
         {(() => {
           const angle = hourToAngle(utcHour);
           const tip   = polarToCartesian(CX, CY, HEAT_R + 12, angle);
@@ -689,23 +673,23 @@ function ClockVisualizer({
         <circle cx={CX} cy={CY} r={6} fill="hsl(51 100% 50%)" style={{ pointerEvents: "none" }} />
         <circle cx={CX} cy={CY} r={3} fill="hsl(224 16% 8%)" style={{ pointerEvents: "none" }} />
 
-        {/* ── Shift % labels inside rings — only when today ── */}
+        {/* ── Shift % labels — LARGER font (Phase 2) ── */}
         {isToday && agents.map((agent, idx) => {
           const r = BASE_R + idx * (RING_W + GAP);
           const shift = shifts.find(s => s.agentId === agent.id);
           if (!shift || !visible.has(agent.id)) return null;
           const ls  = leverState[shift.id];
           const as_ = ls?.activeStart ?? shift.startUtc;
-          const ae  = ls?.activeEnd   ?? shift.endUtc;
-          const { pct } = shiftPercent(shift.startUtc, shift.endUtc, as_, ae, utcHour);
+          const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
+          const { pct } = shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour);
           if (pct <= 0 || pct > 100) return null;
-          // Label at the midpoint of the elapsed arc
-          const midH = as_ + (pct / 100) * shiftDuration(shift.startUtc, shift.endUtc) / 2;
-          const p = polarToCartesian(CX, CY, r, hourToAngle(midH));
+          const midH = as_ + (pct / 100) * shiftDuration(shift.startUtc, normaliseEndUtc(shift.startUtc, shift.endUtc)) / 2;
+          const p = polarToCartesian(CX, CY, r, hourToAngle(displayHour(midH)));
           return (
             <text key={agent.id} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-              fontSize="4.5" fill="white" fontWeight="700"
-              style={{ pointerEvents: "none", textShadow: `0 0 2px ${agent.color}` }}
+              fontSize="6.5"
+              fill="white" fontWeight="800"
+              style={{ pointerEvents: "none", textShadow: `0 0 3px ${agent.color}` }}
             >
               {pct}%
             </text>
@@ -724,10 +708,10 @@ function ClockVisualizer({
             {tooltipInfo.agent.name}
           </div>
           <div className="text-muted-foreground mt-0.5">
-            {formatH(tooltipInfo.shift.startUtc)} – {formatH(tooltipInfo.shift.endUtc)} UTC
+            {shiftLabel(tooltipInfo.shift.startUtc, tooltipInfo.shift.endUtc)}
           </div>
           <div className="text-muted-foreground text-[10px]">
-            {fmtDuration(shiftDuration(tooltipInfo.shift.startUtc, tooltipInfo.shift.endUtc))} shift
+            {formatDuration(shiftDuration(tooltipInfo.shift.startUtc, normaliseEndUtc(tooltipInfo.shift.startUtc, tooltipInfo.shift.endUtc)))} shift
           </div>
           {tooltipInfo.pct > 0 && (
             <div className="mt-1 pt-1 border-t border-border">
@@ -737,7 +721,7 @@ function ClockVisualizer({
                     style={{ width: `${Math.min(100, tooltipInfo.pct)}%`, backgroundColor: tooltipInfo.agent.color }}
                   />
                 </div>
-                <span style={{ color: tooltipInfo.agent.color }} className="font-mono">{tooltipInfo.pct}%</span>
+                <span style={{ color: tooltipInfo.agent.color }} className="font-mono font-bold text-xs">{tooltipInfo.pct}%</span>
               </div>
               {tooltipInfo.otPct > 0 && (
                 <div className="text-[9px] mt-0.5" style={{ color: tooltipInfo.agent.color }}>
@@ -751,7 +735,6 @@ function ClockVisualizer({
 
       {/* Legend */}
       <div className="absolute top-0 right-0 flex flex-col gap-1.5 bg-card/80 rounded-lg p-2 border border-border">
-        {/* Coverage: rainbow swatches from agent colors */}
         <div className="flex items-center gap-1.5">
           <div className="flex gap-px rounded-sm overflow-hidden" style={{ width: 20, height: 6 }}>
             {agents.slice(0, 6).map((a, i) => (
@@ -761,17 +744,14 @@ function ClockVisualizer({
           </div>
           <span className="text-[9px] text-muted-foreground">Coverage</span>
         </div>
-        {/* Up for grabs: orange dashed */}
         <div className="flex items-center gap-1.5">
           <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,140,0,0.9)" }} />
           <span className="text-[9px] text-muted-foreground">Up for grabs</span>
         </div>
-        {/* Overtime: white neon glow */}
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-1.5 rounded-full bg-white" style={{ boxShadow: "0 0 5px white, 0 0 8px rgba(255,255,255,0.6)" }} />
           <span className="text-[9px] text-muted-foreground">Overtime</span>
         </div>
-        {/* Break: white with coffee emoji */}
         <div className="flex items-center gap-1.5">
           <div className="w-4 h-1.5 rounded-full bg-white flex items-center justify-center" style={{ fontSize: 5 }}>☕</div>
           <span className="text-[9px] text-muted-foreground">Break</span>
@@ -781,7 +761,7 @@ function ClockVisualizer({
   );
 }
 
-// ── Timeline View ─────────────────────────────────────────────────────────────
+// ── Timeline View ────────────────────────────────────────────────────────────────────
 function TimelineView({
   agents, shifts, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage,
@@ -836,7 +816,6 @@ function TimelineView({
 
       {/* Grid + rows */}
       <div className="relative flex-1">
-        {/* Grid lines spanning all rows */}
         <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: LABEL_W, right: 0 }}>
           {gridHours.map(h => (
             <div key={h} className="absolute top-0 bottom-0 border-l border-border/40"
@@ -850,7 +829,7 @@ function TimelineView({
           </div>
         </div>
 
-        {/* Agent rows */}
+        {/* Agent rows — using segmentShift for overnight bars */}
         {agents.map(agent => {
           const agentShifts = shifts.filter(s => s.agentId === agent.id);
           const isVis  = visible.has(agent.id);
@@ -870,44 +849,53 @@ function TimelineView({
 
               <div className="relative" style={{ width: chartW, height: ROW_H }}>
                 {agentShifts.map(shift => {
-                  const ls    = leverState[shift.id];
-                  const as_   = ls?.activeStart ?? shift.startUtc;
-                  const ae    = ls?.activeEnd   ?? shift.endUtc;
-                  const baseDur = shiftDuration(shift.startUtc, shift.endUtc);
-                  const actDur  = shiftDuration(as_, ae);
-                  const hasOT  = actDur > baseDur;
-                  const hasRel = actDur < baseDur;
-
-                  const baseLeft  = shift.startUtc * pxPerHr;
-                  const baseWidth = baseDur * pxPerHr;
-                  const actLeft   = as_ * pxPerHr;
-                  const actWidth  = actDur * pxPerHr;
+                  const ls = leverState[shift.id];
+                  const as_ = ls?.activeStart ?? shift.startUtc;
+                  const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
+                  const resolved = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
+                  const baseSegs   = segmentShift(shift.startUtc, normaliseEndUtc(shift.startUtc, shift.endUtc));
+                  const activeSegs = segmentShift(as_, ae);
+                  const normBaseEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
 
                   return (
                     <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
-                      {/* Ghost base */}
-                      <div className="absolute rounded-sm"
-                        style={{
-                          left: baseLeft, width: Math.max(2, baseWidth),
-                          top: 6, height: ROW_H - 12,
-                          backgroundColor: agent.color + "20",
-                          border: `1px solid ${agent.color}30`,
-                        }}
-                      />
-                      {/* Active bar */}
-                      <div className="absolute rounded-sm transition-all duration-150"
-                        style={{
-                          left: actLeft,
-                          width: Math.max(2, hasOT ? actWidth : Math.min(actWidth, baseWidth)),
-                          top: 4, height: ROW_H - 8,
-                          backgroundColor: agent.color,
-                          opacity: isHigh ? 0.95 : 0.75,
-                          boxShadow: isHigh ? `0 0 8px ${agent.color}60` : undefined,
-                        }}
-                      />
+                      {/* Ghost base — all segments */}
+                      {baseSegs.map((seg, si) => (
+                        <div key={`ghost-${si}`} className="absolute rounded-sm"
+                          style={{
+                            left: seg.start * pxPerHr,
+                            width: Math.max(2, (seg.end - seg.start) * pxPerHr),
+                            top: 6, height: ROW_H - 12,
+                            backgroundColor: agent.color + "20",
+                            border: `1px solid ${agent.color}30`,
+                          }}
+                        />
+                      ))}
+
+                      {/* Active bars — all segments */}
+                      {activeSegs.map((seg, si) => {
+                        const segEnd = resolved.hasOvertime
+                          ? seg.end
+                          : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
+                        if (segEnd <= seg.start) return null;
+                        return (
+                          <div key={`active-${si}`} className="absolute rounded-sm transition-all duration-150"
+                            style={{
+                              left: seg.start * pxPerHr,
+                              width: Math.max(2, (segEnd - seg.start) * pxPerHr),
+                              top: 4, height: ROW_H - 8,
+                              backgroundColor: agent.color,
+                              opacity: isHigh ? 0.95 : 0.75,
+                              boxShadow: isHigh ? `0 0 8px ${agent.color}60` : undefined,
+                            }}
+                          />
+                        );
+                      })}
+
                       {/* Break notch */}
-                      {shift.breakStart != null && (() => {
-                        const bkL = shift.breakStart * pxPerHr;
+                      {resolved.breakStart != null && (() => {
+                        const bk = resolved.breakStart;
+                        const bkL = bk * pxPerHr;
                         const bkW = Math.max(3, 0.5 * pxPerHr);
                         return (
                           <>
@@ -920,40 +908,49 @@ function TimelineView({
                           </>
                         );
                       })()}
-                      {/* Overtime — agent color + neon white glow */}
-                      {hasOT && (
-                        <div className="absolute rounded-sm"
-                          style={{
-                            left: shift.endUtc * pxPerHr,
-                            width: Math.max(2, (ae - shift.endUtc) * pxPerHr),
-                            top: 2, height: ROW_H - 4,
-                            backgroundColor: agent.color,
-                            opacity: 0.9,
-                            boxShadow: `0 0 4px white, 0 0 8px ${agent.color}`,
-                          }}
-                        />
-                      )}
-                      {/* Released / up for grabs — orange dashed */}
-                      {hasRel && (
-                        <div className="absolute rounded-sm"
-                          style={{
-                            left: ae * pxPerHr,
-                            width: Math.max(2, (shift.endUtc - ae) * pxPerHr),
-                            top: 8, height: ROW_H - 16,
-                            background: "repeating-linear-gradient(90deg, rgba(255,140,0,0.7) 0px, rgba(255,140,0,0.7) 3px, transparent 3px, transparent 6px)",
-                            border: "1px dashed rgba(255,140,0,0.6)",
-                          }}
-                        />
-                      )}
-                      {/* Time label inside bar */}
-                      {baseWidth > 50 && (
+
+                      {/* Overtime neon glow */}
+                      {resolved.hasOvertime && (() => {
+                        const otSegs = segmentShift(normBaseEnd, ae);
+                        return otSegs.map((seg, si) => (
+                          <div key={`ot-${si}`} className="absolute rounded-sm"
+                            style={{
+                              left: seg.start * pxPerHr,
+                              width: Math.max(2, (seg.end - seg.start) * pxPerHr),
+                              top: 2, height: ROW_H - 4,
+                              backgroundColor: agent.color,
+                              opacity: 0.9,
+                              boxShadow: `0 0 4px white, 0 0 8px ${agent.color}`,
+                            }}
+                          />
+                        ));
+                      })()}
+
+                      {/* Shrink / up for grabs dashed */}
+                      {resolved.hasShrink && (() => {
+                        const shrinkSegs = segmentShift(ae, normBaseEnd);
+                        return shrinkSegs.map((seg, si) => (
+                          <div key={`shrink-${si}`} className="absolute rounded-sm"
+                            style={{
+                              left: seg.start * pxPerHr,
+                              width: Math.max(2, (seg.end - seg.start) * pxPerHr),
+                              top: 8, height: ROW_H - 16,
+                              background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
+                              border: "1px dashed rgba(255,140,0,0.6)",
+                            }}
+                          />
+                        ));
+                      })()}
+
+                      {/* Shift % label inside bar — larger font */}
+                      {baseSegs[0] && (baseSegs[0].end - baseSegs[0].start) * pxPerHr > 50 && (
                         <div className="absolute flex items-center pointer-events-none"
-                          style={{ left: baseLeft + 4, top: 6, height: ROW_H - 12 }}
+                          style={{ left: baseSegs[0].start * pxPerHr + 4, top: 6, height: ROW_H - 12 }}
                         >
-                          <span className="text-[9px] font-mono font-bold"
-                            style={{ color: "white", mixBlendMode: "difference", opacity: 0.85 }}
+                          <span className="text-[10px] font-mono font-bold"
+                            style={{ color: "white", mixBlendMode: "difference", opacity: 0.9 }}
                           >
-                            {formatH(shift.startUtc)}–{formatH(shift.endUtc)}
+                            {formatUtcHour(shift.startUtc)}–{formatUtcHour(shift.endUtc)}
                           </span>
                         </div>
                       )}
@@ -975,7 +972,6 @@ function TimelineView({
           <div className="text-[9px] text-muted-foreground uppercase shrink-0 pr-2" style={{ width: LABEL_W }}>Coverage</div>
           <div className="relative" style={{ width: chartW, height: 10 }}>
             {coverage.map((cov, h) => {
-              // Find the primary covering agent's color
               let color = "#FFD700";
               if (cov > 0) {
                 const covering = agents.find(agent => {
@@ -984,8 +980,9 @@ function TimelineView({
                   if (!s) return false;
                   const ls = leverState[s.id];
                   const st = ls?.activeStart ?? s.startUtc;
-                  const en = ls?.activeEnd   ?? s.endUtc;
-                  return en >= st ? (h >= st && h < en) : (h >= st || h < en);
+                  const en = ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc);
+                  const segs = segmentShift(st, en);
+                  return segs.some(seg => h >= seg.start && h < seg.end);
                 });
                 if (covering) color = covering.color;
               }
@@ -1020,7 +1017,7 @@ function TimelineView({
   );
 }
 
-// ── Shift Lever ───────────────────────────────────────────────────────────────
+// ── Shift Lever ────────────────────────────────────────────────────────────────────
 function ShiftLever({
   agent, shift, leverState, onLeverChange,
   highlighted, onHighlight, onUnhighlight,
@@ -1037,26 +1034,24 @@ function ShiftLever({
 
   const { startUtc, endUtc } = shift;
   const { activeStart, activeEnd } = leverState;
-  const baseDuration   = shiftDuration(startUtc, endUtc);
-  const activeDuration = shiftDuration(activeStart, activeEnd);
-  const hasOvertime    = activeDuration > baseDuration;
-  const hasReleased    = activeDuration < baseDuration;
+  const resolved = resolveShift(startUtc, endUtc, activeStart, activeEnd, shift.breakStart ?? null);
 
   const isToday = selectedDay === getUTCDay();
   const { pct, otPct } = isToday
-    ? shiftPercent(startUtc, endUtc, activeStart, activeEnd, utcHour)
+    ? shiftProgress(startUtc, endUtc, activeStart, activeEnd, utcHour)
     : { pct: 0, otPct: 0 };
 
-  const barMax   = 24;
-  const baseLeft = (startUtc     / barMax) * 100;
-  const baseWidth = (baseDuration  / barMax) * 100;
-  const actLeft  = (activeStart   / barMax) * 100;
-  const actWidth = (activeDuration / barMax) * 100;
+  const barMax    = 24;
+  const normEnd   = normaliseEndUtc(startUtc, endUtc);
+  const baseLeft  = (startUtc / barMax) * 100;
+  const baseWidth = (resolved.baseDuration / barMax) * 100;
+  const actLeft   = (activeStart / barMax) * 100;
+  const actWidth  = (resolved.activeDuration / barMax) * 100;
 
-  const adjustEnd   = (delta: number) => { if (!isAdmin) return; onLeverChange(shift.id, activeStart, Math.max(activeStart + 0.5, Math.min(24, activeEnd + delta))); };
+  const adjustEnd   = (delta: number) => { if (!isAdmin) return; onLeverChange(shift.id, activeStart, Math.max(activeStart + 0.5, Math.min(48, activeEnd + delta))); };
   const adjustStart = (delta: number) => { if (!isAdmin) return; onLeverChange(shift.id, Math.max(0, Math.min(activeEnd - 0.5, activeStart + delta)), activeEnd); };
 
-  const barRef  = useRef<HTMLDivElement>(null);
+  const barRef   = useRef<HTMLDivElement>(null);
   const dragging = useRef<{ type: "start" | "end" | "move"; startX: number; startVal: number; startEnd: number } | null>(null);
 
   const onMouseDown = (e: React.MouseEvent, type: "start" | "end" | "move") => {
@@ -1073,11 +1068,11 @@ function ShiftLever({
         const ns = snap(Math.max(0, Math.min(startEnd - 0.5, startVal + delta)));
         onLeverChange(shift.id, ns, startEnd);
       } else if (t === "end") {
-        const ne = snap(Math.max(startVal + 0.5, Math.min(24, startEnd + delta)));
+        const ne = snap(Math.max(startVal + 0.5, Math.min(48, startEnd + delta)));
         onLeverChange(shift.id, startVal, ne);
       } else {
         const dur = startEnd - startVal;
-        const ns = snap(Math.max(0, Math.min(24 - dur, startVal + delta)));
+        const ns = snap(Math.max(0, Math.min(48 - dur, startVal + delta)));
         onLeverChange(shift.id, ns, ns + dur);
       }
     };
@@ -1100,39 +1095,39 @@ function ShiftLever({
         <div className="flex items-center gap-2">
           <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
           <span className="text-xs font-medium truncate max-w-[80px]">{agent.name}</span>
-          {/* Shift % badge */}
+          {/* Shift % badge — larger font */}
           {isToday && pct > 0 && (
-            <span className="text-[9px] px-1 py-0.5 rounded font-mono font-bold"
+            <span className="text-[11px] px-1 py-0.5 rounded font-mono font-bold"
               style={{ backgroundColor: agent.color + "25", color: agent.color }}>
               {pct}%
             </span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          {hasOvertime && fmtDuration(activeDuration - baseDuration) && (
+          {resolved.hasOvertime && formatDuration(resolved.overtimeHours) && (
             <span className="text-[9px] px-1.5 py-0.5 rounded-sm font-medium"
               style={{ background: agent.color + "30", color: agent.color }}>
-              +{fmtDuration(activeDuration - baseDuration)} OT
+              +{formatDuration(resolved.overtimeHours)} OT
               {isToday && otPct > 0 && <span className="ml-1 opacity-70">{otPct}%</span>}
             </span>
           )}
-          {hasReleased && fmtDuration(baseDuration - activeDuration) && (
+          {resolved.hasShrink && formatDuration(resolved.shrinkHours) && (
             <span className="text-[9px] px-1.5 py-0.5 rounded-sm font-medium bg-orange-500/20 text-orange-400">
-              -{fmtDuration(baseDuration - activeDuration)} free
+              -{formatDuration(resolved.shrinkHours)} free
             </span>
           )}
           {shift.breakStart != null && (
             <span className="text-[9px] px-1.5 py-0.5 rounded-sm font-medium bg-muted text-muted-foreground"
-              title={`Break at ${formatH(shift.breakStart)} UTC`}>
-              ☕ {formatH(shift.breakStart)}
+              title={`Break at ${formatUtcHour(shift.breakStart)} UTC`}>
+              ☕ {formatUtcHour(shift.breakStart)}
             </span>
           )}
         </div>
       </div>
 
-      {/* % progress bar — only today */}
+      {/* % progress bar */}
       {isToday && pct > 0 && (
-        <div className="mb-1.5 h-1 rounded-full bg-muted overflow-hidden">
+        <div className="mb-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
           <div className="h-full rounded-full transition-all duration-1000"
             style={{ width: `${Math.min(100, pct)}%`, backgroundColor: agent.color, opacity: 0.7 }}
           />
@@ -1143,31 +1138,31 @@ function ShiftLever({
         <div className="absolute h-full rounded-sm opacity-20"
           style={{ left: `${baseLeft}%`, width: `${baseWidth}%`, backgroundColor: agent.color }}
         />
-        {hasReleased && (
+        {resolved.hasShrink && (
           <div className="absolute h-3 top-1 rounded-sm"
             style={{
               left: `${(activeEnd / barMax) * 100}%`,
-              width: `${(releasedHours / barMax) * 100}%`,
-              background: "repeating-linear-gradient(90deg, rgba(255,140,0,0.6) 0px, rgba(255,140,0,0.6) 3px, transparent 3px, transparent 6px)",
+              width: `${(resolved.shrinkHours / barMax) * 100}%`,
+              background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.6) 0px,rgba(255,140,0,0.6) 3px,transparent 3px,transparent 6px)",
             }}
           />
         )}
         <div className="absolute h-full rounded-sm transition-none"
           style={{
             left: `${actLeft}%`,
-            width: `${Math.max(1, Math.min(actWidth, hasOvertime ? actWidth : baseWidth))}%`,
+            width: `${Math.max(1, Math.min(actWidth, resolved.hasOvertime ? actWidth : baseWidth))}%`,
             backgroundColor: agent.color,
-            opacity: hasOvertime ? 0.9 : hasReleased ? 0.55 : 0.75,
-            boxShadow: hasOvertime ? `0 0 6px white, 0 0 10px ${agent.color}` : undefined,
+            opacity: resolved.hasOvertime ? 0.9 : resolved.hasShrink ? 0.55 : 0.75,
+            boxShadow: resolved.hasOvertime ? `0 0 6px white, 0 0 10px ${agent.color}` : undefined,
             cursor: isAdmin ? "grab" : "default",
           }}
           onMouseDown={e => onMouseDown(e, "move")}
         />
-        {hasOvertime && (
+        {resolved.hasOvertime && (
           <div className="absolute h-full rounded-sm"
             style={{
-              left: `${(endUtc / barMax) * 100}%`,
-              width: `${((activeEnd - endUtc) / barMax) * 100}%`,
+              left: `${(normEnd / barMax) * 100}%`,
+              width: `${((activeEnd - normEnd) / barMax) * 100}%`,
               backgroundColor: agent.color,
               boxShadow: `0 0 6px white, 0 0 10px ${agent.color}`,
             }}
@@ -1179,7 +1174,7 @@ function ShiftLever({
           return (
             <div className="absolute top-0 bottom-0 z-20 rounded-sm flex items-center justify-center"
               style={{ left: `${bkLeft}%`, width: `${Math.max(1.5, bkWidth)}%`, backgroundColor: "rgba(255,255,255,0.92)" }}
-              title={`Break: ${formatH(shift.breakStart)}–${formatH(shift.breakStart + 0.5)}`}
+              title={`Break: ${formatUtcHour(shift.breakStart)}–${formatUtcHour(shift.breakStart + 0.5)}`}
             >
               <span style={{ fontSize: 6, lineHeight: 1 }}>☕</span>
             </div>
@@ -1203,11 +1198,11 @@ function ShiftLever({
         <div className="flex items-center gap-1">
           {isAdmin && <button onClick={() => adjustStart(-0.5)} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
           {isAdmin && <button onClick={() => adjustStart(0.5)}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
-          <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatH(activeStart)}</span>
+          <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
         </div>
-        <span className="text-[9px] text-muted-foreground font-mono tabular-nums">{fmtDuration(activeDuration)}</span>
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{formatDuration(resolved.activeDuration)}</span>
         <div className="flex items-center gap-1">
-          <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatH(activeEnd)}</span>
+          <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
           {isAdmin && <button onClick={() => adjustEnd(-0.5)} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
           {isAdmin && <button onClick={() => adjustEnd(0.5)}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
         </div>
@@ -1248,9 +1243,9 @@ function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCove
               <div className="w-1.5 h-1.5 rounded-full mt-1 shrink-0" style={{ backgroundColor: agent.color }} />
               <div className="flex-1">
                 <span className="font-medium text-foreground">{agent.name}</span>
-                <span className="text-muted-foreground ml-1">{fmtDuration(activeHours)}</span>
-                {overtimeHours > 0 && <span className="ml-1" style={{ color: agent.color }}>+{fmtDuration(overtimeHours)} OT</span>}
-                {releasedHours > 0 && <span className="ml-1 text-orange-400">{fmtDuration(releasedHours)} up for grabs</span>}
+                <span className="text-muted-foreground ml-1">{formatDuration(activeHours)}</span>
+                {overtimeHours > 0 && <span className="ml-1" style={{ color: agent.color }}>+{formatDuration(overtimeHours)} OT</span>}
+                {releasedHours > 0 && <span className="ml-1 text-orange-400">{formatDuration(releasedHours)} up for grabs</span>}
               </div>
             </div>
           );
@@ -1258,8 +1253,8 @@ function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCove
       </div>
       {(totalOvertimeHours > 0 || totalReleasedHours > 0) && (
         <div className="mt-2 pt-2 border-t border-border">
-          {totalOvertimeHours > 0 && <p className="text-[10px] text-primary">Total overtime: +{fmtDuration(totalOvertimeHours)}</p>}
-          {totalReleasedHours > 0 && <p className="text-[10px] text-orange-400">Total up for grabs: {fmtDuration(totalReleasedHours)}</p>}
+          {totalOvertimeHours > 0 && <p className="text-[10px] text-primary">Total overtime: +{formatDuration(totalOvertimeHours)}</p>}
+          {totalReleasedHours > 0 && <p className="text-[10px] text-orange-400">Total up for grabs: {formatDuration(totalReleasedHours)}</p>}
         </div>
       )}
     </div>
