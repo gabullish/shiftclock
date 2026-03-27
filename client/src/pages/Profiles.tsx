@@ -57,8 +57,14 @@ function isOvernight(startUtc: number, endUtc: number) {
   return endUtc < startUtc;
 }
 
-function shiftLabel(startUtc: number, endUtc: number) {
-  return `${formatHour(startUtc)} – ${formatHour(endUtc)}${isOvernight(startUtc, endUtc) ? " (+1)" : ""}`;
+function shiftLabel(startUtc: number, endUtc: number, dayIdx?: number) {
+  const overnight = isOvernight(startUtc, endUtc);
+  if (overnight && dayIdx != null) {
+    const prevDay = DAYS[(dayIdx + 6) % 7];
+    const curDay = DAYS[dayIdx];
+    return `${prevDay}/${curDay} ${formatHour(startUtc)} – ${formatHour(endUtc)}`;
+  }
+  return `${formatHour(startUtc)} – ${formatHour(endUtc)}${overnight ? " (+1)" : ""}`;
 }
 
 function shiftDurH(startUtc: number, endUtc: number) {
@@ -632,8 +638,8 @@ function ShiftPill({
           <button onClick={() => setEditing(false)} className="text-muted-foreground">✕</button>
         </div>
         <div className="flex items-center gap-1 px-0.5">
-          {overnight && <span className="text-amber-400 font-mono">+1</span>}
-          <span className="text-muted-foreground">{shiftLabel(startH, endH)} · {dur}h</span>
+          {overnight && <span className="text-amber-400 font-mono">{DAYS[(dayIdx + 6) % 7]}/{DAYS[dayIdx]}</span>}
+          <span className="text-muted-foreground">{shiftLabel(startH, endH, dayIdx)} · {dur}h</span>
         </div>
       </div>
     );
@@ -676,7 +682,7 @@ function ShiftPill({
           </div>
         )}
         <div className="text-muted-foreground opacity-60">
-          {shiftLabel(shift.startUtc, shift.endUtc)} · {dur2}h
+          {shiftLabel(shift.startUtc, shift.endUtc, dayIdx)} · {dur2}h
         </div>
       </div>
     );
@@ -718,10 +724,12 @@ function ShiftPill({
             border: "1px dashed hsl(var(--border))",
           }}
           data-testid={`shift-pill-${agentId}-${dayIdx}`}
-          title={shift ? shiftLabel(shift.startUtc, shift.endUtc) + " UTC" : "No shift — click to add"}
+          title={shift ? shiftLabel(shift.startUtc, shift.endUtc, dayIdx) + " UTC" : "No shift — click to add"}
         >
           {shift
-            ? `${day} ${formatHour(shift.startUtc)}${isOvernight(shift.startUtc, shift.endUtc) ? "*" : ""}`
+            ? isOvernight(shift.startUtc, shift.endUtc)
+              ? `${DAYS[(dayIdx + 6) % 7]}/${day} ${formatHour(shift.startUtc)}`
+              : `${day} ${formatHour(shift.startUtc)}`
             : day}
         </button>
 
