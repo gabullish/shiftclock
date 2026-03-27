@@ -275,18 +275,28 @@ export function shiftLabel(startUtc: number, endUtc: number): string {
 }
 
 /**
- * Finds a pending claim record for a source shift, when one exists.
+ * Finds the latest active claim record for a source shift on a specific weekday.
+ * Active statuses keep the released segment visible in UI.
  */
-export function getPendingClaimForShift(
+export function getActiveClaimForShift(
   shift: Pick<Shift, "id">,
-  otRecords: OvertimeLog[]
+  otRecords: OvertimeLog[],
+  dayOfWeek?: number
 ): OvertimeLog | undefined {
-  return otRecords.find(
-    (r) =>
-      r.fromShiftId === shift.id &&
-      r.origin === "claimed-from-agent" &&
-      r.status === "pending" &&
-      r.coverStartUtc != null &&
-      r.coverEndUtc != null
-  );
+  return otRecords
+    .filter(
+      (r) =>
+        r.fromShiftId === shift.id &&
+        r.origin === "claimed-from-agent" &&
+        (r.status === "pending" || r.status === "approved" || r.status === "paid") &&
+        (dayOfWeek == null || r.dayOfWeek === dayOfWeek) &&
+        r.coverStartUtc != null &&
+        r.coverEndUtc != null
+    )
+    .sort((a, b) => {
+      const at = Date.parse(a.statusUpdatedAt || a.date || "") || 0;
+      const bt = Date.parse(b.statusUpdatedAt || b.date || "") || 0;
+      if (bt !== at) return bt - at;
+      return (b.id ?? 0) - (a.id ?? 0);
+    })[0];
 }

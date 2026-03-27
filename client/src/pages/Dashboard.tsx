@@ -20,7 +20,7 @@ import {
   shiftDuration,
   normaliseEndUtc,
   displayHour,
-  getPendingClaimForShift,
+  getActiveClaimForShift,
 } from "@/lib/shiftUtils";
 
 // Reusable drag-scroll hook with PointerCapture
@@ -290,9 +290,9 @@ export default function Dashboard() {
       releasedHours += resolved.shrinkHours;
 
       // Also include pending claim hours as "released"
-      const pendingClaimForShift = getPendingClaimForShift(s, otRecords);
-      if (pendingClaimForShift) {
-        releasedHours += (pendingClaimForShift.coverEndUtc! - pendingClaimForShift.coverStartUtc!);
+      const activeClaimForShift = getActiveClaimForShift(s, otRecords, selectedDay);
+      if (activeClaimForShift) {
+        releasedHours += (activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!);
       }
     }
     return { agent, baseHours, activeHours, overtimeHours, releasedHours, shifts: agentTodayShifts };
@@ -814,7 +814,7 @@ function UnifiedTimeline({
       const barLabel = `${agent.name}: ${shiftLabel(shift.startUtc, shift.endUtc)} · ${formatDuration(resolved.baseDuration)}`;
 
       // Check if there's a pending OT record claiming a portion of this shift
-      const pendingClaimForShift = getPendingClaimForShift(shift, otRecords);
+      const activeClaimForShift = getActiveClaimForShift(shift, otRecords, shift.dayOfWeek);
 
       return (
         <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
@@ -922,7 +922,7 @@ function UnifiedTimeline({
             ));
           })()}
 
-          {isVis && resolved.hasShrink && !pendingClaimForShift && (() => {
+          {isVis && resolved.hasShrink && !activeClaimForShift && (() => {
             const shrinkSegs = segmentShift(ae, normBaseEnd);
             return shrinkSegs.map((seg, si) => (
               <div key={`shrink-${si}`}
@@ -943,18 +943,21 @@ function UnifiedTimeline({
             ));
           })()}
 
-          {isVis && pendingClaimForShift && (() => {
-            const pendingSegs = segmentShift(pendingClaimForShift.coverStartUtc!, pendingClaimForShift.coverEndUtc!);
-            return pendingSegs.map((seg, si) => (
+          {isVis && activeClaimForShift && (() => {
+            const claimSegs = segmentShift(activeClaimForShift.coverStartUtc!, activeClaimForShift.coverEndUtc!);
+            const isPending = activeClaimForShift.status === "pending";
+            return claimSegs.map((seg, si) => (
               <div key={`pending-shrink-${si}`}
-                title={`Pending claim: ${formatDuration(pendingClaimForShift.coverEndUtc! - pendingClaimForShift.coverStartUtc!)} awaiting manager approval`}
+                title={isPending
+                  ? `Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`
+                  : `Claimed coverage: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} (${activeClaimForShift.status})`}
                 style={{
                   position: "absolute",
                   left: segOffsetX(seg) + seg.start * PX_PER_HOUR,
                   width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
                   top: 8, height: ROW_H - 16, borderRadius: 2,
                   background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
-                  border: "1px dashed rgba(255,140,0,0.6)",
+                  border: isPending ? "1px dashed rgba(255,140,0,0.6)" : "1px dashed rgba(255,255,255,0.85)",
                   cursor: "default",
                   zIndex: 9,
                 }}
@@ -1504,7 +1507,7 @@ function ClockVisualizer({
                 const as_ = ls?.activeStart ?? shift.startUtc;
                 const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
                 const resolved = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
-                const pendingClaimForShift = getPendingClaimForShift(shift, otRecords);
+                const activeClaimForShift = getActiveClaimForShift(shift, otRecords, selectedDay);
                 const bk = resolved.breakStart;
                 const { pct, otPct } = isToday
                   ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)
@@ -1608,7 +1611,7 @@ function ClockVisualizer({
                         />
                       ));
                     })()}
-                    {isVis && resolved.hasShrink && !pendingClaimForShift && (() => {
+                    {isVis && resolved.hasShrink && !activeClaimForShift && (() => {
                       const shrinkSegs = segmentShift(ae, normBaseEnd);
                       return shrinkSegs.map((seg, si) => (
                         <path key={`shrink-${si}`}
@@ -1622,22 +1625,54 @@ function ClockVisualizer({
                         </path>
                       ));
                     })()}
-                    {isVis && pendingClaimForShift && (() => {
-                      const pendingSegs = segmentShift(pendingClaimForShift.coverStartUtc!, pendingClaimForShift.coverEndUtc!);
-                      return pendingSegs.map((seg, si) => (
+                    {isVis && activeClaimForShift && (() => {
+                      const claimSegs = segmentShift(activeClaimForShift.coverStartUtc!, activeClaimForShift.coverEndUtc!);
+                      const isPending = activeClaimForShift.status === "pending";
+                      return claimSegs.map((seg, si) => (
                         <path key={`pending-shrink-${si}`}
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
-                          fill="none" stroke="rgba(255,140,0,0.85)"
+                          fill="none" stroke={isPending ? "rgba(255,140,0,0.85)" : "rgba(255,255,255,0.92)"}
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
                           style={{ cursor: "default" }}
                         >
-                          <title>{`Pending claim: ${formatDuration(pendingClaimForShift.coverEndUtc! - pendingClaimForShift.coverStartUtc!)} awaiting manager approval`}</title>
+                          <title>{isPending
+                            ? `Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`
+                            : `Claimed coverage: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} (${activeClaimForShift.status})`}</title>
                         </path>
                       ));
                     })()}
                   </g>
                 );
               })}
+
+              {isVis && otRecords
+                .filter(
+                  (slot) =>
+                    slot.agentId === agent.id &&
+                    slot.origin === "claimed-from-agent" &&
+                    slot.status === "approved" &&
+                    slot.dayOfWeek === selectedDay &&
+                    slot.coverStartUtc != null &&
+                    slot.coverEndUtc != null
+                )
+                .flatMap((slot) => {
+                  const segs = segmentShift(slot.coverStartUtc!, slot.coverEndUtc!);
+                  const covR = r + RING_W * 0.7;
+                  return segs.map((seg, si) => (
+                    <path
+                      key={`cov-claim-${slot.id}-${si}`}
+                      d={describeArc(CX, CY, covR, seg.start, seg.end)}
+                      fill="none"
+                      stroke="rgba(255,255,255,0.96)"
+                      strokeWidth={Math.max(2, strokeW * 0.38)}
+                      strokeDasharray="2.5 2"
+                      strokeLinecap="round"
+                      style={{ filter: `drop-shadow(0 0 4px ${agent.color})`, pointerEvents: "none" }}
+                    >
+                      <title>{`Approved claimed coverage: ${formatUtcHour(slot.coverStartUtc!)}-${formatUtcHour(slot.coverEndUtc!)} UTC`}</title>
+                    </path>
+                  ));
+                })}
             </g>
           );
         })}
@@ -1739,6 +1774,10 @@ function ClockVisualizer({
         <div className="flex items-center gap-1.5">
           <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,140,0,0.9)" }} />
           <span className="text-[9px] text-muted-foreground">Up for grabs</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,255,255,0.96)" }} />
+          <span className="text-[9px] text-muted-foreground">Claimed coverage</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-1.5 rounded-full bg-white" style={{ boxShadow: "0 0 5px white, 0 0 8px rgba(255,255,255,0.6)" }} />
