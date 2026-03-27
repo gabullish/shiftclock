@@ -31,6 +31,20 @@ export default function App() {
             <Toaster />
           </Router>
         </DragScrollProvider>
+        <Router hook={useHashLocation}>
+          <div className="flex h-screen overflow-hidden bg-background">
+            <Sidebar />
+            <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
+              <Switch>
+                <Route path="/" component={Dashboard} />
+                <Route path="/profiles" component={Profiles} />
+                <Route component={NotFound} />
+              </Switch>
+            </main>
+          </div>
+          <PerplexityAttribution />
+          <Toaster />
+        </Router>
       </AdminProvider>
     </QueryClientProvider>
   );
