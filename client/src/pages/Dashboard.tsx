@@ -21,6 +21,53 @@ import {
   displayHour,
 } from "@/lib/shiftUtils";
 
+// Reusable drag-scroll hook with PointerCapture
+const useDragScroll = () => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const startX = useRef(0);
+  const scrollLeft = useRef(0);
+  const dragged = useRef(false);
+  const DRAG_THRESHOLD = 5;
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ref.current) return;
+    ref.current.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    startX.current = e.pageX - ref.current.offsetLeft;
+    scrollLeft.current = ref.current.scrollLeft;
+    dragged.current = false;
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging || !ref.current) return;
+    const x = e.pageX - ref.current.offsetLeft;
+    const walk = (x - startX.current) * 2.5;
+    if (Math.abs(walk) > DRAG_THRESHOLD) dragged.current = true;
+    ref.current.scrollLeft = scrollLeft.current - walk;
+  };
+
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ref.current) return;
+    ref.current.releasePointerCapture(e.pointerId);
+    setIsDragging(false);
+  };
+
+  const stopDrag = (e: React.PointerEvent) => {
+    if (dragged.current) e.stopPropagation();
+  };
+
+  return {
+    ref,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerLeave: onPointerUp,
+    stopDrag,
+    isDragging,
+  };
+};
+
 const DAYS   = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -522,27 +569,8 @@ function UnifiedTimeline({
   const CANVAS_W    = TOTAL_HOURS * PX_PER_HOUR;
   const CANVAS_H    = RULER_H + agents.length * (ROW_H + 2) + COV_H + 20;
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const { ref: scrollRef, onPointerDown, onPointerMove, onPointerUp, isDragging, stopDrag } = useDragScroll();
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
-  const [dragState, setDragState] = useState<{ startX: number; startScroll: number } | null>(null);
-
-  useEffect(() => {
-    if (!dragState) return;
-    const onMove = (e: PointerEvent) => {
-      if (!scrollRef.current) return;
-      const delta = dragState.startX - e.clientX;
-      scrollRef.current.scrollLeft = dragState.startScroll + delta;
-    };
-    const onEnd = () => setDragState(null);
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onEnd);
-    document.addEventListener("pointercancel", onEnd);
-    return () => {
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onEnd);
-      document.removeEventListener("pointercancel", onEnd);
-    };
-  }, [dragState]);
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -647,6 +675,7 @@ function UnifiedTimeline({
                   boxShadow: isHigh ? `0 0 8px ${agent.color}60` : undefined,
                   cursor: "default",
                 }}
+                onPointerDownCapture={stopDrag}
                 onMouseEnter={!showLabel ? (e) => {
                   const rect = scrollRef.current?.getBoundingClientRect();
                   if (rect) setBarTooltip({ text: barLabel, x: e.clientX - rect.left + scrollRef.current!.scrollLeft, y: e.clientY - rect.top });
@@ -819,11 +848,11 @@ function UnifiedTimeline({
       <div
         ref={scrollRef}
         className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain"
-        style={{ scrollBehavior: "auto", cursor: dragState ? "grabbing" : "auto" }}
-        onPointerDown={(e) => {
-          if (!scrollRef.current || e.button !== 0) return;
-          setDragState({ startX: e.clientX, startScroll: scrollRef.current.scrollLeft });
-        }}
+        style={{ scrollBehavior: "auto", cursor: isDragging ? "grabbing" : "grab" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
 
