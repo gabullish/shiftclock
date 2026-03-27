@@ -173,13 +173,13 @@ in 14-day timeline view, click and drag to pan horizontally. it's smooth. it who
 
 some features (like overtime assignment) require admin access.
 
-set `ADMIN_TOKEN` on the server, then pass the same value in the URL query string.
+set `ADMIN_TOKEN` on the server.
 
-**to activate:** add `?admin=YOUR_ADMIN_TOKEN` to your URL before the hash:
+on app open you get a minimal access screen:
+- enter password + click **Enter** for admin mode
+- click **View only** to continue without admin permissions
 
-```
-https://your-app.railway.app?admin=YOUR_ADMIN_TOKEN#/
-```
+the entered password is validated against `/api/admin/verify`.
 
 this unlocks:
 - ✅ clicking freed segments to assign overtime
