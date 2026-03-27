@@ -837,6 +837,7 @@ function UnifiedTimeline({
             return shrinkSegs.map((seg, si) => (
               <div key={`shrink-${si}`}
                 onClick={() => onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                onPointerDownCapture={stopDrag}
                 title="Click to assign this freed time to another agent"
                 style={{
                   position: "absolute",
@@ -846,6 +847,7 @@ function UnifiedTimeline({
                   background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
                   border: "1px dashed rgba(255,140,0,0.6)",
                   cursor: "pointer",
+                  zIndex: 10,
                 }}
               />
             ));
@@ -1318,9 +1320,10 @@ function ClockVisualizer({
           const strokeW = isHigh ? RING_W + 2 : RING_W;
 
           return (
-            <g key={agent.id} style={{ pointerEvents: "none" }}>
+            <g key={agent.id}>
               <circle cx={CX} cy={CY} r={r} fill="none"
                 stroke={hexToRgba(agent.color, 0.12)} strokeWidth={RING_W}
+                style={{ pointerEvents: "none" }}
               />
               {shifts.filter(s => s.agentId === agent.id).map(shift => {
                 const ls  = leverState[shift.id];
