@@ -274,6 +274,18 @@ export default function Dashboard() {
       activeHours   += resolved.activeDuration;
       overtimeHours += resolved.overtimeHours;
       releasedHours += resolved.shrinkHours;
+
+      // Also include pending claim hours as "released"
+      const pendingClaimForShift = otRecords.find(
+        r => r.fromShiftId === s.id
+          && r.origin === "claimed-from-agent"
+          && r.status === "pending"
+          && r.coverStartUtc != null
+          && r.coverEndUtc != null
+      );
+      if (pendingClaimForShift) {
+        releasedHours += (pendingClaimForShift.coverEndUtc! - pendingClaimForShift.coverStartUtc!);
+      }
     }
     return { agent, baseHours, activeHours, overtimeHours, releasedHours, shifts: agentTodayShifts };
   });
@@ -778,6 +790,15 @@ function UnifiedTimeline({
         : { pct: 0, otPct: 0 };
       const barLabel = `${agent.name}: ${shiftLabel(shift.startUtc, shift.endUtc)} · ${formatDuration(resolved.baseDuration)}`;
 
+      // Check if there's a pending OT record claiming a portion of this shift
+      const pendingClaimForShift = otRecords.find(
+        r => r.fromShiftId === shift.id
+          && r.origin === "claimed-from-agent"
+          && r.status === "pending"
+          && r.coverStartUtc != null
+          && r.coverEndUtc != null
+      );
+
       return (
         <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
           {baseSegs.map((seg, si) => {
@@ -884,7 +905,7 @@ function UnifiedTimeline({
             ));
           })()}
 
-          {isVis && resolved.hasShrink && (() => {
+          {isVis && resolved.hasShrink && !pendingClaimForShift && (() => {
             const shrinkSegs = segmentShift(ae, normBaseEnd);
             return shrinkSegs.map((seg, si) => (
               <div key={`shrink-${si}`}
@@ -900,6 +921,25 @@ function UnifiedTimeline({
                   border: "1px dashed rgba(255,140,0,0.6)",
                   cursor: isAdmin ? "pointer" : "default",
                   zIndex: 10,
+                }}
+              />
+            ));
+          })()}
+
+          {isVis && pendingClaimForShift && (() => {
+            const pendingSegs = segmentShift(pendingClaimForShift.coverStartUtc!, pendingClaimForShift.coverEndUtc!);
+            return pendingSegs.map((seg, si) => (
+              <div key={`pending-shrink-${si}`}
+                title={`Pending claim: ${formatDuration(pendingClaimForShift.coverEndUtc! - pendingClaimForShift.coverStartUtc!)} awaiting manager approval`}
+                style={{
+                  position: "absolute",
+                  left: segOffsetX(seg) + seg.start * PX_PER_HOUR,
+                  width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
+                  top: 8, height: ROW_H - 16, borderRadius: 2,
+                  background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
+                  border: "1px dashed rgba(255,140,0,0.6)",
+                  cursor: "default",
+                  zIndex: 9,
                 }}
               />
             ));
@@ -1447,6 +1487,13 @@ function ClockVisualizer({
                 const as_ = ls?.activeStart ?? shift.startUtc;
                 const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
                 const resolved = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
+                const pendingClaimForShift = otRecords.find(
+                  r => r.fromShiftId === shift.id
+                    && r.origin === "claimed-from-agent"
+                    && r.status === "pending"
+                    && r.coverStartUtc != null
+                    && r.coverEndUtc != null
+                );
                 const bk = resolved.breakStart;
                 const { pct, otPct } = isToday
                   ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)
@@ -1550,7 +1597,7 @@ function ClockVisualizer({
                         />
                       ));
                     })()}
-                    {isVis && resolved.hasShrink && (() => {
+                    {isVis && resolved.hasShrink && !pendingClaimForShift && (() => {
                       const shrinkSegs = segmentShift(ae, normBaseEnd);
                       return shrinkSegs.map((seg, si) => (
                         <path key={`shrink-${si}`}
@@ -1561,6 +1608,19 @@ function ClockVisualizer({
                           onClick={() => isAdmin && onAssignOvertime(shift, agent, resolved.shrinkHours)}
                         >
                           <title>{isAdmin ? "Click to assign this freed time to another agent" : "Freed segment (manager assigns coverage)"}</title>
+                        </path>
+                      ));
+                    })()}
+                    {isVis && pendingClaimForShift && (() => {
+                      const pendingSegs = segmentShift(pendingClaimForShift.coverStartUtc!, pendingClaimForShift.coverEndUtc!);
+                      return pendingSegs.map((seg, si) => (
+                        <path key={`pending-shrink-${si}`}
+                          d={describeArc(CX, CY, r, seg.start, seg.end)}
+                          fill="none" stroke="rgba(255,140,0,0.85)"
+                          strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
+                          style={{ cursor: "default" }}
+                        >
+                          <title>{`Pending claim: ${formatDuration(pendingClaimForShift.coverEndUtc! - pendingClaimForShift.coverStartUtc!)} awaiting manager approval`}</title>
                         </path>
                       ));
                     })()}
