@@ -40,7 +40,9 @@ function AccessGate({ onSelectMode }: { onSelectMode: (mode: AccessMode) => void
       });
 
       if (!res.ok) {
-        toast({ title: "Wrong password", description: "Entering in view-only mode is still available.", variant: "destructive" });
+        const errorBody = await res.text();
+        const details = errorBody || `HTTP ${res.status}`;
+        toast({ title: "Admin login failed", description: details, variant: "destructive" });
         return;
       }
 
@@ -120,7 +122,6 @@ export default function App() {
             </div>
           </DragScrollProvider>
           <PerplexityAttribution />
-          <Toaster />
         </Router>
       </AdminProvider>
     );
@@ -129,6 +130,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       {appShell}
+      <Toaster />
     </QueryClientProvider>
   );
 }
