@@ -186,6 +186,7 @@ function OvertimePanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
     },
   });
 
@@ -236,7 +237,7 @@ function OvertimePanel() {
           </div>
 
           {/* Table */}
-          <div className="rounded-lg border border-border overflow-hidden">
+          <div className="rounded-lg border border-border overflow-visible">
             <div className="grid grid-cols-[1fr_100px_80px_140px_110px] gap-2 px-3 py-2 border-b border-border bg-muted/30 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
               <span>Agent</span>
               <span>Date</span>
