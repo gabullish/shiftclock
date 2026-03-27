@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
+import { useDragScroll, useDragScrollPreference } from "@/hooks/use-drag-scroll";
 import {
   segmentShift,
   resolveShift,
@@ -90,6 +91,7 @@ function buildDays(pastDays: number, futureDays: number): DayDesc[] {
 
 export default function Dashboard() {
   const isAdmin = useAdminMode();
+  const { enabled: dragScrollEnabled } = useDragScrollPreference();
 
   const initDay = () => {
     const d = getUTCDay();
@@ -104,6 +106,8 @@ export default function Dashboard() {
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">("clock");
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">("day");
   const [tooltipInfo,    setTooltipInfo]    = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
+  const leverScrollRef = useRef<HTMLDivElement>(null);
+  useDragScroll(leverScrollRef, dragScrollEnabled);
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
@@ -121,15 +125,18 @@ export default function Dashboard() {
   const todayShifts = allShifts.filter(s => s.dayOfWeek === selectedDay);
 
   useEffect(() => {
-    const init: Record<number, LeverState> = {};
-    for (const s of allShifts) {
-      const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
-      init[s.id] = {
-        activeStart: s.activeStart ?? s.startUtc,
-        activeEnd:   s.activeEnd   ?? normEnd,
-      };
-    }
-    setLeverState(init);
+    setLeverState(prev => {
+      const next: Record<number, LeverState> = { ...prev };
+      for (const s of allShifts) {
+        if (next[s.id]) continue;
+        const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
+        next[s.id] = {
+          activeStart: s.activeStart ?? s.startUtc,
+          activeEnd:   s.activeEnd   ?? normEnd,
+        };
+      }
+      return next;
+    });
   }, [allShifts]);
 
   const toggleVisible = (id: number) => {
@@ -308,15 +315,16 @@ export default function Dashboard() {
         )}
 
         {/* ── Main content ── */}
-        <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex overflow-hidden min-h-0 min-w-0">
 
           {/* ── Timeline modes (day + multi): full-bleed, no centering wrapper ── */}
           {isTimeline ? (
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0 min-w-0">
               <UnifiedTimeline
                 scope={isMulti ? "multi" : "day"}
                 agents={agents}
                 allShifts={allShifts}
+                dragScrollEnabled={dragScrollEnabled}
                 visible={visible}
                 highlighted={highlighted}
                 setHighlighted={setHighlighted}
@@ -393,7 +401,14 @@ export default function Dashboard() {
                 </div>
 
                 <div className="relative flex-1 min-h-0">
-                  <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
+                  <div
+                    ref={leverScrollRef}
+                    className={cn(
+                      "absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5",
+                      dragScrollEnabled && "cursor-grab"
+                    )}
+                    id="lever-scroll"
+                  >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
                         <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {DAYS[selectedDay]}</p>
@@ -479,12 +494,13 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
 
 function UnifiedTimeline({
   scope, agents, allShifts, visible, highlighted, setHighlighted,
-  leverState, utcHour, selectedDay, onSelectDay,
+  leverState, utcHour, selectedDay, onSelectDay, dragScrollEnabled,
   toggleVisible, toggleAll,
 }: {
   scope: "day" | "multi";
   agents: Agent[];
   allShifts: Shift[];
+  dragScrollEnabled: boolean;
   visible: Set<number>;
   highlighted: number | null;
   setHighlighted: (id: number | null) => void;
@@ -512,6 +528,7 @@ function UnifiedTimeline({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  useDragScroll(scrollRef, dragScrollEnabled);
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -737,7 +754,7 @@ function UnifiedTimeline({
   };
 
   return (
-    <div className="flex flex-col h-full bg-background" onMouseLeave={() => setBarTooltip(null)}>
+    <div className="flex flex-col h-full min-h-0 min-w-0 bg-background" onMouseLeave={() => setBarTooltip(null)}>
       {/* Sub-header: info + Now button + agent chips (day scope) */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0 gap-3 min-h-0">
         <span className="text-[11px] text-muted-foreground shrink-0">
@@ -787,7 +804,10 @@ function UnifiedTimeline({
       {/* Scrollable canvas */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-x-auto overflow-y-auto"
+        className={cn(
+          "flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain",
+          dragScrollEnabled && "cursor-grab"
+        )}
         style={{ scrollBehavior: "auto" }}
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
@@ -1372,6 +1392,9 @@ function ClockVisualizer({
           <span className="text-[9px] text-muted-foreground">Break</span>
         </div>
       </div>
+      <div className="flex justify-center py-6 text-xs uppercase tracking-widest text-amber-400 animate-pulse">
+        DRAG TO SCROLL HERE! 👇
+      </div>
     </div>
   );
 }
@@ -1580,7 +1603,7 @@ function KpiCell({ label, value, warn, accent }: { label: string; value: string;
 
 function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCoverageHour, totalOvertimeHours, totalReleasedHours }: any) {
   return (
-    <div className="border-t border-border p-3 max-h-52 overflow-y-auto overscroll-contain bg-card/30 shrink-0">
+    <div className="border-t border-border p-3 max-h-52 min-h-0 overflow-y-auto overscroll-contain bg-card/30 shrink-0">
       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-medium">
         Coverage Report · {DAYS[selectedDay]}
       </p>
