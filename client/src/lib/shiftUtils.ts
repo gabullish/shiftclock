@@ -260,8 +260,9 @@ export function calcCoverageForDay(
 /** Format a UTC hour float as HH:MM */
 export function formatUtcHour(h: number): string {
   const norm = displayHour(h);
-  const hh   = Math.floor(norm);
-  const mm   = Math.round((norm % 1) * 60);
+  const totalMins = Math.round(norm * 60) % (24 * 60);
+  const hh   = Math.floor(totalMins / 60);
+  const mm   = totalMins % 60;
   return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
 }
 
