@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -107,6 +108,12 @@ export default function Dashboard() {
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
+
+  const updateShiftMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<Shift> }) =>
+      apiRequest("PATCH", `/api/shifts/${id}`, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
+  });
 
   useEffect(() => {
     if (agents.length > 0 && visible.size === 0)
@@ -418,9 +425,10 @@ export default function Dashboard() {
                         agent={agent}
                         shift={agentShifts[0]}
                         leverState={leverState[agentShifts[0]?.id]}
-                        onLeverChange={(id, start, end) =>
-                          setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }))
-                        }
+                        onLeverChange={(id, start, end) => {
+                          setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }));
+                          updateShiftMutation.mutate({ id, data: { activeStart: start, activeEnd: end } });
+                        }}
                         highlighted={highlighted === agent.id}
                         onHighlight={() => setHighlighted(agent.id)}
                         onUnhighlight={() => setHighlighted(null)}
@@ -499,11 +507,11 @@ function UnifiedTimeline({
   toggleVisible: (id: number) => void;
   toggleAll: () => void;
 }) {
-  const PX_PER_HOUR = 44;
-  const LABEL_W     = 92;
-  const RULER_H     = 40;
+  const PX_PER_HOUR = 56;
+  const LABEL_W     = 120;
+  const RULER_H     = 50;
   const COV_H       = 14;
-  const ROW_H       = agents.length > 12 ? 22 : agents.length > 8 ? 26 : 30;
+  const ROW_H       = agents.length > 12 ? 28 : agents.length > 8 ? 32 : 38;
 
   const PAST_DAYS   = 7;
   const FUTURE_DAYS = 6;
@@ -517,6 +525,24 @@ function UnifiedTimeline({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const [dragState, setDragState] = useState<{ startX: number; startScroll: number } | null>(null);
+
+  useEffect(() => {
+    if (!dragState) return;
+    const onMove = (e: PointerEvent) => {
+      if (!scrollRef.current) return;
+      const delta = dragState.startX - e.clientX;
+      scrollRef.current.scrollLeft = dragState.startScroll + delta;
+    };
+    const onEnd = () => setDragState(null);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onEnd);
+    document.addEventListener("pointercancel", onEnd);
+    return () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onEnd);
+      document.removeEventListener("pointercancel", onEnd);
+    };
+  }, [dragState]);
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -549,7 +575,7 @@ function UnifiedTimeline({
     ? (todayIndex * 24 + utcHour) * PX_PER_HOUR
     : utcHour * PX_PER_HOUR;
 
-  const gridHours = [0, 3, 6, 9, 12, 15, 18, 21, 24];
+  const gridHours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
 
   const renderAgentRow = (agent: Agent, dayOffset: number, dayShifts: Shift[]) => {
     const isVis  = visible.has(agent.id);
@@ -793,18 +819,11 @@ function UnifiedTimeline({
       <div
         ref={scrollRef}
         className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain"
-        style={{ scrollBehavior: "auto" }}
-        onMouseDown={(e) => {
-          if (!scrollRef.current) return;
+        style={{ scrollBehavior: "auto", cursor: dragState ? "grabbing" : "auto" }}
+        onPointerDown={(e) => {
+          if (!scrollRef.current || e.button !== 0) return;
           setDragState({ startX: e.clientX, startScroll: scrollRef.current.scrollLeft });
         }}
-        onMouseMove={(e) => {
-          if (!dragState || !scrollRef.current) return;
-          const delta = dragState.startX - e.clientX;
-          scrollRef.current.scrollLeft = dragState.startScroll + delta;
-        }}
-        onMouseUp={() => setDragState(null)}
-        onMouseLeave={() => setDragState(null)}
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
 
@@ -844,7 +863,7 @@ function UnifiedTimeline({
               ) : (
                 <>
                   {Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
-                    if (h % 3 !== 0) return null;
+                    if (h % 2 !== 0) return null;
                     const x        = h * PX_PER_HOUR;
                     const localH   = h % 24;
                     const isMid    = localH === 0;
@@ -940,7 +959,7 @@ function UnifiedTimeline({
               ))
             ) : (
               Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
-                if (h % 3 !== 0 || h % 24 === 0) return null;
+                if (h % 24 === 0 || (h % 24 !== 0 && h % 2 !== 0)) return null;
                 return (
                   <div key={h} style={{
                     position: "absolute", left: h * PX_PER_HOUR,
