@@ -47,6 +47,10 @@ export const storage: IStorage = {
     return db.update(agents).set(data).where(eq(agents.id, id)).returning().get();
   },
   deleteAgent(id) {
+    // Cascade: remove all related data before deleting the agent
+    db.delete(shifts).where(eq(shifts.agentId, id)).run();
+    db.delete(overtimeLog).where(eq(overtimeLog.agentId, id)).run();
+    db.delete(agentLogs).where(eq(agentLogs.agentId, id)).run();
     db.delete(agents).where(eq(agents.id, id)).run();
   },
 
