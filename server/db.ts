@@ -43,6 +43,17 @@ sqlite.exec(`
     released_hours REAL NOT NULL DEFAULT 0,
     note TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS agent_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    cover_pct REAL,
+    covered_by_agent_id INTEGER,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 export const db = drizzle(sqlite, { schema });
