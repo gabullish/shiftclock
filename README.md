@@ -173,10 +173,12 @@ in 14-day timeline view, click and drag to pan horizontally. it's smooth. it who
 
 some features (like overtime assignment) require admin access.
 
-**to activate:** add `?admin=shiftclock-admin-2024` to your URL before the hash:
+set `ADMIN_TOKEN` on the server, then pass the same value in the URL query string.
+
+**to activate:** add `?admin=YOUR_ADMIN_TOKEN` to your URL before the hash:
 
 ```
-https://your-app.railway.app?admin=shiftclock-admin-2024#/
+https://your-app.railway.app?admin=YOUR_ADMIN_TOKEN#/
 ```
 
 this unlocks:
@@ -197,6 +199,9 @@ cd shiftclock
 
 # install deps
 npm install
+
+# configure admin token
+cp .env.example .env
 
 # start dev server (Express + Vite HMR)
 npm run dev

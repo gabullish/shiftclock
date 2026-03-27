@@ -6,6 +6,8 @@
  * coverage calculation, break/OT/shrink metadata, and % elapsed.
  */
 
+import type { OvertimeLog, Shift } from "@shared/schema";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /** A contiguous segment of a shift within a single calendar day. */
@@ -270,4 +272,21 @@ export function shiftLabel(startUtc: number, endUtc: number): string {
   return `${formatUtcHour(startUtc)} – ${formatUtcHour(endUtc)}${
     normaliseEndUtc(startUtc, endUtc) > 24 ? " (+1)" : ""
   }`;
+}
+
+/**
+ * Finds a pending claim record for a source shift, when one exists.
+ */
+export function getPendingClaimForShift(
+  shift: Pick<Shift, "id">,
+  otRecords: OvertimeLog[]
+): OvertimeLog | undefined {
+  return otRecords.find(
+    (r) =>
+      r.fromShiftId === shift.id &&
+      r.origin === "claimed-from-agent" &&
+      r.status === "pending" &&
+      r.coverStartUtc != null &&
+      r.coverEndUtc != null
+  );
 }

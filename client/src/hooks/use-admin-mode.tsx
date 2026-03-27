@@ -1,13 +1,10 @@
 import { createContext, useContext, useMemo } from "react";
 
-const ADMIN_TOKEN = "shiftclock-admin-2024";
-
 function readAdminFromUrl(): boolean {
-  // Read from regular query string: ?admin=TOKEN (before the hash)
-  // URL format: http://example.com/?admin=shiftclock-admin-2024#/
-  // This avoids conflicting with wouter hash routing
+  // Read from regular query string: ?admin=TOKEN (before the hash).
+  // The server validates the token value via x-admin-token.
   const params = new URLSearchParams(window.location.search);
-  return params.get("admin") === ADMIN_TOKEN;
+  return Boolean(params.get("admin"));
 }
 
 export const AdminContext = createContext<boolean>(false);

@@ -4,10 +4,13 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { agents, shifts } from "@shared/schema";
 
-const ADMIN_TOKEN = "shiftclock-admin-2024";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN?.trim() || "";
 
 /** Middleware: reject non-admin requests to mutating endpoints */
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!ADMIN_TOKEN) {
+    return res.status(500).json({ message: "Server misconfigured: ADMIN_TOKEN is not set" });
+  }
   if (req.headers["x-admin-token"] === ADMIN_TOKEN) return next();
   res.status(403).json({ message: "Admin access required" });
 }
@@ -119,9 +122,17 @@ function runMigrations() {
   safeAlter("ALTER TABLE overtime_log ADD COLUMN day_of_week INTEGER");
   safeAlter("ALTER TABLE overtime_log ADD COLUMN cover_start_utc REAL");
   safeAlter("ALTER TABLE overtime_log ADD COLUMN cover_end_utc REAL");
+
+  // Hot-path indexes for dashboard and overtime workflows.
+  safeAlter("CREATE INDEX IF NOT EXISTS idx_shifts_agent_day ON shifts(agent_id, day_of_week)");
+  safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_agent_date_status ON overtime_log(agent_id, date, status)");
+  safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_from_shift_status ON overtime_log(from_shift_id, status)");
 }
 
 export async function registerRoutes(httpServer: Server, app: Express) {
+  if (!ADMIN_TOKEN) {
+    console.warn("[routes] ADMIN_TOKEN is not configured. Mutating admin routes will return 500.");
+  }
   runMigrations();
   await seedDefaultData();
 
