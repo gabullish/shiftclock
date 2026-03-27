@@ -52,6 +52,7 @@ const useDragScroll = () => {
     if (!ref.current) return;
     ref.current.releasePointerCapture(e.pointerId);
     setIsDragging(false);
+    dragged.current = false;
   };
 
   const stopDrag = (e: React.PointerEvent) => {
@@ -173,7 +174,7 @@ export default function Dashboard() {
   const [selectedDay,    setSelectedDay]    = useState<number>(initDay);
   const [visible,        setVisible]        = useState<Set<number>>(new Set());
   const [highlighted,    setHighlighted]    = useState<number | null>(null);
-  const [leverState,     setLeverState]     = useState<Record<number, LeverState>>({});
+  const [leverState, setLeverState] = useOvertimeState();
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">("clock");
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">("day");
