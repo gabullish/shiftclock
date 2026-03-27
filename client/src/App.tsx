@@ -9,11 +9,28 @@ import Profiles from "./pages/Profiles";
 import NotFound from "./pages/not-found";
 import Sidebar from "./components/Sidebar";
 import { AdminProvider } from "@/hooks/use-admin-mode";
+import { DragScrollProvider } from "@/hooks/use-drag-scroll";
 
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AdminProvider>
+        <DragScrollProvider>
+          <Router hook={useHashLocation}>
+            <div className="flex h-screen overflow-hidden bg-background">
+              <Sidebar />
+              <main className="flex-1 overflow-hidden">
+                <Switch>
+                  <Route path="/" component={Dashboard} />
+                  <Route path="/profiles" component={Profiles} />
+                  <Route component={NotFound} />
+                </Switch>
+              </main>
+            </div>
+            <PerplexityAttribution />
+            <Toaster />
+          </Router>
+        </DragScrollProvider>
         <Router hook={useHashLocation}>
           <div className="flex h-screen overflow-hidden bg-background">
             <Sidebar />
