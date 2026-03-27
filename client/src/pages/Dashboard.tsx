@@ -11,7 +11,6 @@ import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import {
   segmentShift,
   resolveShift,
-  resolveBreak,
   shiftProgress,
   calcCoverageForDay,
   formatUtcHour,

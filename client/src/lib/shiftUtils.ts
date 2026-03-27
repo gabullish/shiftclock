@@ -112,18 +112,6 @@ export function segmentShift(startUtc: number, rawEndUtc: number): ShiftSegment[
   ];
 }
 
-/**
- * Returns all segments for a shift on a specific dayOffset.
- * Convenience wrapper around segmentShift.
- */
-export function segmentsForDay(
-  startUtc: number,
-  rawEndUtc: number,
-  dayOffset: 0 | 1
-): ShiftSegment[] {
-  return segmentShift(startUtc, rawEndUtc).filter(s => s.dayOffset === dayOffset);
-}
-
 // ─── Resolve active shift ─────────────────────────────────────────────────────
 
 /**
