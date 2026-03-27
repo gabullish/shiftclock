@@ -121,13 +121,15 @@ export default function Dashboard() {
   const todayShifts = allShifts.filter(s => s.dayOfWeek === selectedDay);
 
   useEffect(() => {
-    const init: Record<number, LeverState> = {};
+    const init: Record<number, LeverState> = { ...leverState };
     for (const s of allShifts) {
-      const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
-      init[s.id] = {
-        activeStart: s.activeStart ?? s.startUtc,
-        activeEnd:   s.activeEnd   ?? normEnd,
-      };
+      if (!(s.id in init)) {
+        const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
+        init[s.id] = {
+          activeStart: s.activeStart ?? s.startUtc,
+          activeEnd:   s.activeEnd   ?? normEnd,
+        };
+      }
     }
     setLeverState(init);
   }, [allShifts]);
@@ -514,6 +516,7 @@ function UnifiedTimeline({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const [dragState, setDragState] = useState<{ startX: number; startScroll: number } | null>(null);
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -791,6 +794,17 @@ function UnifiedTimeline({
         ref={scrollRef}
         className="flex-1 overflow-x-auto overflow-y-auto min-h-0"
         style={{ scrollBehavior: "auto" }}
+        onMouseDown={(e) => {
+          if (!scrollRef.current) return;
+          setDragState({ startX: e.clientX, startScroll: scrollRef.current.scrollLeft });
+        }}
+        onMouseMove={(e) => {
+          if (!dragState || !scrollRef.current) return;
+          const delta = dragState.startX - e.clientX;
+          scrollRef.current.scrollLeft = dragState.startScroll + delta;
+        }}
+        onMouseUp={() => setDragState(null)}
+        onMouseLeave={() => setDragState(null)}
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
 

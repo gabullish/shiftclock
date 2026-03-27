@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Agent, Shift, AgentLog, OvertimeLog } from "@shared/schema";
+import type { Agent, Shift } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -93,8 +93,6 @@ export default function Profiles() {
 
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
-  const { data: allAgentLogs = [] } = useQuery<AgentLog[]>({ queryKey: ["/api/agent-logs"] });
-  const { data: allOvertimeLogs = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
 
   const createMutation = useMutation({
     mutationFn: (data: AgentFormData) => apiRequest("POST", "/api/agents", data),
@@ -159,31 +157,6 @@ export default function Profiles() {
     },
   });
 
-  const createAgentLogMutation = useMutation({
-    mutationFn: (data: Omit<AgentLog, "id" | "createdAt">) => apiRequest("POST", "/api/agent-logs", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-      toast({ title: "Agent log added" });
-    },
-  });
-
-  const deleteAgentLogMutation = useMutation({
-    mutationFn: (id: number) => apiRequest("DELETE", `/api/agent-logs/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-      toast({ title: "Agent log removed" });
-    },
-  });
-
-  const upsertOvertimeMutation = useMutation({
-    mutationFn: (data: { agentId: number; date: string; overtimeHours: number; releasedHours: number; note?: string }) =>
-      apiRequest("POST", "/api/overtime", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
-      toast({ title: "Overtime assignment updated" });
-    },
-  });
-
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-6 max-w-5xl mx-auto">
@@ -224,12 +197,6 @@ export default function Profiles() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-8">
           {agents.map(agent => {
             const agentShifts = allShifts.filter(s => s.agentId === agent.id);
-            const agentLogs = allAgentLogs
-              .filter(l => l.agentId === agent.id)
-              .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
-            const agentOvertime = allOvertimeLogs
-              .filter(o => o.agentId === agent.id)
-              .sort((a, b) => b.date.localeCompare(a.date));
             const offDays = getOffDays(agent.offWeekend ?? 1);
             return (
               <div
@@ -355,160 +322,9 @@ export default function Profiles() {
                     );
                   })}
                 </div>
-
-                <AgentOperationsPanel
-                  agent={agent}
-                  logs={agentLogs}
-                  overtime={agentOvertime}
-                  allAgents={agents}
-                  isAdmin={isAdmin}
-                  onCreateLog={(payload) => createAgentLogMutation.mutate(payload)}
-                  onDeleteLog={(id) => deleteAgentLogMutation.mutate(id)}
-                  onAssignOvertime={(payload) => upsertOvertimeMutation.mutate(payload)}
-                />
               </div>
             );
           })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AgentOperationsPanel({
-  agent,
-  logs,
-  overtime,
-  allAgents,
-  isAdmin,
-  onCreateLog,
-  onDeleteLog,
-  onAssignOvertime,
-}: {
-  agent: Agent;
-  logs: AgentLog[];
-  overtime: OvertimeLog[];
-  allAgents: Agent[];
-  isAdmin: boolean;
-  onCreateLog: (payload: Omit<AgentLog, "id" | "createdAt">) => void;
-  onDeleteLog: (id: number) => void;
-  onAssignOvertime: (payload: { agentId: number; date: string; overtimeHours: number; releasedHours: number; note?: string }) => void;
-}) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [logType, setLogType] = useState("overtime-taken");
-  const [logDate, setLogDate] = useState(today);
-  const [logNotes, setLogNotes] = useState("");
-  const [coverPct, setCoverPct] = useState<string>("");
-  const [coveredBy, setCoveredBy] = useState<string>("none");
-
-  const [otDate, setOtDate] = useState(today);
-  const [otHours, setOtHours] = useState("1");
-  const [releasedHours, setReleasedHours] = useState("0");
-  const [otNote, setOtNote] = useState("");
-
-  return (
-    <div className="mt-3 space-y-2 border-t border-border pt-3">
-      <div className="grid grid-cols-1 gap-2">
-        <div className="rounded-md border border-border bg-muted/20 p-2">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Overtime assignment</p>
-          {isAdmin && (
-            <div className="grid grid-cols-2 gap-1.5 mb-2">
-              <Input type="date" value={otDate} onChange={(e) => setOtDate(e.target.value)} className="h-7 text-[10px]" />
-              <Input value={otHours} onChange={(e) => setOtHours(e.target.value)} placeholder="OT hours" className="h-7 text-[10px]" />
-              <Input value={releasedHours} onChange={(e) => setReleasedHours(e.target.value)} placeholder="Released hours" className="h-7 text-[10px]" />
-              <Input value={otNote} onChange={(e) => setOtNote(e.target.value)} placeholder="Note (optional)" className="h-7 text-[10px]" />
-              <Button
-                size="sm"
-                className="h-7 text-[10px] col-span-2"
-                onClick={() => onAssignOvertime({
-                  agentId: agent.id,
-                  date: otDate,
-                  overtimeHours: Math.max(0, parseFloat(otHours) || 0),
-                  releasedHours: Math.max(0, parseFloat(releasedHours) || 0),
-                  note: otNote || undefined,
-                })}
-              >
-                Assign overtime
-              </Button>
-            </div>
-          )}
-          <div className="space-y-1 max-h-28 overflow-y-auto">
-            {overtime.slice(0, 8).map((o) => (
-              <div key={o.id} className="text-[10px] text-muted-foreground flex items-center justify-between gap-2">
-                <span className="font-mono">{o.date}</span>
-                <span className="truncate">+{o.overtimeHours}h OT · -{o.releasedHours}h free</span>
-              </div>
-            ))}
-            {overtime.length === 0 && <p className="text-[10px] text-muted-foreground">No overtime assignments yet.</p>}
-          </div>
-        </div>
-
-        <div className="rounded-md border border-border bg-muted/20 p-2">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Personal activity log</p>
-          {isAdmin && (
-            <div className="grid grid-cols-2 gap-1.5 mb-2">
-              <Input type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} className="h-7 text-[10px]" />
-              <Select value={logType} onValueChange={setLogType}>
-                <SelectTrigger className="h-7 text-[10px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="sick">Sick</SelectItem>
-                  <SelectItem value="vacation">Vacation</SelectItem>
-                  <SelectItem value="partial">Partial</SelectItem>
-                  <SelectItem value="break">Break</SelectItem>
-                  <SelectItem value="overtime-taken">Overtime</SelectItem>
-                  <SelectItem value="shrink">Shrink</SelectItem>
-                </SelectContent>
-              </Select>
-              <Input value={coverPct} onChange={(e) => setCoverPct(e.target.value)} placeholder="Cover % (partial only)" className="h-7 text-[10px]" />
-              <Select value={coveredBy} onValueChange={setCoveredBy}>
-                <SelectTrigger className="h-7 text-[10px]"><SelectValue placeholder="Covered by" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No cover</SelectItem>
-                  {allAgents.filter(a => a.id !== agent.id).map(a => (
-                    <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input value={logNotes} onChange={(e) => setLogNotes(e.target.value)} placeholder="Notes (optional)" className="h-7 text-[10px] col-span-2" />
-              <Button
-                size="sm"
-                className="h-7 text-[10px] col-span-2"
-                onClick={() => {
-                  onCreateLog({
-                    agentId: agent.id,
-                    date: logDate,
-                    type: logType,
-                    coverPct: logType === "partial" ? Math.max(0, Math.min(100, parseFloat(coverPct) || 0)) : null,
-                    coveredByAgentId: coveredBy === "none" ? null : parseInt(coveredBy, 10),
-                    notes: logNotes || null,
-                  });
-                  setLogNotes("");
-                }}
-              >
-                Add log entry
-              </Button>
-            </div>
-          )}
-          <div className="space-y-1 max-h-36 overflow-y-auto">
-            {logs.slice(0, 12).map((l) => (
-              <div key={l.id} className="text-[10px] rounded border border-border/60 px-2 py-1 flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-mono text-muted-foreground">{l.date} · {l.type}</p>
-                  <p className="text-muted-foreground">
-                    {l.coverPct != null ? `Cover ${l.coverPct}% · ` : ""}
-                    {l.coveredByAgentId ? `Covered by ${allAgents.find(a => a.id === l.coveredByAgentId)?.name ?? "Agent"} · ` : ""}
-                    {l.notes || "No notes"}
-                  </p>
-                </div>
-                {isAdmin && (
-                  <button className="text-muted-foreground hover:text-destructive" onClick={() => onDeleteLog(l.id)}>
-                    <Trash2 size={11} />
-                  </button>
-                )}
-              </div>
-            ))}
-            {logs.length === 0 && <p className="text-[10px] text-muted-foreground">No activity logged yet.</p>}
-          </div>
         </div>
       </div>
     </div>
