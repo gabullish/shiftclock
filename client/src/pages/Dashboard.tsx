@@ -68,6 +68,30 @@ const useDragScroll = () => {
   };
 };
 
+// Reusable overtime state hook with localStorage persistence
+const useOvertimeState = () => {
+  const [overtimeState, setOvertimeState] = useState(() => {
+    const saved = localStorage.getItem('shiftclock-overtime');
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  useEffect(() => {
+    localStorage.setItem('shiftclock-overtime', JSON.stringify(overtimeState));
+  }, [overtimeState]);
+
+  // Force refresh on tab focus / back navigation to ensure fresh data
+  useEffect(() => {
+    const onFocus = () => {
+      const saved = localStorage.getItem('shiftclock-overtime');
+      if (saved) setOvertimeState(JSON.parse(saved));
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  return [overtimeState, setOvertimeState] as const;
+};
+
 const DAYS   = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -788,7 +812,7 @@ function UnifiedTimeline({
               color: isMajor ? "hsl(var(--primary) / 0.8)" : "hsl(var(--muted-foreground))",
               whiteSpace: "nowrap",
             }}>
-              {h.toString().padStart(2, "0")}
+              {h}h
             </span>
           )}
         </div>
