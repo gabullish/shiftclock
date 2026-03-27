@@ -5,12 +5,19 @@ import type { Agent, AgentLog, OvertimeLog } from "@shared/schema";
 import { cn } from "@/lib/utils";
 import { ScrollText, Clock, CheckCircle, XCircle, DollarSign, ArrowRightLeft, ExternalLink, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { useAdminMode } from "@/hooks/use-admin-mode";
 
 const TABS = ["Activity Log", "Overtime"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function ActivityLog() {
-  const [tab, setTab] = useState<Tab>("Activity Log");
+  const isAdmin = useAdminMode();
+  const availableTabs = isAdmin ? TABS : (["Overtime"] as const);
+  const [tab, setTab] = useState<Tab>(isAdmin ? "Activity Log" : "Overtime");
+
+  useEffect(() => {
+    if (!isAdmin) setTab("Overtime");
+  }, [isAdmin]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -21,7 +28,7 @@ export default function ActivityLog() {
           <h1 className="text-sm font-semibold">Activity &amp; Overtime</h1>
         </div>
         <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
-          {TABS.map((t) => (
+          {availableTabs.map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -40,7 +47,7 @@ export default function ActivityLog() {
       </header>
 
       <div className="flex-1 min-h-0 overflow-hidden">
-        {tab === "Activity Log" ? <ActivityFeed /> : <OvertimePanel />}
+        {tab === "Activity Log" && isAdmin ? <ActivityFeed /> : <OvertimePanel canManage={isAdmin} />}
       </div>
     </div>
   );
@@ -174,7 +181,19 @@ function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: 
   );
 }
 
-function OvertimePanel() {
+function StatusBadge({ current }: { current: string }) {
+  const status = current as keyof typeof STATUS_CONFIG;
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
+  const StatusIcon = cfg.icon;
+  return (
+    <div className={cn("inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium", cfg.bg, cfg.color)}>
+      <StatusIcon size={11} />
+      {cfg.label}
+    </div>
+  );
+}
+
+function OvertimePanel({ canManage }: { canManage: boolean }) {
   const { data: records = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
 
@@ -293,11 +312,15 @@ function OvertimePanel() {
                     )}
                   </div>
 
-                  {/* Status dropdown */}
-                  <StatusDropdown
-                    current={status}
-                    onSelect={(s) => statusMutation.mutate({ id: rec.id, status: s })}
-                  />
+                  {/* Status control: admins can update, view-only sees final manager decision */}
+                  {canManage ? (
+                    <StatusDropdown
+                      current={status}
+                      onSelect={(s) => statusMutation.mutate({ id: rec.id, status: s })}
+                    />
+                  ) : (
+                    <StatusBadge current={status} />
+                  )}
                 </div>
               );
             })}

@@ -454,6 +454,7 @@ export default function Dashboard() {
                 agents={agents}
                 allShifts={allShifts}
                 otRecords={otRecords}
+                isAdmin={isAdmin}
                 visible={visible}
                 highlighted={highlighted}
                 setHighlighted={setHighlighted}
@@ -479,6 +480,7 @@ export default function Dashboard() {
                   <ClockVisualizer
                     agents={agents}
                     shifts={todayShifts}
+                    isAdmin={isAdmin}
                     visible={visible}
                     highlighted={highlighted}
                     setHighlighted={setHighlighted}
@@ -670,7 +672,7 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
 }
 
 function UnifiedTimeline({
-  scope, agents, allShifts, otRecords, visible, highlighted, setHighlighted,
+  scope, agents, allShifts, otRecords, isAdmin, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, onSelectDay,
   toggleVisible, toggleAll, onAssignOvertime,
 }: {
@@ -678,6 +680,7 @@ function UnifiedTimeline({
   agents: Agent[];
   allShifts: Shift[];
   otRecords: OvertimeLog[];
+  isAdmin: boolean;
   visible: Set<number>;
   highlighted: number | null;
   setHighlighted: (id: number | null) => void;
@@ -885,9 +888,9 @@ function UnifiedTimeline({
             const shrinkSegs = segmentShift(ae, normBaseEnd);
             return shrinkSegs.map((seg, si) => (
               <div key={`shrink-${si}`}
-                onClick={() => onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                onClick={() => isAdmin && onAssignOvertime(shift, agent, resolved.shrinkHours)}
                 onPointerDownCapture={stopDrag}
-                title="Click to assign this freed time to another agent"
+                title={isAdmin ? "Click to assign this freed time to another agent" : "Freed segment (manager assigns coverage)"}
                 style={{
                   position: "absolute",
                   left: segOffsetX(seg) + seg.start * PX_PER_HOUR,
@@ -895,7 +898,7 @@ function UnifiedTimeline({
                   top: 8, height: ROW_H - 16, borderRadius: 2,
                   background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
                   border: "1px dashed rgba(255,140,0,0.6)",
-                  cursor: "pointer",
+                  cursor: isAdmin ? "pointer" : "default",
                   zIndex: 10,
                 }}
               />
@@ -1302,11 +1305,11 @@ function UnifiedTimeline({
 }
 
 function ClockVisualizer({
-  agents, shifts, visible, highlighted, setHighlighted,
+  agents, shifts, isAdmin, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage, maxCoverage,
   tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime,
 }: {
-  agents: Agent[]; shifts: Shift[]; visible: Set<number>;
+  agents: Agent[]; shifts: Shift[]; isAdmin: boolean; visible: Set<number>;
   highlighted: number | null; setHighlighted: (id: number | null) => void;
   leverState: Record<number, LeverState>; utcHour: number;
   coverage: number[]; maxCoverage: number;
@@ -1554,10 +1557,10 @@ function ClockVisualizer({
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
                           fill="none" stroke="rgba(255,140,0,0.85)"
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
-                          style={{ cursor: "pointer" }}
-                          onClick={() => onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                          style={{ cursor: isAdmin ? "pointer" : "default" }}
+                          onClick={() => isAdmin && onAssignOvertime(shift, agent, resolved.shrinkHours)}
                         >
-                          <title>Click to assign this freed time to another agent</title>
+                          <title>{isAdmin ? "Click to assign this freed time to another agent" : "Freed segment (manager assigns coverage)"}</title>
                         </path>
                       ));
                     })()}
