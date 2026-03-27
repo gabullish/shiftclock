@@ -165,7 +165,7 @@ function buildDays(pastDays: number, futureDays: number): DayDesc[] {
 export default function Dashboard() {
   const isAdmin = useAdminMode();
   const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
-
+  
   const initDay = () => {
     const d = getUTCDay();
     return (d === 0 || d === 6) ? 1 : d;
@@ -174,7 +174,7 @@ export default function Dashboard() {
   const [selectedDay,    setSelectedDay]    = useState<number>(initDay);
   const [visible,        setVisible]        = useState<Set<number>>(new Set());
   const [highlighted,    setHighlighted]    = useState<number | null>(null);
-  const [leverState, setLeverState] = useOvertimeState();
+const [leverState, setLeverState] = useState<Record<number, LeverState>>({});
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">("clock");
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">("day");
