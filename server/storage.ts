@@ -80,19 +80,9 @@ export const storage: IStorage = {
 
   applyWeekTemplate(agentId, startUtc, endUtc, offWeekend) {
     const offDays = offWeekend === 1 ? [0, 6] : [4, 5];
-    const isOvernight = endUtc > 24 || endUtc < startUtc;
-    // For overnight shifts, also skip the workday whose overflow would fall on an off-day
-    const skipDays = new Set(offDays);
-    if (isOvernight) {
-      for (const offDay of offDays) {
-        const dayBefore = (offDay + 6) % 7; // day before the off-day
-        skipDays.add(dayBefore);
-      }
-    }
-    const workDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !skipDays.has(d));
+    const workDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !offDays.includes(d));
 
-    // Delete shifts for all skipped days (off-days + overnight-overflow days)
-    for (const day of Array.from(skipDays)) {
+    for (const day of offDays) {
       const existing = db.select().from(shifts)
         .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
         .get();

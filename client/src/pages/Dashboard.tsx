@@ -746,6 +746,15 @@ function UnifiedTimeline({
       const activeSegs = segmentShift(as_, ae);
       const normBaseEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
       const isOvernight = baseSegs.length > 1;
+
+      // Suppress the pre-midnight segment of an overnight shift when the next day
+      // has no shift for this agent (agent is off), to prevent a phantom bar at end of day.
+      const nextDayOfWeek = (shift.dayOfWeek + 1) % 7;
+      const agentHasNextDayShift = allShifts.some(
+        s => s.agentId === agent.id && s.dayOfWeek === nextDayOfWeek
+      );
+      const suppressOverflowOrigin = isOvernight && !agentHasNextDayShift;
+
       const { pct, otPct } = scope === "day" && selectedDay === getUTCDay()
         ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)
         : { pct: 0, otPct: 0 };
@@ -753,7 +762,10 @@ function UnifiedTimeline({
 
       return (
         <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
-          {baseSegs.map((seg, si) => (
+          {baseSegs.map((seg, si) => {
+            // Skip the pre-midnight ghost bar if overnight bleeds into an off-day
+            if (suppressOverflowOrigin && seg.dayOffset === 0 && seg.end === 24) return null;
+            return (
             <div key={`ghost-${si}`}
               style={{
                 position: "absolute",
@@ -765,9 +777,10 @@ function UnifiedTimeline({
                 borderRadius: 3,
               }}
             />
-          ))}
+            );
+          })}
 
-          {isOvernight && (() => {
+          {isOvernight && !suppressOverflowOrigin && (() => {
             const seg0 = baseSegs[0];
             const x1   = rowOffsetX + seg0.end * PX_PER_HOUR;
             const midY = ROW_H / 2;
@@ -783,6 +796,8 @@ function UnifiedTimeline({
           })()}
 
           {isVis && activeSegs.map((seg, si) => {
+            // Skip the pre-midnight active bar if overnight bleeds into an off-day
+            if (suppressOverflowOrigin && seg.dayOffset === 0 && seg.end === 24) return null;
             const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
             if (segEnd <= seg.start) return null;
             const barLeft = rowOffsetX + seg.start * PX_PER_HOUR;
