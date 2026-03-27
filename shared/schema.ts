@@ -48,6 +48,11 @@ export const overtimeLog = sqliteTable("overtime_log", {
   overtimeHours: real("overtime_hours").notNull().default(0),
   releasedHours: real("released_hours").notNull().default(0),
   note: text("note"),
+  // New columns for approval flow
+  status: text("status").notNull().default("pending"), // pending | approved | denied | paid
+  origin: text("origin"), // manager-extended | claimed-from-agent
+  coveredByAgentId: integer("covered_by_agent_id"), // nullable — who freed the time (for claims)
+  statusUpdatedAt: text("status_updated_at"),
 });
 
 export const insertOvertimeLogSchema = createInsertSchema(overtimeLog).omit({ id: true });
@@ -67,6 +72,9 @@ export const agentLogs = sqliteTable("agent_logs", {
   coveredByAgentId: integer("covered_by_agent_id"),
   notes: text("notes"),
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+  // New columns for activity log
+  actionType: text("action_type"), // shift-freed | shift-claimed | overtime-extended | overtime-status-changed | agent-added | agent-removed | shift-updated
+  description: text("description"), // human-readable plain language string
 });
 
 export const insertAgentLogSchema = createInsertSchema(agentLogs).omit({ id: true });

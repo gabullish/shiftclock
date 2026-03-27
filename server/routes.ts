@@ -98,6 +98,14 @@ function runMigrations() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+  // New columns for overtime approval flow
+  safeAlter("ALTER TABLE overtime_log ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
+  safeAlter("ALTER TABLE overtime_log ADD COLUMN origin TEXT");
+  safeAlter("ALTER TABLE overtime_log ADD COLUMN covered_by_agent_id INTEGER");
+  safeAlter("ALTER TABLE overtime_log ADD COLUMN status_updated_at TEXT");
+  // New columns for activity log
+  safeAlter("ALTER TABLE agent_logs ADD COLUMN action_type TEXT");
+  safeAlter("ALTER TABLE agent_logs ADD COLUMN description TEXT");
 }
 
 export async function registerRoutes(httpServer: Server, app: Express) {
@@ -172,6 +180,87 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(log);
   });
 
+  // Update overtime record status (approve / deny / paid)
+  app.patch("/api/overtime/:id", (req, res) => {
+    const id = Number(req.params.id);
+    const { status } = req.body;
+    if (!status || !["pending", "approved", "denied", "paid"].includes(status)) {
+      return res.status(400).json({ message: "Valid status required: pending|approved|denied|paid" });
+    }
+    const updated = storage.updateOvertimeLog(id, { status, statusUpdatedAt: new Date().toISOString() });
+    if (!updated) return res.status(404).json({ message: "Not found" });
+
+    // Log the status change
+    const agents = storage.getAgents();
+    const agent = agents.find(a => a.id === updated.agentId);
+    if (agent) {
+      storage.createAgentLog({
+        agentId: updated.agentId,
+        date: updated.date,
+        type: "overtime-status",
+        coverPct: null,
+        coveredByAgentId: null,
+        notes: null,
+        createdAt: new Date().toISOString(),
+        actionType: "overtime-status-changed",
+        description: `Manager ${status} ${agent.name}'s overtime for ${updated.date} shift (${updated.overtimeHours.toFixed(1)}h).`,
+      });
+    }
+    res.json(updated);
+  });
+
+  // Assign freed overtime from one agent to another
+  app.post("/api/overtime/assign", (req, res) => {
+    const { fromShiftId, toAgentId, hours, date, dayOfWeek } = req.body;
+    if (!fromShiftId || !toAgentId || !hours || !date) {
+      return res.status(400).json({ message: "fromShiftId, toAgentId, hours, and date required" });
+    }
+
+    const fromShift = storage.getShifts().find(s => s.id === fromShiftId);
+    if (!fromShift) return res.status(404).json({ message: "Source shift not found" });
+
+    const allAgents = storage.getAgents();
+    const fromAgent = allAgents.find(a => a.id === fromShift.agentId);
+    const toAgent = allAgents.find(a => a.id === toAgentId);
+    if (!fromAgent || !toAgent) return res.status(404).json({ message: "Agent not found" });
+
+    // Reset the freeing agent's shift — restore activeEnd to match original endUtc
+    const normEnd = fromShift.endUtc <= fromShift.startUtc ? fromShift.endUtc + 24 : fromShift.endUtc;
+    storage.updateShift(fromShift.id, { activeEnd: normEnd });
+
+    // Extend the receiving agent's shift on that day
+    const toShifts = storage.getShifts().filter(s => s.agentId === toAgentId && s.dayOfWeek === (dayOfWeek ?? fromShift.dayOfWeek));
+    if (toShifts.length > 0) {
+      const toShift = toShifts[0];
+      const curEnd = toShift.activeEnd ?? (toShift.endUtc <= toShift.startUtc ? toShift.endUtc + 24 : toShift.endUtc);
+      storage.updateShift(toShift.id, { activeEnd: curEnd + hours });
+    }
+
+    // Create overtime record for the receiving agent
+    const otLog = storage.upsertOvertimeLog(toAgentId, date, {
+      overtimeHours: hours,
+      origin: "claimed-from-agent",
+      coveredByAgentId: fromShift.agentId,
+      status: "pending",
+      statusUpdatedAt: new Date().toISOString(),
+    });
+
+    // Log: freed segment removed
+    storage.createAgentLog({
+      agentId: fromShift.agentId,
+      date,
+      type: "shift-claim",
+      coverPct: null,
+      coveredByAgentId: toAgentId,
+      notes: null,
+      createdAt: new Date().toISOString(),
+      actionType: "shift-claimed",
+      description: `${toAgent.name} claimed ${hours.toFixed(1)}h freed from ${fromAgent.name}'s ${date} shift.`,
+    });
+
+    res.json({ ok: true, overtimeLog: otLog });
+  });
+
   // --- Agent Logs ---
   app.get("/api/agent-logs", (_req, res) => {
     res.json(storage.getAgentLogs());
@@ -182,7 +271,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.post("/api/agent-logs", (req, res) => {
-    const { agentId, date, type, coverPct, coveredByAgentId, notes } = req.body;
+    const { agentId, date, type, coverPct, coveredByAgentId, notes, actionType, description } = req.body;
     if (!agentId || !date || !type) {
       return res.status(400).json({ message: "agentId, date and type are required" });
     }
@@ -194,6 +283,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       coveredByAgentId: coveredByAgentId ?? null,
       notes: notes ?? null,
       createdAt: new Date().toISOString(),
+      actionType: actionType ?? null,
+      description: description ?? null,
     });
     res.json(log);
   });

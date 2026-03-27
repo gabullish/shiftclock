@@ -4,7 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange } from "lucide-react";
+import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/useSoothingSounds";
@@ -286,6 +286,37 @@ export default function Dashboard() {
   const isMulti    = viewMode === "timeline" && timelineScope === "multi";
   const isTimeline = viewMode === "timeline";
 
+  // Assign overtime modal state
+  const [assignModal, setAssignModal] = useState<{
+    shift: Shift;
+    agent: Agent;
+    freedHours: number;
+  } | null>(null);
+
+  const assignOvertimeMutation = useMutation({
+    mutationFn: (body: { fromShiftId: number; toAgentId: number; hours: number; date: string; dayOfWeek: number }) =>
+      apiRequest("POST", "/api/overtime/assign", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      setAssignModal(null);
+      playSuccess();
+    },
+  });
+
+  const logActivityMutation = useMutation({
+    mutationFn: (body: { agentId: number; date: string; type: string; actionType: string; description: string }) =>
+      apiRequest("POST", "/api/agent-logs", body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] }),
+  });
+
+  const openAssignModal = (shift: Shift, agent: Agent, freedHours: number) => {
+    if (!isAdmin) return;
+    playSoftClick();
+    setAssignModal({ shift, agent, freedHours });
+  };
+
   return (
     <TooltipProvider>
       <div className="flex flex-col h-screen overflow-hidden">
@@ -411,6 +442,7 @@ export default function Dashboard() {
                 }}
                 toggleVisible={toggleVisible}
                 toggleAll={toggleAll}
+                onAssignOvertime={openAssignModal}
               />
             </div>
           ) : (
@@ -433,6 +465,7 @@ export default function Dashboard() {
                     tooltipInfo={tooltipInfo}
                     setTooltipInfo={setTooltipInfo}
                     selectedDay={selectedDay}
+                    onAssignOvertime={openAssignModal}
                   />
                 )}
 
@@ -502,6 +535,29 @@ export default function Dashboard() {
                           playSuccess();
                           setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }));
                           updateShiftMutation.mutate({ id, data: { activeStart: start, activeEnd: end } });
+
+                          // Log activity for significant lever changes
+                          const shift = agentShifts[0];
+                          if (shift) {
+                            const normEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
+                            const dateStr = new Date().toISOString().slice(0, 10);
+                            const dayName = DAYS[selectedDay];
+                            if (end > normEnd) {
+                              const otHours = end - normEnd;
+                              logActivityMutation.mutate({
+                                agentId: agent.id, date: dateStr, type: "overtime",
+                                actionType: "overtime-extended",
+                                description: `${agent.name} extended their ${dayName} (${dateStr}) shift by ${formatDuration(otHours)}.`,
+                              });
+                            } else if (end < normEnd) {
+                              const freedH = normEnd - end;
+                              logActivityMutation.mutate({
+                                agentId: agent.id, date: dateStr, type: "shift-freed",
+                                actionType: "shift-freed",
+                                description: `${agent.name} freed ${formatDuration(freedH)} of their ${dayName} (${dateStr}) shift. Now up for grabs.`,
+                              });
+                            }
+                          }
                         }}
                         highlighted={highlighted === agent.id}
                         onHighlight={() => setHighlighted(agent.id)}
@@ -542,6 +598,29 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Assign Overtime Modal */}
+      {assignModal && (
+        <AssignOvertimeModal
+          shift={assignModal.shift}
+          fromAgent={assignModal.agent}
+          freedHours={assignModal.freedHours}
+          agents={agents}
+          selectedDay={selectedDay}
+          onAssign={(toAgentId) => {
+            const today = new Date();
+            const dateStr = today.toISOString().slice(0, 10);
+            assignOvertimeMutation.mutate({
+              fromShiftId: assignModal.shift.id,
+              toAgentId,
+              hours: assignModal.freedHours,
+              date: dateStr,
+              dayOfWeek: assignModal.shift.dayOfWeek,
+            });
+          }}
+          onClose={() => setAssignModal(null)}
+        />
+      )}
     </TooltipProvider>
   );
 }
@@ -569,7 +648,7 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
 function UnifiedTimeline({
   scope, agents, allShifts, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, onSelectDay,
-  toggleVisible, toggleAll,
+  toggleVisible, toggleAll, onAssignOvertime,
 }: {
   scope: "day" | "multi";
   agents: Agent[];
@@ -583,6 +662,7 @@ function UnifiedTimeline({
   onSelectDay: (dow: number) => void;
   toggleVisible: (id: number) => void;
   toggleAll: () => void;
+  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
 }) {
   const PX_PER_HOUR = 56;
   const LABEL_W     = 120;
@@ -756,6 +836,8 @@ function UnifiedTimeline({
             const shrinkSegs = segmentShift(ae, normBaseEnd);
             return shrinkSegs.map((seg, si) => (
               <div key={`shrink-${si}`}
+                onClick={() => onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                title="Click to assign this freed time to another agent"
                 style={{
                   position: "absolute",
                   left: rowOffsetX + seg.start * PX_PER_HOUR,
@@ -763,6 +845,7 @@ function UnifiedTimeline({
                   top: 8, height: ROW_H - 16, borderRadius: 2,
                   background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
                   border: "1px dashed rgba(255,140,0,0.6)",
+                  cursor: "pointer",
                 }}
               />
             ));
@@ -1105,7 +1188,7 @@ function UnifiedTimeline({
 function ClockVisualizer({
   agents, shifts, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage, maxCoverage,
-  tooltipInfo, setTooltipInfo, selectedDay,
+  tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime,
 }: {
   agents: Agent[]; shifts: Shift[]; visible: Set<number>;
   highlighted: number | null; setHighlighted: (id: number | null) => void;
@@ -1113,6 +1196,7 @@ function ClockVisualizer({
   coverage: number[]; maxCoverage: number;
   tooltipInfo: any; setTooltipInfo: (v: any) => void;
   selectedDay: number;
+  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
 }) {
   const SIZE   = 360;
   const CX = SIZE / 2, CY = SIZE / 2;
@@ -1353,8 +1437,11 @@ function ClockVisualizer({
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
                           fill="none" stroke="rgba(255,140,0,0.85)"
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
-                          style={{ pointerEvents: "none" }}
-                        />
+                          style={{ cursor: "pointer" }}
+                          onClick={() => onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                        >
+                          <title>Click to assign this freed time to another agent</title>
+                        </path>
                       ));
                     })()}
                   </g>
@@ -1721,6 +1808,70 @@ function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCove
           {totalReleasedHours > 0 && <p className="text-[10px] text-orange-400">Total up for grabs: {formatDuration(totalReleasedHours)}</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Assign Overtime Modal
+   ────────────────────────────────────────────────────────────── */
+
+function AssignOvertimeModal({
+  shift, fromAgent, freedHours, agents, selectedDay, onAssign, onClose,
+}: {
+  shift: Shift;
+  fromAgent: Agent;
+  freedHours: number;
+  agents: Agent[];
+  selectedDay: number;
+  onAssign: (toAgentId: number) => void;
+  onClose: () => void;
+}) {
+  const otherAgents = agents.filter(a => a.id !== fromAgent.id);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <div>
+            <p className="text-sm font-semibold">Assign Overtime</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              {formatDuration(freedHours)} freed from{" "}
+              <span style={{ color: fromAgent.color }}>{fromAgent.name}</span>'s {DAYS[selectedDay]} shift
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted transition-colors">
+            <X size={14} className="text-muted-foreground" />
+          </button>
+        </div>
+
+        {/* Agent list */}
+        <div className="p-2 max-h-64 overflow-y-auto">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider px-2 pb-1.5">
+            Select an agent to receive this overtime
+          </p>
+          {otherAgents.map((agent) => (
+            <button
+              key={agent.id}
+              onClick={() => onAssign(agent.id)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/70 transition-all group text-left"
+            >
+              <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
+              <div className="flex-1 min-w-0">
+                <span className="text-xs font-medium">{agent.name}</span>
+                <span className="text-[10px] text-muted-foreground ml-2">{agent.role}</span>
+              </div>
+              <span className="text-[10px] text-muted-foreground group-hover:text-primary transition-colors">
+                +{formatDuration(freedHours)}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
