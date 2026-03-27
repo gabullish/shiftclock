@@ -500,6 +500,7 @@ export default function Dashboard() {
                     utcHour={utcHour}
                     coverage={coverage}
                     maxCoverage={maxCoverage}
+                    otRecords={otRecords}
                     tooltipInfo={tooltipInfo}
                     setTooltipInfo={setTooltipInfo}
                     selectedDay={selectedDay}
@@ -1346,13 +1347,13 @@ function UnifiedTimeline({
 
 function ClockVisualizer({
   agents, shifts, isAdmin, visible, highlighted, setHighlighted,
-  leverState, utcHour, coverage, maxCoverage,
+  leverState, utcHour, coverage, maxCoverage, otRecords,
   tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime,
 }: {
   agents: Agent[]; shifts: Shift[]; isAdmin: boolean; visible: Set<number>;
   highlighted: number | null; setHighlighted: (id: number | null) => void;
   leverState: Record<number, LeverState>; utcHour: number;
-  coverage: number[]; maxCoverage: number;
+  coverage: number[]; maxCoverage: number; otRecords: OvertimeLog[];
   tooltipInfo: any; setTooltipInfo: (v: any) => void;
   selectedDay: number;
   onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
