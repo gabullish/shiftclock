@@ -58,7 +58,7 @@ function isOvernight(startUtc: number, endUtc: number) {
 }
 
 function shiftLabel(startUtc: number, endUtc: number) {
-  return `${formatHour(startUtc)} \u2013 ${formatHour(endUtc)}${isOvernight(startUtc, endUtc) ? " (+1)" : ""}`;
+  return `${formatHour(startUtc)} – ${formatHour(endUtc)}${isOvernight(startUtc, endUtc) ? " (+1)" : ""}`;
 }
 
 function shiftDurH(startUtc: number, endUtc: number) {
@@ -163,7 +163,7 @@ export default function Profiles() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-lg font-semibold">Agents</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">{agents.length} agents \u00b7 global team</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{agents.length} agents · global team</p>
         </div>
         <div className="flex items-center gap-2">
           {!isAdmin && (
@@ -343,7 +343,7 @@ function getLocalTime(tz: string) {
   }
 }
 
-// ── Apply Week Row ────────────────────────────────────────────────────────────
+// ── Apply Week Row ───────────────────────────────────────────────────────────────────────────
 function ApplyWeekRow({
   agentId, agentShifts, offWeekend, onApply, loading,
 }: {
@@ -373,7 +373,7 @@ function ApplyWeekRow({
           <option key={h} value={h}>{formatHour(h)}</option>
         ))}
       </select>
-      <span className="text-[9px] text-muted-foreground">\u2013</span>
+      <span className="text-[9px] text-muted-foreground">–</span>
       <select
         value={endH}
         onChange={e => setEndH(parseFloat(e.target.value))}
@@ -399,7 +399,7 @@ function ApplyWeekRow({
   );
 }
 
-// ── Agent Form ────────────────────────────────────────────────────────────────
+// ── Agent Form ──────────────────────────────────────────────────────────────────────────────
 function AgentForm({
   defaultValues,
   defaultColor = "#FFD700",
@@ -504,7 +504,7 @@ function AgentForm({
         </div>
         <div>
           <p className="text-sm font-medium">{form.name || "Agent name"}</p>
-          <p className="text-[10px] text-muted-foreground">{form.role} \u00b7 {form.timezone}</p>
+          <p className="text-[10px] text-muted-foreground">{form.role} · {form.timezone}</p>
         </div>
       </div>
 
@@ -515,7 +515,7 @@ function AgentForm({
   );
 }
 
-// ── Shift Pill ────────────────────────────────────────────────────────────────
+// ── Shift Pill ──────────────────────────────────────────────────────────────────────────────
 function ShiftPill({
   day, dayIdx, shift, agentId, color, isAdmin, isDayOff,
   agentShifts, onUpsert, onUpdateShift,
@@ -612,7 +612,7 @@ function ShiftPill({
               <option key={h} value={h}>{formatHour(h)}</option>
             ))}
           </select>
-          <span className="text-muted-foreground">\u2013</span>
+          <span className="text-muted-foreground">–</span>
           <select
             value={endH}
             onChange={e => setEndH(parseFloat(e.target.value))}
@@ -624,12 +624,12 @@ function ShiftPill({
               </option>
             ))}
           </select>
-          <button onClick={save} disabled={dur <= 0} className="text-primary font-bold disabled:opacity-40">\u2713</button>
-          <button onClick={() => setEditing(false)} className="text-muted-foreground">\u2715</button>
+          <button onClick={save} disabled={dur <= 0} className="text-primary font-bold disabled:opacity-40">✓</button>
+          <button onClick={() => setEditing(false)} className="text-muted-foreground">✕</button>
         </div>
         <div className="flex items-center gap-1 px-0.5">
           {overnight && <span className="text-amber-400 font-mono">+1</span>}
-          <span className="text-muted-foreground">{shiftLabel(startH, endH)} \u00b7 {dur}h</span>
+          <span className="text-muted-foreground">{shiftLabel(startH, endH)} · {dur}h</span>
         </div>
       </div>
     );
@@ -663,17 +663,17 @@ function ShiftPill({
               <option key={h} value={h}>{formatHour(h)}</option>
             ))}
           </select>
-          <button onClick={saveBreak} disabled={breakH === ""} className="text-primary font-bold disabled:opacity-40">\u2713</button>
-          <button onClick={() => setSettingBreak(false)} className="text-muted-foreground">\u2715</button>
+          <button onClick={saveBreak} disabled={breakH === ""} className="text-primary font-bold disabled:opacity-40">✓</button>
+          <button onClick={() => setSettingBreak(false)} className="text-muted-foreground">✕</button>
         </div>
         {warnNow && (
           <div className="flex items-center gap-1 text-amber-400">
             <AlertTriangle size={8} />
-            <span>First or last hour \u2014 not ideal</span>
+            <span>First or last hour — not ideal</span>
           </div>
         )}
         <div className="text-muted-foreground opacity-60">
-          {shiftLabel(shift.startUtc, shift.endUtc)} \u00b7 {dur2}h
+          {shiftLabel(shift.startUtc, shift.endUtc)} · {dur2}h
         </div>
       </div>
     );
@@ -715,7 +715,7 @@ function ShiftPill({
             border: "1px dashed hsl(var(--border))",
           }}
           data-testid={`shift-pill-${agentId}-${dayIdx}`}
-          title={shift ? shiftLabel(shift.startUtc, shift.endUtc) + " UTC" : "No shift \u2014 click to add"}
+          title={shift ? shiftLabel(shift.startUtc, shift.endUtc) + " UTC" : "No shift — click to add"}
         >
           {shift
             ? `${day} ${formatHour(shift.startUtc)}${isOvernight(shift.startUtc, shift.endUtc) ? "*" : ""}`
@@ -759,7 +759,7 @@ function ShiftPill({
           {showBreakWarning && <AlertTriangle size={7} />}
           <Coffee size={7} />
           <span>{formatHour(savedBreak)}</span>
-          {showBreakWarning && <span>\u00b7 not ideal</span>}
+          {showBreakWarning && <span>· not ideal</span>}
         </div>
       )}
     </div>
