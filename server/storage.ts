@@ -31,6 +31,7 @@ export interface IStorage {
   getAgentLogs(): AgentLog[];
   getAgentLogsByAgent(agentId: number): AgentLog[];
   createAgentLog(data: InsertAgentLog): AgentLog;
+  upsertRecentAgentLog(data: InsertAgentLog, dedupeWindowMs?: number): AgentLog;
   deleteAgentLog(id: number): void;
 }
 
@@ -147,6 +148,30 @@ export const storage: IStorage = {
     return db.select().from(agentLogs).where(eq(agentLogs.agentId, agentId)).all();
   },
   createAgentLog(data) {
+    return db.insert(agentLogs).values(data).returning().get();
+  },
+  upsertRecentAgentLog(data, dedupeWindowMs = 5 * 60 * 1000) {
+    // If a log with the same agentId + actionType + date exists within the window, update it instead
+    if (data.actionType && data.date) {
+      const recent = db.select().from(agentLogs)
+        .where(and(
+          eq(agentLogs.agentId, data.agentId),
+          eq(agentLogs.actionType, data.actionType),
+          eq(agentLogs.date, data.date),
+        ))
+        .all()
+        .filter(l => {
+          const age = Date.now() - new Date(l.createdAt).getTime();
+          return age < dedupeWindowMs;
+        });
+      if (recent.length > 0) {
+        const latest = recent[recent.length - 1];
+        return db.update(agentLogs)
+          .set({ description: data.description, createdAt: new Date().toISOString() })
+          .where(eq(agentLogs.id, latest.id))
+          .returning().get()!;
+      }
+    }
     return db.insert(agentLogs).values(data).returning().get();
   },
   deleteAgentLog(id) {
