@@ -739,7 +739,7 @@ function UnifiedTimeline({
   };
 
   return (
-    <div className="flex flex-col h-full bg-background" onMouseLeave={() => setBarTooltip(null)}>
+    <div className="flex flex-col h-full min-h-0 bg-background" onMouseLeave={() => setBarTooltip(null)}>
       {/* Sub-header: info + Now button + agent chips (day scope) */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0 gap-3 min-h-0">
         <span className="text-[11px] text-muted-foreground shrink-0">
@@ -789,7 +789,7 @@ function UnifiedTimeline({
       {/* Scrollable canvas */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-x-auto overflow-y-auto min-h-0"
+        className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain"
         style={{ scrollBehavior: "auto" }}
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
@@ -1587,7 +1587,7 @@ function KpiCell({ label, value, warn, accent }: { label: string; value: string;
 
 function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCoverageHour, totalOvertimeHours, totalReleasedHours }: any) {
   return (
-    <div className="border-t border-border p-3 max-h-52 overflow-y-auto overscroll-contain bg-card/30">
+    <div className="border-t border-border p-3 max-h-52 min-h-0 overflow-y-auto overscroll-contain bg-card/30 shrink-0">
       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-medium">
         Coverage Report · {DAYS[selectedDay]}
       </p>
