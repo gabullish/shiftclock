@@ -755,22 +755,22 @@ function UnifiedTimeline({
       const isOvernight = baseSegs.length > 1;
 
       // For overnight shifts in multi-day scope:
-      //   dayOffset:0 segment (e.g. 23:00-24:00) belongs to the PREVIOUS calendar day
-      //   dayOffset:1 segment (e.g. 00:00-07:00) belongs to the CURRENT day (rowOffsetX)
-      // Suppress dayOffset:0 if agent has no shift on previous day (off-day → no bar to show)
-      const prevDayOfWeek = (shift.dayOfWeek + 6) % 7;
-      const agentHasPrevDayShift = allShifts.some(
-        s => s.agentId === agent.id && s.dayOfWeek === prevDayOfWeek
+      //   dayOffset:0 segment (e.g. 22:00-24:00) belongs to the CURRENT day (rowOffsetX)
+      //   dayOffset:1 segment (e.g. 00:00-06:00) overflows into the NEXT calendar day
+      // Suppress dayOffset:1 if agent has no shift on the next day (off-day → no overflow bar)
+      const nextDayOfWeek = (shift.dayOfWeek + 1) % 7;
+      const agentHasNextDayShift = allShifts.some(
+        s => s.agentId === agent.id && s.dayOfWeek === nextDayOfWeek
       );
-      const suppressPrevDaySegment = isOvernight && !agentHasPrevDayShift;
+      const suppressOverflow = isOvernight && !agentHasNextDayShift;
 
       // Compute pixel offset for each segment depending on its dayOffset
       const segOffsetX = (seg: { dayOffset: number }) => {
         if (!isOvernight || scope === "day") return rowOffsetX;
-        // dayOffset:0 → previous day column; dayOffset:1 → current day column
+        // dayOffset:0 → current day column; dayOffset:1 → next day column
         return seg.dayOffset === 0
-          ? rowOffsetX - 24 * PX_PER_HOUR
-          : rowOffsetX;
+          ? rowOffsetX
+          : rowOffsetX + 24 * PX_PER_HOUR;
       };
 
       const { pct, otPct } = scope === "day" && selectedDay === getUTCDay()
@@ -781,8 +781,8 @@ function UnifiedTimeline({
       return (
         <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
           {baseSegs.map((seg, si) => {
-            // Skip the pre-midnight ghost bar if it falls on a day the agent is off
-            if (suppressPrevDaySegment && seg.dayOffset === 0) return null;
+            // Skip the next-day overflow ghost bar if it falls on an off-day
+            if (suppressOverflow && seg.dayOffset === 1) return null;
             const offX = segOffsetX(seg);
             return (
             <div key={`ghost-${si}`}
@@ -799,7 +799,7 @@ function UnifiedTimeline({
             );
           })}
 
-          {isOvernight && !suppressPrevDaySegment && (() => {
+          {isOvernight && !suppressOverflow && (() => {
             const seg0 = baseSegs[0];
             const seg0OffX = segOffsetX(seg0);
             const seg1OffX = segOffsetX(baseSegs[1]);
@@ -818,8 +818,8 @@ function UnifiedTimeline({
           })()}
 
           {isVis && activeSegs.map((seg, si) => {
-            // Skip the pre-midnight active bar if it falls on a day the agent is off
-            if (suppressPrevDaySegment && seg.dayOffset === 0) return null;
+            // Skip the next-day overflow active bar if it falls on an off-day
+            if (suppressOverflow && seg.dayOffset === 1) return null;
             const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
             if (segEnd <= seg.start) return null;
             const offX = segOffsetX(seg);
