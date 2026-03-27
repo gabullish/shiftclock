@@ -333,7 +333,7 @@ export default function Dashboard() {
             </div>
           ) : (
             /* ── Clock mode: centred layout + right panel ── */
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden min-h-0">
               <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
                 {!hasShiftsToday ? (
                   <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
@@ -385,7 +385,7 @@ export default function Dashboard() {
               </div>
 
               {/* Right panel */}
-              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
+              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0 min-h-0">
                 <div className="grid grid-cols-3 border-b border-border shrink-0">
                   <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
                   <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
@@ -440,14 +440,16 @@ export default function Dashboard() {
                   <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
                 </div>
 
-                <SummaryPanel
-                  agentSummaries={agentSummaries}
-                  selectedDay={selectedDay}
-                  zeroCoverageHours={zeroCoverageHours}
-                  peakCoverageHour={peakCoverageHour}
-                  totalOvertimeHours={totalOvertimeHours}
-                  totalReleasedHours={totalReleasedHours}
-                />
+                <div className="shrink-0 min-h-0" style={{ maxHeight: '13rem', overflow: 'hidden' }}>
+                  <SummaryPanel
+                    agentSummaries={agentSummaries}
+                    selectedDay={selectedDay}
+                    zeroCoverageHours={zeroCoverageHours}
+                    peakCoverageHour={peakCoverageHour}
+                    totalOvertimeHours={totalOvertimeHours}
+                    totalReleasedHours={totalReleasedHours}
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -1046,6 +1048,18 @@ function ClockVisualizer({
     return [{ start: NON_HOVER_END, end }];
   };
 
+  // Compute contiguous zero-coverage ranges for dashed arc segments
+  const gapRanges: { start: number; end: number }[] = [];
+  let gapStart: number | null = null;
+  for (let h = 0; h <= 24; h++) {
+    const isGap = h < 24 && coverage[h] === 0;
+    if (isGap && gapStart === null) gapStart = h;
+    if (!isGap && gapStart !== null) {
+      gapRanges.push({ start: gapStart, end: h });
+      gapStart = null;
+    }
+  }
+
   return (
     <div className="relative flex items-center justify-center">
       <svg
@@ -1092,36 +1106,30 @@ function ClockVisualizer({
           );
         })}
 
-        {coverage.map((cov, h) => {
-          if (cov === 0) {
-            return (
-              <path key={`cov-${h}`}
-                d={describeArc(CX, CY, HEAT_R, h, h + 1)}
-                fill="none" stroke="rgba(230,57,70,0.35)" strokeWidth={4} strokeLinecap="butt"
-              />
-            );
-          }
-          const coveringColors: string[] = [];
-          for (const agent of agents) {
-            if (!visible.has(agent.id)) continue;
-            const agentShift = shifts.find(s => s.agentId === agent.id);
-            if (!agentShift) continue;
-            const ls    = leverState[agentShift.id];
-            const start = ls?.activeStart ?? agentShift.startUtc;
-            const end   = ls?.activeEnd   ?? normaliseEndUtc(agentShift.startUtc, agentShift.endUtc);
-            const segs  = segmentShift(start, end);
-            const covers = segs.some(seg => h >= seg.start && h < seg.end);
-            if (covers) coveringColors.push(agent.color);
-          }
-          if (coveringColors.length === 0) coveringColors.push("#FFD700");
-          const intensity = cov / maxCoverage;
-          const color = coveringColors[0];
+        {/* Outer ring: white base full circle */}
+        <circle
+          cx={CX} cy={CY} r={HEAT_R}
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth={4}
+        />
+
+        {/* Outer ring: dashed red arcs over zero-coverage hours */}
+        {gapRanges.map((gap, i) => {
+          const d = describeArc(CX, CY, HEAT_R, gap.start, gap.end);
+          if (!d) return null;
+          // strokeDasharray approximates per-hour dash segments along the arc circumference
+          const arcLen = ((gap.end - gap.start) / 24) * 2 * Math.PI * HEAT_R;
+          const dash = Math.min(6, arcLen / 3);
           return (
-            <path key={`cov-${h}`}
-              d={describeArc(CX, CY, HEAT_R, h, h + 1)}
+            <path
+              key={i}
+              d={d}
               fill="none"
-              stroke={hexToRgba(color, 0.1 + intensity * 0.55)}
-              strokeWidth={6} strokeLinecap="butt"
+              stroke="rgba(230,57,70,0.85)"
+              strokeWidth={4}
+              strokeLinecap="butt"
+              strokeDasharray={`${dash} ${dash}`}
             />
           );
         })}
@@ -1351,13 +1359,12 @@ function ClockVisualizer({
 
       <div className="absolute top-0 right-0 flex flex-col gap-1.5 bg-card/80 rounded-lg p-2 border border-border">
         <div className="flex items-center gap-1.5">
-          <div className="flex gap-px rounded-sm overflow-hidden" style={{ width: 20, height: 6 }}>
-            {agents.slice(0, 6).map((a, i) => (
-              <div key={i} style={{ flex: 1, backgroundColor: a.color, opacity: 0.8 }} />
-            ))}
-            {agents.length === 0 && <div style={{ flex: 1, backgroundColor: "#FFD700", opacity: 0.7 }} />}
-          </div>
-          <span className="text-[9px] text-muted-foreground">Coverage</span>
+          <div className="w-4 h-1" style={{ backgroundColor: "rgba(255,255,255,0.3)", borderRadius: 2 }} />
+          <span className="text-[9px] text-muted-foreground">Covered</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(230,57,70,0.85)" }} />
+          <span className="text-[9px] text-muted-foreground">Gap</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,140,0,0.9)" }} />
