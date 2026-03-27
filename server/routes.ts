@@ -6,12 +6,18 @@ import { agents, shifts } from "@shared/schema";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN?.trim() || "";
 
+function readAdminHeaderToken(req: Request): string {
+  const raw = req.headers["x-admin-token"];
+  if (Array.isArray(raw)) return (raw[0] || "").trim();
+  return (raw || "").trim();
+}
+
 /** Middleware: reject non-admin requests to mutating endpoints */
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!ADMIN_TOKEN) {
     return res.status(500).json({ message: "Server misconfigured: ADMIN_TOKEN is not set" });
   }
-  if (req.headers["x-admin-token"] === ADMIN_TOKEN) return next();
+  if (readAdminHeaderToken(req) === ADMIN_TOKEN) return next();
   res.status(403).json({ message: "Admin access required" });
 }
 
@@ -137,8 +143,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   await seedDefaultData();
 
   // --- Agents ---
-  app.get("/api/admin/verify", requireAdmin, (_req, res) => {
-    res.json({ ok: true });
+  app.get("/api/admin/verify", (req, res) => {
+    if (!ADMIN_TOKEN) {
+      return res.status(500).json({ message: "Server misconfigured: ADMIN_TOKEN is not set" });
+    }
+    if (readAdminHeaderToken(req) !== ADMIN_TOKEN) {
+      return res.status(401).json({ message: "Invalid admin token" });
+    }
+    return res.json({ ok: true });
   });
 
   app.get("/api/agents", (_req, res) => {
