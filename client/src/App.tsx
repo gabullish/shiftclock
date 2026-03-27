@@ -15,11 +15,11 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AdminProvider>
-        <DragScrollProvider>
-          <Router hook={useHashLocation}>
+        <Router hook={useHashLocation}>
+          <DragScrollProvider>
             <div className="flex h-screen overflow-hidden bg-background">
               <Sidebar />
-              <main className="flex-1 overflow-hidden">
+              <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <Switch>
                   <Route path="/" component={Dashboard} />
                   <Route path="/profiles" component={Profiles} />
@@ -27,21 +27,7 @@ export default function App() {
                 </Switch>
               </main>
             </div>
-            <PerplexityAttribution />
-            <Toaster />
-          </Router>
-        </DragScrollProvider>
-        <Router hook={useHashLocation}>
-          <div className="flex h-screen overflow-hidden bg-background">
-            <Sidebar />
-            <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
-              <Switch>
-                <Route path="/" component={Dashboard} />
-                <Route path="/profiles" component={Profiles} />
-                <Route component={NotFound} />
-              </Switch>
-            </main>
-          </div>
+          </DragScrollProvider>
           <PerplexityAttribution />
           <Toaster />
         </Router>
