@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
+import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import {
   segmentShift,
   resolveShift,
@@ -162,6 +163,7 @@ function buildDays(pastDays: number, futureDays: number): DayDesc[] {
 
 export default function Dashboard() {
   const isAdmin = useAdminMode();
+  const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
 
   const initDay = () => {
     const d = getUTCDay();
@@ -300,7 +302,7 @@ export default function Dashboard() {
               {DAYS.map((d, i) => {
                 const hasShifts = allShifts.some(s => s.dayOfWeek === i);
                 return (
-                  <button key={d} onClick={() => setSelectedDay(i)} data-testid={`day-${d}`}
+                  <button key={d} onClick={() => { playSoftClick(); setSelectedDay(i); }} data-testid={`day-${d}`}
                     className={cn(
                       "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
                       selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -322,7 +324,7 @@ export default function Dashboard() {
 
           <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
             <button
-              onClick={() => setViewMode("clock")}
+              onClick={() => { playSoftClick(); setViewMode("clock"); }}
               className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
                 viewMode === "clock" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
               data-testid="view-clock"
@@ -330,7 +332,7 @@ export default function Dashboard() {
               <Clock size={13} /> Clock
             </button>
             <button
-              onClick={() => setViewMode("timeline")}
+              onClick={() => { playSoftClick(); setViewMode("timeline"); }}
               className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
                 viewMode === "timeline" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
               data-testid="view-timeline"
@@ -342,7 +344,7 @@ export default function Dashboard() {
               <>
                 <span className="mx-1 h-4 w-px bg-border" />
                 <button
-                  onClick={() => setTimelineScope("day")}
+                  onClick={() => { playSoftClick(); setTimelineScope("day"); }}
                   className={cn(
                     "px-2.5 py-1 rounded text-[11px] font-medium transition-all",
                     timelineScope === "day" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
@@ -352,7 +354,7 @@ export default function Dashboard() {
                   Day
                 </button>
                 <button
-                  onClick={() => setTimelineScope("multi")}
+                  onClick={() => { playSoftClick(); setTimelineScope("multi"); }}
                   className={cn(
                     "flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition-all",
                     timelineScope === "multi" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
@@ -497,6 +499,7 @@ export default function Dashboard() {
                         shift={agentShifts[0]}
                         leverState={leverState[agentShifts[0]?.id]}
                         onLeverChange={(id, start, end) => {
+                          playSuccess();
                           setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }));
                           updateShiftMutation.mutate({ id, data: { activeStart: start, activeEnd: end } });
                         }}
@@ -509,6 +512,8 @@ export default function Dashboard() {
                         isAdmin={isAdmin}
                         utcHour={utcHour}
                         selectedDay={selectedDay}
+                        playDragWhoosh={playDragWhoosh}
+                        playSuccess={playSuccess}
                       />
                     ))}
                     {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (
@@ -1473,6 +1478,7 @@ function ShiftLever({
   agent, shift, leverState, onLeverChange,
   highlighted, onHighlight, onUnhighlight,
   baseHours, overtimeHours, releasedHours, isAdmin, utcHour, selectedDay,
+  playDragWhoosh, playSuccess,
 }: {
   agent: Agent; shift: Shift | undefined;
   leverState: LeverState | undefined;
@@ -1480,6 +1486,7 @@ function ShiftLever({
   highlighted: boolean; onHighlight: () => void; onUnhighlight: () => void;
   baseHours: number; overtimeHours: number; releasedHours: number;
   isAdmin: boolean; utcHour: number; selectedDay: number;
+  playDragWhoosh: () => void; playSuccess: () => void;
 }) {
   if (!shift || !leverState) return null;
 
@@ -1508,6 +1515,7 @@ function ShiftLever({
   const onMouseDown = (e: React.MouseEvent, type: "start" | "end" | "move") => {
     if (!isAdmin) return;
     e.preventDefault();
+    playDragWhoosh();
     dragging.current = { type, startX: e.clientX, startVal: activeStart, startEnd: activeEnd };
     const snap = (h: number) => Math.round(h * 2) / 2;
     const onMove = (ev: MouseEvent) => {
@@ -1527,7 +1535,12 @@ function ShiftLever({
         onLeverChange(shift.id, ns, ns + dur);
       }
     };
-    const onUp = () => { dragging.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    const onUp = () => { 
+      playSuccess();
+      dragging.current = null; 
+      window.removeEventListener("mousemove", onMove); 
+      window.removeEventListener("mouseup", onUp); 
+    };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
@@ -1645,15 +1658,15 @@ function ShiftLever({
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
-          {isAdmin && <button onClick={() => adjustStart(-0.5)} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
-          {isAdmin && <button onClick={() => adjustStart(0.5)}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
         </div>
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{formatDuration(resolved.activeDuration)}</span>
         <div className="flex items-center gap-1">
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
-          {isAdmin && <button onClick={() => adjustEnd(-0.5)} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
-          {isAdmin && <button onClick={() => adjustEnd(0.5)}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
         </div>
       </div>
     </div>

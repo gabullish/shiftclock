@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
@@ -88,6 +89,7 @@ function seedFromShifts(shifts: Shift[]): { start: number; end: number } {
 export default function Profiles() {
   const { toast } = useToast();
   const isAdmin = useAdminMode();
+  const { playSoftClick, playSuccess } = useSoothingSounds();
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -175,7 +177,7 @@ export default function Profiles() {
             {isAdmin && (
               <Dialog open={showCreate} onOpenChange={setShowCreate}>
                 <DialogTrigger asChild>
-                  <Button size="sm" className="gap-1.5" data-testid="btn-create-agent">
+                  <Button size="sm" className="gap-1.5" onClick={playSoftClick} data-testid="btn-create-agent">
                     <Plus size={14} /> Add Agent
                   </Button>
                 </DialogTrigger>
@@ -187,6 +189,8 @@ export default function Profiles() {
                     defaultColor={DEFAULT_COLORS[agents.length % DEFAULT_COLORS.length]}
                     onSubmit={(data) => createMutation.mutate(data)}
                     loading={createMutation.isPending}
+                    playSuccess={playSuccess}
+                    playSoftClick={playSoftClick}
                   />
                 </DialogContent>
               </Dialog>
@@ -229,7 +233,7 @@ export default function Profiles() {
                       <Dialog open={editingAgent?.id === agent.id} onOpenChange={open => !open && setEditingAgent(null)}>
                         <DialogTrigger asChild>
                           <button
-                            onClick={() => setEditingAgent(agent)}
+                            onClick={() => { playSoftClick(); setEditingAgent(agent); }}
                             className="p-1.5 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                             data-testid={`btn-edit-agent-${agent.id}`}
                           >
@@ -251,13 +255,15 @@ export default function Profiles() {
                               }}
                               onSubmit={(data) => updateMutation.mutate({ id: agent.id, data })}
                               loading={updateMutation.isPending}
+                              playSuccess={playSuccess}
+                              playSoftClick={playSoftClick}
                             />
                           )}
                         </DialogContent>
                       </Dialog>
 
                       <button
-                        onClick={() => deleteMutation.mutate(agent.id)}
+                        onClick={() => { playSoftClick(); deleteMutation.mutate(agent.id); }}
                         className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
                         data-testid={`btn-delete-agent-${agent.id}`}
                       >
@@ -278,7 +284,7 @@ export default function Profiles() {
                 {isAdmin && (
                   <div className="flex items-center justify-between mb-3 gap-2">
                     <button
-                      onClick={() => toggleOffDayMutation.mutate({ id: agent.id, offWeekend: (agent.offWeekend ?? 1) === 1 ? 0 : 1 })}
+                      onClick={() => { playSoftClick(); toggleOffDayMutation.mutate({ id: agent.id, offWeekend: (agent.offWeekend ?? 1) === 1 ? 0 : 1 }); }}
                       className={cn(
                         "flex items-center gap-1.5 text-[9px] px-2 py-1 rounded-md border transition-all font-medium",
                         (agent.offWeekend ?? 1) === 1
@@ -297,6 +303,7 @@ export default function Profiles() {
                       offWeekend={agent.offWeekend ?? 1}
                       onApply={(startUtc, endUtc) => applyWeekMutation.mutate({ id: agent.id, startUtc, endUtc })}
                       loading={applyWeekMutation.isPending}
+                      playSuccess={playSuccess}
                     />
                   </div>
                 )}
@@ -345,13 +352,14 @@ function getLocalTime(tz: string) {
 }
 
 function ApplyWeekRow({
-  agentId, agentShifts, offWeekend, onApply, loading,
+  agentId, agentShifts, offWeekend, onApply, loading, playSuccess,
 }: {
   agentId: number;
   agentShifts: Shift[];
   offWeekend: number;
   onApply: (startUtc: number, endUtc: number) => void;
   loading: boolean;
+  playSuccess: () => void;
 }) {
   const seed = seedFromShifts(agentShifts);
   const [startH, setStartH] = useState<number>(seed.start);
@@ -387,7 +395,7 @@ function ApplyWeekRow({
         <span className="text-[9px] text-amber-400 font-mono" title={`${dur}h overnight`}>+1 {dur}h</span>
       )}
       <button
-        onClick={() => onApply(startH, endH)}
+        onClick={() => { playSuccess(); onApply(startH, endH); }}
         disabled={loading || dur <= 0}
         className="text-[9px] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
       >
@@ -403,11 +411,15 @@ function AgentForm({
   defaultColor = "#FFD700",
   onSubmit,
   loading,
+  playSuccess,
+  playSoftClick,
 }: {
   defaultValues?: AgentFormData;
   defaultColor?: string;
   onSubmit: (data: AgentFormData) => void;
   loading: boolean;
+  playSuccess: () => void;
+  playSoftClick: () => void;
 }) {
   const [form, setForm] = useState<AgentFormData>({
     name: defaultValues?.name || "",
@@ -420,7 +432,7 @@ function AgentForm({
   const set = (k: keyof AgentFormData, v: string) => setForm(f => ({ ...f, [k]: v }));
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSubmit(form); }} className="space-y-4">
+    <form onSubmit={(e) => { e.preventDefault(); playSuccess(); onSubmit(form); }} className="space-y-4">
       <div className="space-y-1.5">
         <Label className="text-xs">Name</Label>
         <Input
@@ -459,7 +471,7 @@ function AgentForm({
                 <button
                   key={c}
                   type="button"
-                  onClick={() => set("color", c)}
+                  onClick={() => { playSoftClick(); set("color", c); }}
                   className="w-4 h-4 rounded-full border border-transparent hover:scale-110 transition-transform"
                   style={{ backgroundColor: c, borderColor: form.color === c ? "white" : "transparent" }}
                 />
