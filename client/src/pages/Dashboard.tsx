@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Agent, Shift } from "@shared/schema";
+import type { Agent, Shift, OvertimeLog } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X } from "lucide-react";
@@ -196,6 +196,7 @@ export default function Dashboard() {
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
+  const { data: otRecords = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
 
   const updateShiftMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Shift> }) =>
@@ -452,6 +453,7 @@ export default function Dashboard() {
                 scope={isMulti ? "multi" : "day"}
                 agents={agents}
                 allShifts={allShifts}
+                otRecords={otRecords}
                 visible={visible}
                 highlighted={highlighted}
                 setHighlighted={setHighlighted}
@@ -668,13 +670,14 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
 }
 
 function UnifiedTimeline({
-  scope, agents, allShifts, visible, highlighted, setHighlighted,
+  scope, agents, allShifts, otRecords, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, onSelectDay,
   toggleVisible, toggleAll, onAssignOvertime,
 }: {
   scope: "day" | "multi";
   agents: Agent[];
   allShifts: Shift[];
+  otRecords: OvertimeLog[];
   visible: Set<number>;
   highlighted: number | null;
   setHighlighted: (id: number | null) => void;
@@ -900,6 +903,67 @@ function UnifiedTimeline({
           })()}
         </div>
       );
+    });
+  };
+
+  const renderCoverageBars = (agent: Agent, dayOffset: number, dayOfWeek: number) => {
+    if (!visible.has(agent.id)) return null;
+    // Find approved OT records where this agent covers someone else's freed slot
+    const coverageSlots = otRecords.filter(
+      r => r.agentId === agent.id
+        && r.origin === "claimed-from-agent"
+        && r.status === "approved"
+        && r.dayOfWeek === dayOfWeek
+        && r.coverStartUtc != null
+        && r.coverEndUtc != null
+    );
+    if (coverageSlots.length === 0) return null;
+
+    const rowOffsetX = dayOffset * 24 * PX_PER_HOUR;
+    const coveredByAgent = (covByAgentId: number | null) =>
+      agents.find(a => a.id === covByAgentId);
+
+    return coverageSlots.map(slot => {
+      const segs = segmentShift(slot.coverStartUtc!, slot.coverEndUtc!);
+      const covAgent = coveredByAgent(slot.coveredByAgentId);
+      const isOvernight = segs.length > 1;
+
+      const covSegOffsetX = (seg: { dayOffset: number }) => {
+        if (!isOvernight || scope === "day") return rowOffsetX;
+        return seg.dayOffset === 0
+          ? rowOffsetX - 24 * PX_PER_HOUR
+          : rowOffsetX;
+      };
+
+      return segs.map((seg, si) => (
+        <div
+          key={`cov-${slot.id}-${si}`}
+          title={`Covering ${covAgent?.name ?? "agent"}: ${formatUtcHour(slot.coverStartUtc!)}–${formatUtcHour(slot.coverEndUtc!)} UTC`}
+          style={{
+            position: "absolute",
+            left: covSegOffsetX(seg) + seg.start * PX_PER_HOUR,
+            width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
+            top: 4, height: ROW_H - 8,
+            backgroundColor: agent.color,
+            opacity: 0.85,
+            borderRadius: 3,
+            border: `2px dashed white`,
+            boxShadow: `0 0 6px ${agent.color}80`,
+          }}
+        >
+          <span style={{
+            position: "absolute", inset: 0, display: "flex", alignItems: "center",
+            padding: "0 4px", pointerEvents: "none", overflow: "hidden",
+          }}>
+            <span style={{
+              fontSize: 8, fontFamily: "monospace", fontWeight: 700,
+              whiteSpace: "nowrap", color: "white", mixBlendMode: "difference", opacity: 0.9,
+            }}>
+              ↗ {covAgent?.name ?? "?"} {formatUtcHour(slot.coverStartUtc!)}–{formatUtcHour(slot.coverEndUtc!)}
+            </span>
+          </span>
+        </div>
+      ));
     });
   };
 
@@ -1179,11 +1243,15 @@ function UnifiedTimeline({
                   onMouseLeave={() => setHighlighted(null)}
                 >
                   {scope === "day" ? (
-                    renderAgentRow(agent, 0, allShifts.filter(s => s.dayOfWeek === selectedDay))
+                    <>
+                      {renderAgentRow(agent, 0, allShifts.filter(s => s.dayOfWeek === selectedDay))}
+                      {renderCoverageBars(agent, 0, selectedDay)}
+                    </>
                   ) : (
                     days!.map(day => (
                       <div key={day.date} style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H }}>
                         {renderAgentRow(agent, day.dayIndex, allShifts.filter(s => s.dayOfWeek === day.dayOfWeek))}
+                        {renderCoverageBars(agent, day.dayIndex, day.dayOfWeek)}
                       </div>
                     ))
                   )}
