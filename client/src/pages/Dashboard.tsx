@@ -215,6 +215,25 @@ export default function Dashboard() {
             <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
           </div>
 
+          {/* Day nav */}
+          <div className="flex items-center gap-1">
+            {DAYS.map((d, i) => {
+              const hasShifts = allShifts.some(s => s.dayOfWeek === i);
+              return (
+                <button key={d} onClick={() => setSelectedDay(i)} data-testid={`day-${d}`}
+                  className={cn(
+                    "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
+                    selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                  )}
+                >
+                  {d}
+                  {hasShifts && selectedDay !== i && (
+                    <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
           {!isMulti && (
             <div className="flex items-center gap-1">
               {DAYS.map((d, i) => {
@@ -286,6 +305,8 @@ export default function Dashboard() {
           </div>
         </header>
 
+        {/* ── Online now bar ── */}
+        {selectedDay === todayUTCDay && (
         {!isMulti && selectedDay === todayUTCDay && (
           <div className="flex items-center gap-3 px-6 py-2 border-b border-border bg-card/20 shrink-0">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
@@ -306,6 +327,43 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* ── Main content ── */}
+        <div className="flex-1 flex overflow-hidden">
+          <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
+            {!hasShiftsToday ? (
+              <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
+            ) : viewMode === "clock" ? (
+              <ClockVisualizer
+                agents={agents}
+                shifts={todayShifts}
+                visible={visible}
+                highlighted={highlighted}
+                setHighlighted={setHighlighted}
+                leverState={leverState}
+                utcHour={utcHour}
+                coverage={coverage}
+                maxCoverage={maxCoverage}
+                tooltipInfo={tooltipInfo}
+                setTooltipInfo={setTooltipInfo}
+                selectedDay={selectedDay}
+              />
+            ) : (
+              <UnifiedTimeline
+                scope={timelineScope}
+                agents={agents}
+                allShifts={allShifts}
+                visible={visible}
+                highlighted={highlighted}
+                setHighlighted={setHighlighted}
+                leverState={leverState}
+                utcHour={utcHour}
+                selectedDay={selectedDay}
+                onSelectDay={(dow) => {
+                  setSelectedDay(dow);
+                  if (timelineScope === "multi") setTimelineScope("day");
+                }}
+              />
+            )}
         {isMulti ? (
           <div className="flex-1 overflow-hidden">
             <UnifiedTimeline
@@ -381,6 +439,7 @@ export default function Dashboard() {
                   >
                     {agent.name}
                   </button>
+                ))}
                   {agents.map(agent => (
                     <button key={agent.id}
                       onClick={() => toggleVisible(agent.id)}
@@ -1151,6 +1210,28 @@ function ClockVisualizer({
                         style={{ pointerEvents: "none" }}
                       />
                     ))}
+                    {baseSegs.flatMap((seg, si) =>
+                      interactiveParts(seg.start, seg.end).map((part, pi) => (
+                        <path key={`hit-${si}-${pi}`}
+                          d={describeArc(CX, CY, r, part.start, part.end)}
+                          fill="none" stroke="white" strokeWidth={RING_W + 6} strokeOpacity={0}
+                          style={{ cursor: "pointer", pointerEvents: "stroke" }}
+                          onMouseEnter={(e) => {
+                            const rect = svgRef.current?.getBoundingClientRect();
+                            setHighlighted(agent.id);
+                            if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
+                          }}
+                          onMouseMove={(e) => {
+                            const rect = svgRef.current?.getBoundingClientRect();
+                            if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
+                          }}
+                          onMouseLeave={() => {
+                            setTooltipInfo(null);
+                            setHighlighted(null);
+                          }}
+                        />
+                      ))
+                    )}
                     {baseSegs.map((seg, si) => (
                       <path key={`hit-${si}`}
                         d={describeArc(CX, CY, r, seg.start, seg.end)}
