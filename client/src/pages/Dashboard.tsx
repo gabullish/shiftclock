@@ -57,7 +57,6 @@ function hexToRgba(hex: string, alpha: number) {
 
 interface LeverState { activeStart: number; activeEnd: number; }
 
-// ── Day descriptors for multi-day canvas ─────────────────────────────────────
 interface DayDesc {
   date: string;
   dayOfWeek: number;
@@ -89,7 +88,6 @@ function buildDays(pastDays: number, futureDays: number): DayDesc[] {
   return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const isAdmin = useAdminMode();
 
@@ -215,25 +213,7 @@ export default function Dashboard() {
             <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
           </div>
 
-          {/* Day nav */}
-          <div className="flex items-center gap-1">
-            {DAYS.map((d, i) => {
-              const hasShifts = allShifts.some(s => s.dayOfWeek === i);
-              return (
-                <button key={d} onClick={() => setSelectedDay(i)} data-testid={`day-${d}`}
-                  className={cn(
-                    "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
-                    selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                  )}
-                >
-                  {d}
-                  {hasShifts && selectedDay !== i && (
-                    <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          {/* Day nav — hidden in multi-day timeline */}
           {!isMulti && (
             <div className="flex items-center gap-1">
               {DAYS.map((d, i) => {
@@ -306,7 +286,6 @@ export default function Dashboard() {
         </header>
 
         {/* ── Online now bar ── */}
-        {selectedDay === todayUTCDay && (
         {!isMulti && selectedDay === todayUTCDay && (
           <div className="flex items-center gap-3 px-6 py-2 border-b border-border bg-card/20 shrink-0">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
@@ -329,27 +308,10 @@ export default function Dashboard() {
 
         {/* ── Main content ── */}
         <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
-            {!hasShiftsToday ? (
-              <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
-            ) : viewMode === "clock" ? (
-              <ClockVisualizer
-                agents={agents}
-                shifts={todayShifts}
-                visible={visible}
-                highlighted={highlighted}
-                setHighlighted={setHighlighted}
-                leverState={leverState}
-                utcHour={utcHour}
-                coverage={coverage}
-                maxCoverage={maxCoverage}
-                tooltipInfo={tooltipInfo}
-                setTooltipInfo={setTooltipInfo}
-                selectedDay={selectedDay}
-              />
-            ) : (
+          {isMulti ? (
+            <div className="flex-1 overflow-hidden">
               <UnifiedTimeline
-                scope={timelineScope}
+                scope="multi"
                 agents={agents}
                 allShifts={allShifts}
                 visible={visible}
@@ -358,193 +320,147 @@ export default function Dashboard() {
                 leverState={leverState}
                 utcHour={utcHour}
                 selectedDay={selectedDay}
-                onSelectDay={(dow) => {
-                  setSelectedDay(dow);
-                  if (timelineScope === "multi") setTimelineScope("day");
-                }}
+                onSelectDay={(dow) => { setSelectedDay(dow); setTimelineScope("day"); }}
               />
-            )}
-        {isMulti ? (
-          <div className="flex-1 overflow-hidden">
-            <UnifiedTimeline
-              scope="multi"
-              agents={agents}
-              allShifts={allShifts}
-              visible={visible}
-              highlighted={highlighted}
-              setHighlighted={setHighlighted}
-              leverState={leverState}
-              utcHour={utcHour}
-              selectedDay={selectedDay}
-              onSelectDay={(dow) => { setSelectedDay(dow); setTimelineScope("day"); }}
-            />
-          </div>
-        ) : (
-          <div className="flex-1 flex overflow-hidden">
-            <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
-              {!hasShiftsToday ? (
-                <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
-              ) : viewMode === "clock" ? (
-                <ClockVisualizer
-                  agents={agents}
-                  shifts={todayShifts}
-                  visible={visible}
-                  highlighted={highlighted}
-                  setHighlighted={setHighlighted}
-                  leverState={leverState}
-                  utcHour={utcHour}
-                  coverage={coverage}
-                  maxCoverage={maxCoverage}
-                  tooltipInfo={tooltipInfo}
-                  setTooltipInfo={setTooltipInfo}
-                  selectedDay={selectedDay}
-                />
-              ) : (
-                <UnifiedTimeline
-                  scope="day"
-                  agents={agents}
-                  allShifts={allShifts}
-                  visible={visible}
-                  highlighted={highlighted}
-                  setHighlighted={setHighlighted}
-                  leverState={leverState}
-                  utcHour={utcHour}
-                  selectedDay={selectedDay}
-                  onSelectDay={(dow) => setSelectedDay(dow)}
-                />
-              )}
-
-            {hasShiftsToday && (
-              <div className="flex flex-wrap gap-1.5 justify-center mt-3 max-w-2xl">
-                <button onClick={toggleAll}
-                  className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
-                  {visible.size === agents.length ? "Hide all" : "Show all"}
-                </button>
-                {agents.map(agent => (
-                  <button key={agent.id}
-                    onClick={() => toggleVisible(agent.id)}
-                    onMouseEnter={() => setHighlighted(agent.id)}
-                    onMouseLeave={() => setHighlighted(null)}
-                    data-testid={`toggle-agent-${agent.id}`}
-                    className={cn(
-                      "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
-                      visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
-                    )}
-                    style={{
-                      borderColor: agent.color + "60",
-                      backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
-                      color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
-                      boxShadow: highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
-                    }}
-                  >
-                    {agent.name}
-                  </button>
-                ))}
-                  {agents.map(agent => (
-                    <button key={agent.id}
-                      onClick={() => toggleVisible(agent.id)}
-                      onMouseEnter={() => setHighlighted(agent.id)}
-                      onMouseLeave={() => setHighlighted(null)}
-                      data-testid={`toggle-agent-${agent.id}`}
-                      className={cn(
-                        "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
-                        visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
-                      )}
-                      style={{
-                        borderColor: agent.color + "60",
-                        backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
-                        color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
-                        boxShadow: highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
-                      }}
-                    >
-                      {agent.name}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
-
-            <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
-              <div className="grid grid-cols-3 border-b border-border shrink-0">
-                <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
-                <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
-                <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${formatDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
-              </div>
-            )}
-          </div>
-
-          {/* Right panel */}
-          <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
-            <div className="grid grid-cols-3 border-b border-border shrink-0">
-              <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
-              <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
-              <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${formatDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
-            </div>
-
-            <div className="relative flex-1 min-h-0">
-              <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {DAYS[selectedDay]}</p>
-                    {!isAdmin && (
-                      <span className="flex items-center gap-1 text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5">
-                        <Lock size={8} /> View-only
-                      </span>
-                    )}
-                  </div>
-                  {isAdmin && (
-                    <button onClick={resetLevers} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
-                      <RotateCcw size={10} /> Reset
-                    </button>
-                  )}
-                </div>
-
-                {agentSummaries.filter(s => s.shifts.length > 0).map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
-                  <ShiftLever
-                    key={agent.id}
-                    agent={agent}
-                    shift={agentShifts[0]}
-                    leverState={leverState[agentShifts[0]?.id]}
-                    onLeverChange={(id, start, end) =>
-                      setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }))
-                    }
-                    highlighted={highlighted === agent.id}
-                    onHighlight={() => setHighlighted(agent.id)}
-                    onUnhighlight={() => setHighlighted(null)}
-                    baseHours={baseHours}
-                    overtimeHours={overtimeHours}
-                    releasedHours={releasedHours}
-                    isAdmin={isAdmin}
+          ) : (
+            <div className="flex-1 flex overflow-hidden">
+              <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
+                {!hasShiftsToday ? (
+                  <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
+                ) : viewMode === "clock" ? (
+                  <ClockVisualizer
+                    agents={agents}
+                    shifts={todayShifts}
+                    visible={visible}
+                    highlighted={highlighted}
+                    setHighlighted={setHighlighted}
+                    leverState={leverState}
                     utcHour={utcHour}
+                    coverage={coverage}
+                    maxCoverage={maxCoverage}
+                    tooltipInfo={tooltipInfo}
+                    setTooltipInfo={setTooltipInfo}
                     selectedDay={selectedDay}
                   />
-                ))}
-                {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (
-                  <p className="text-[11px] text-muted-foreground text-center py-2">
-                    {agentSummaries.filter(s => s.shifts.length === 0).length} agents off today
-                  </p>
+                ) : (
+                  <UnifiedTimeline
+                    scope="day"
+                    agents={agents}
+                    allShifts={allShifts}
+                    visible={visible}
+                    highlighted={highlighted}
+                    setHighlighted={setHighlighted}
+                    leverState={leverState}
+                    utcHour={utcHour}
+                    selectedDay={selectedDay}
+                    onSelectDay={(dow) => setSelectedDay(dow)}
+                  />
                 )}
-                <div className="h-8" />
-              </div>
-              <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
-            </div>
 
-            <SummaryPanel
-              agentSummaries={agentSummaries}
-              selectedDay={selectedDay}
-              zeroCoverageHours={zeroCoverageHours}
-              peakCoverageHour={peakCoverageHour}
-              totalOvertimeHours={totalOvertimeHours}
-              totalReleasedHours={totalReleasedHours}
-            />
-          </div>
+                {hasShiftsToday && (
+                  <div className="flex flex-wrap gap-1.5 justify-center mt-3 max-w-2xl">
+                    <button onClick={toggleAll}
+                      className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
+                      {visible.size === agents.length ? "Hide all" : "Show all"}
+                    </button>
+                    {agents.map(agent => (
+                      <button key={agent.id}
+                        onClick={() => toggleVisible(agent.id)}
+                        onMouseEnter={() => setHighlighted(agent.id)}
+                        onMouseLeave={() => setHighlighted(null)}
+                        data-testid={`toggle-agent-${agent.id}`}
+                        className={cn(
+                          "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
+                          visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
+                        )}
+                        style={{
+                          borderColor: agent.color + "60",
+                          backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
+                          color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
+                          boxShadow: highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
+                        }}
+                      >
+                        {agent.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right panel */}
+              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
+                <div className="grid grid-cols-3 border-b border-border shrink-0">
+                  <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
+                  <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
+                  <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${formatDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
+                </div>
+
+                <div className="relative flex-1 min-h-0">
+                  <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {DAYS[selectedDay]}</p>
+                        {!isAdmin && (
+                          <span className="flex items-center gap-1 text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5">
+                            <Lock size={8} /> View-only
+                          </span>
+                        )}
+                      </div>
+                      {isAdmin && (
+                        <button onClick={resetLevers} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
+                          <RotateCcw size={10} /> Reset
+                        </button>
+                      )}
+                    </div>
+
+                    {agentSummaries.filter(s => s.shifts.length > 0).map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
+                      <ShiftLever
+                        key={agent.id}
+                        agent={agent}
+                        shift={agentShifts[0]}
+                        leverState={leverState[agentShifts[0]?.id]}
+                        onLeverChange={(id, start, end) =>
+                          setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }))
+                        }
+                        highlighted={highlighted === agent.id}
+                        onHighlight={() => setHighlighted(agent.id)}
+                        onUnhighlight={() => setHighlighted(null)}
+                        baseHours={baseHours}
+                        overtimeHours={overtimeHours}
+                        releasedHours={releasedHours}
+                        isAdmin={isAdmin}
+                        utcHour={utcHour}
+                        selectedDay={selectedDay}
+                      />
+                    ))}
+                    {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (
+                      <p className="text-[11px] text-muted-foreground text-center py-2">
+                        {agentSummaries.filter(s => s.shifts.length === 0).length} agents off today
+                      </p>
+                    )}
+                    <div className="h-8" />
+                  </div>
+                  <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
+                </div>
+
+                <SummaryPanel
+                  agentSummaries={agentSummaries}
+                  selectedDay={selectedDay}
+                  zeroCoverageHours={zeroCoverageHours}
+                  peakCoverageHour={peakCoverageHour}
+                  totalOvertimeHours={totalOvertimeHours}
+                  totalReleasedHours={totalReleasedHours}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </TooltipProvider>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-4 text-center max-w-xs">
@@ -565,7 +481,6 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 function UnifiedTimeline({
   scope, agents, allShifts, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, onSelectDay,
@@ -897,7 +812,6 @@ function UnifiedTimeline({
                       </div>
                     );
                   })}
-                  {/* Day labels — click uses full date to derive correct dayOfWeek */}
                   {days!.map(day => {
                     const x         = day.dayIndex * 24 * PX_PER_HOUR;
                     const isWeekend = day.dayOfWeek === 0 || day.dayOfWeek === 6;
@@ -1054,7 +968,6 @@ function UnifiedTimeline({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 function ClockVisualizer({
   agents, shifts, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage, maxCoverage,
@@ -1079,8 +992,7 @@ function ClockVisualizer({
   const isToday     = selectedDay === todayUTCDay;
   const now         = new Date();
   const secAngle    = (now.getUTCSeconds() / 60) * 360 - 90;
-  // Disable ring hover interactions around the lower arc where agent toggle chips sit.
-  // This keeps chip hover/click precise while preserving ring hover on upper/side arcs.
+
   const NON_HOVER_START = 9;
   const NON_HOVER_END   = 15;
 
@@ -1232,26 +1144,6 @@ function ClockVisualizer({
                         />
                       ))
                     )}
-                    {baseSegs.map((seg, si) => (
-                      <path key={`hit-${si}`}
-                        d={describeArc(CX, CY, r, seg.start, seg.end)}
-                        fill="none" stroke="white" strokeWidth={RING_W + 6} strokeOpacity={0}
-                        style={{ cursor: "pointer", pointerEvents: "stroke" }}
-                        onMouseEnter={(e) => {
-                          const rect = svgRef.current?.getBoundingClientRect();
-                          setHighlighted(agent.id);
-                          if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
-                        }}
-                        onMouseMove={(e) => {
-                          const rect = svgRef.current?.getBoundingClientRect();
-                          if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
-                        }}
-                        onMouseLeave={() => {
-                          setTooltipInfo(null);
-                          setHighlighted(null);
-                        }}
-                      />
-                    ))}
                     {isVis && bk == null && activeSegs.map((seg, si) => {
                       const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
                       if (segEnd <= seg.start) return null;
@@ -1444,7 +1336,6 @@ function ClockVisualizer({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 function ShiftLever({
   agent, shift, leverState, onLeverChange,
   highlighted, onHighlight, onUnhighlight,
@@ -1636,7 +1527,6 @@ function ShiftLever({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 function KpiCell({ label, value, warn, accent }: { label: string; value: string; warn?: boolean; accent?: boolean }) {
   return (
     <div className="p-2.5 border-r last:border-r-0 border-border text-center">
