@@ -308,11 +308,11 @@ export default function Dashboard() {
         )}
 
         {/* ── Main content ── */}
-        <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex overflow-hidden min-h-0">
 
           {/* ── Timeline modes (day + multi): full-bleed, no centering wrapper ── */}
           {isTimeline ? (
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
               <UnifiedTimeline
                 scope={isMulti ? "multi" : "day"}
                 agents={agents}
@@ -333,7 +333,7 @@ export default function Dashboard() {
             </div>
           ) : (
             /* ── Clock mode: centred layout + right panel ── */
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden min-h-0">
               <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
                 {!hasShiftsToday ? (
                   <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
@@ -385,7 +385,7 @@ export default function Dashboard() {
               </div>
 
               {/* Right panel */}
-              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
+              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0 min-h-0">
                 <div className="grid grid-cols-3 border-b border-border shrink-0">
                   <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
                   <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
@@ -440,14 +440,16 @@ export default function Dashboard() {
                   <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
                 </div>
 
-                <SummaryPanel
-                  agentSummaries={agentSummaries}
-                  selectedDay={selectedDay}
-                  zeroCoverageHours={zeroCoverageHours}
-                  peakCoverageHour={peakCoverageHour}
-                  totalOvertimeHours={totalOvertimeHours}
-                  totalReleasedHours={totalReleasedHours}
-                />
+                <div className="shrink-0 min-h-0" style={{ maxHeight: '13rem', overflow: 'hidden' }}>
+                  <SummaryPanel
+                    agentSummaries={agentSummaries}
+                    selectedDay={selectedDay}
+                    zeroCoverageHours={zeroCoverageHours}
+                    peakCoverageHour={peakCoverageHour}
+                    totalOvertimeHours={totalOvertimeHours}
+                    totalReleasedHours={totalReleasedHours}
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -787,7 +789,7 @@ function UnifiedTimeline({
       {/* Scrollable canvas */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-x-auto overflow-y-auto"
+        className="flex-1 overflow-x-auto overflow-y-auto min-h-0"
         style={{ scrollBehavior: "auto" }}
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
@@ -1580,7 +1582,7 @@ function KpiCell({ label, value, warn, accent }: { label: string; value: string;
 
 function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCoverageHour, totalOvertimeHours, totalReleasedHours }: any) {
   return (
-    <div className="border-t border-border p-3 max-h-52 overflow-y-auto overscroll-contain bg-card/30 shrink-0">
+    <div className="border-t border-border p-3 max-h-52 overflow-y-auto overscroll-contain bg-card/30">
       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-medium">
         Coverage Report · {DAYS[selectedDay]}
       </p>
