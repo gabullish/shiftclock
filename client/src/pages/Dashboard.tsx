@@ -1020,6 +1020,20 @@ function ClockVisualizer({
   const isToday     = selectedDay === todayUTCDay;
   const now         = new Date();
   const secAngle    = (now.getUTCSeconds() / 60) * 360 - 90;
+  // Disable ring hover interactions around the lower arc where agent toggle chips sit.
+  // This keeps chip hover/click precise while preserving ring hover on upper/side arcs.
+  const NON_HOVER_START = 9;
+  const NON_HOVER_END   = 15;
+
+  const interactiveParts = (start: number, end: number) => {
+    if (end <= NON_HOVER_START || start >= NON_HOVER_END) return [{ start, end }];
+    if (start >= NON_HOVER_START && end <= NON_HOVER_END) return [];
+    if (start < NON_HOVER_START && end > NON_HOVER_END) {
+      return [{ start, end: NON_HOVER_START }, { start: NON_HOVER_END, end }];
+    }
+    if (start < NON_HOVER_START) return [{ start, end: NON_HOVER_START }];
+    return [{ start: NON_HOVER_END, end }];
+  };
 
   return (
     <div className="relative flex items-center justify-center">
