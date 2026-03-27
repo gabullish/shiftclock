@@ -293,7 +293,7 @@ export default function Profiles() {
                       title="Toggle days off: Weekend (Sat/Sun) or Midweek (Thu/Fri)"
                     >
                       <CalendarDays size={10} />
-                      {(agent.offWeekend ?? 1) === 1 ? "Off: Sat/Sun" : "Off: Thu/Fri"}
+                      {(agent.offWeekend ?? 1) === 1 ? "Day off at weekend" : "Day off at Thu/Fri"}
                     </button>
 
                     <ApplyWeekRow
