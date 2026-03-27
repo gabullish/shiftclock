@@ -21,7 +21,7 @@ const DEFAULT_COLORS = [
   "#03A9F4", // light blue
 ];
 
-// Default shifts: staggered around the clock for good coverage
+// Default shifts — endUtc values >24 represent overnight shifts (e.g. 26 = 02:00 next day)
 const DEFAULT_SHIFTS = [
   { dayRange: [1,5], startUtc: 0,  endUtc: 8  },
   { dayRange: [1,5], startUtc: 2,  endUtc: 10 },
@@ -32,9 +32,9 @@ const DEFAULT_SHIFTS = [
   { dayRange: [1,5], startUtc: 12, endUtc: 20 },
   { dayRange: [1,5], startUtc: 14, endUtc: 22 },
   { dayRange: [1,5], startUtc: 16, endUtc: 24 },
-  { dayRange: [1,5], startUtc: 18, endUtc: 26 },
-  { dayRange: [1,5], startUtc: 20, endUtc: 28 },
-  { dayRange: [1,5], startUtc: 22, endUtc: 30 },
+  { dayRange: [1,5], startUtc: 18, endUtc: 26 }, // 18:00–02:00 next day
+  { dayRange: [1,5], startUtc: 20, endUtc: 28 }, // 20:00–04:00 next day
+  { dayRange: [1,5], startUtc: 22, endUtc: 30 }, // 22:00–06:00 next day
   { dayRange: [1,5], startUtc: 1,  endUtc: 9  },
 ];
 
@@ -65,12 +65,14 @@ async function seedDefaultData() {
   for (let i = 0; i < createdAgents.length; i++) {
     const agent = createdAgents[i];
     const shiftTemplate = DEFAULT_SHIFTS[i];
+    // endUtc values >24 are intentional overnight markers — store as-is
+    const endUtc = shiftTemplate.endUtc;
     for (let day = shiftTemplate.dayRange[0]; day <= shiftTemplate.dayRange[1]; day++) {
       storage.upsertShift({
         agentId: agent.id,
         dayOfWeek: day,
         startUtc: shiftTemplate.startUtc,
-        endUtc: shiftTemplate.endUtc,
+        endUtc,
         activeStart: null,
         activeEnd: null,
         breakStart: null,
@@ -132,6 +134,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (typeof startUtc !== "number" || typeof endUtc !== "number") {
       return res.status(400).json({ message: "startUtc and endUtc required" });
     }
+    // Normalize overnight: if end <= start, add 24 to represent next-day end
     const normEnd = endUtc <= startUtc ? endUtc + 24 : endUtc;
     const updatedShifts = storage.applyWeekTemplate(agentId, startUtc, normEnd, agent.offWeekend ?? 1);
     res.json(updatedShifts);
