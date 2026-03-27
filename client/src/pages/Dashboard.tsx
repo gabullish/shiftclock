@@ -179,6 +179,8 @@ export default function Dashboard() {
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">("clock");
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">("day");
   const [tooltipInfo,    setTooltipInfo]    = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
+  const leverScrollRef = useRef<HTMLDivElement>(null);
+  useDragScroll(leverScrollRef, dragScrollEnabled);
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
@@ -476,7 +478,14 @@ export default function Dashboard() {
                 </div>
 
                 <div className="relative flex-1 min-h-0">
-                  <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
+                  <div
+                    ref={leverScrollRef}
+                    className={cn(
+                      "absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5",
+                      dragScrollEnabled && "cursor-grab"
+                    )}
+                    id="lever-scroll"
+                  >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
                         <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {DAYS[selectedDay]}</p>
@@ -601,6 +610,7 @@ function UnifiedTimeline({
 
   const { ref: scrollRef, onPointerDown, onPointerMove, onPointerUp, isDragging, stopDrag } = useDragScroll();
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  useDragScroll(scrollRef, dragScrollEnabled);
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -1470,6 +1480,9 @@ function ClockVisualizer({
           <div className="w-4 h-1.5 rounded-full bg-white flex items-center justify-center" style={{ fontSize: 5 }}>☕</div>
           <span className="text-[9px] text-muted-foreground">Break</span>
         </div>
+      </div>
+      <div className="flex justify-center py-6 text-xs uppercase tracking-widest text-amber-400 animate-pulse">
+        DRAG TO SCROLL HERE! 👇
       </div>
     </div>
   );
