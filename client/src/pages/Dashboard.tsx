@@ -166,8 +166,20 @@ export default function Dashboard() {
   const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
 
   const initDay = () => {
+    // Support ?day=N query param from overtime page navigation
+    const params = new URLSearchParams(window.location.search);
+    const dayParam = params.get("day");
+    if (dayParam != null) {
+      const d = parseInt(dayParam, 10);
+      if (d >= 0 && d <= 6) return d;
+    }
     const d = getUTCDay();
     return (d === 0 || d === 6) ? 1 : d;
+  };
+
+  const initScope = (): "day" | "multi" => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("scope") === "multi" ? "multi" : "day";
   };
 
   const [selectedDay,    setSelectedDay]    = useState<number>(initDay);
@@ -175,8 +187,11 @@ export default function Dashboard() {
   const [highlighted,    setHighlighted]    = useState<number | null>(null);
   const [leverState, setLeverState] = useOvertimeState();
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
-  const [viewMode,       setViewMode]       = useState<"clock" | "timeline">("clock");
-  const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">("day");
+  const [viewMode,       setViewMode]       = useState<"clock" | "timeline">(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("day") ? "timeline" : "clock";
+  });
+  const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">(initScope);
   const [tooltipInfo,    setTooltipInfo]    = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, AgentLog, OvertimeLog } from "@shared/schema";
 import { cn } from "@/lib/utils";
-import { ScrollText, Clock, CheckCircle, XCircle, DollarSign, ArrowRightLeft } from "lucide-react";
+import { ScrollText, Clock, CheckCircle, XCircle, DollarSign, ArrowRightLeft, ExternalLink, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 const TABS = ["Activity Log", "Overtime"] as const;
@@ -116,12 +116,63 @@ const STATUS_CONFIG = {
   paid: { label: "Paid", color: "text-green-400", bg: "bg-green-500/15 border-green-500/30", icon: DollarSign },
 } as const;
 
-const STATUS_CYCLE: Record<string, string> = {
-  pending: "approved",
-  approved: "paid",
-  paid: "pending",
-  denied: "pending",
-};
+const ALL_STATUSES = ["pending", "approved", "paid", "denied"] as const;
+
+function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const status = current as keyof typeof STATUS_CONFIG;
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
+  const StatusIcon = cfg.icon;
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={cn(
+          "flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-all hover:scale-105 cursor-pointer",
+          cfg.bg, cfg.color
+        )}
+      >
+        <StatusIcon size={11} />
+        {cfg.label}
+        <ChevronDown size={9} className="ml-0.5 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full mt-1 right-0 bg-card border border-border rounded-lg shadow-xl py-1 min-w-[120px]">
+          {ALL_STATUSES.map((s) => {
+            const c = STATUS_CONFIG[s];
+            const Icon = c.icon;
+            const isActive = s === status;
+            return (
+              <button
+                key={s}
+                onClick={() => { if (!isActive) onSelect(s); setOpen(false); }}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium transition-colors text-left",
+                  isActive ? "bg-muted/60 opacity-60 cursor-default" : "hover:bg-muted/40 cursor-pointer",
+                  c.color,
+                )}
+              >
+                <Icon size={12} />
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function OvertimePanel() {
   const { data: records = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
@@ -144,6 +195,15 @@ function OvertimePanel() {
 
   const hasRecords = sorted.length > 0;
 
+  const navigateToTimeline = (rec: OvertimeLog) => {
+    // Navigate to Dashboard timeline at the right day-of-week
+    const d = new Date(rec.date + "T00:00:00Z");
+    const dow = d.getUTCDay();
+    // wouter uses hash-based routing; put query params in the regular URL
+    // and navigate to the hash root
+    window.location.href = `${window.location.pathname}?day=${dow}&scope=day#/`;
+  };
+
   return (
     <div className="h-full overflow-y-auto overscroll-contain p-4">
       {!hasRecords ? (
@@ -158,7 +218,7 @@ function OvertimePanel() {
         <div className="max-w-4xl mx-auto space-y-2">
           {/* Summary bar */}
           <div className="grid grid-cols-4 gap-2 mb-4">
-            {(["pending", "approved", "paid", "denied"] as const).map((s) => {
+            {ALL_STATUSES.map((s) => {
               const count = sorted.filter((r) => (r.status ?? "pending") === s).length;
               const cfg = STATUS_CONFIG[s];
               return (
@@ -177,19 +237,16 @@ function OvertimePanel() {
 
           {/* Table */}
           <div className="rounded-lg border border-border overflow-hidden">
-            <div className="grid grid-cols-[1fr_100px_80px_120px_100px_80px] gap-2 px-3 py-2 border-b border-border bg-muted/30 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
+            <div className="grid grid-cols-[1fr_100px_80px_140px_110px] gap-2 px-3 py-2 border-b border-border bg-muted/30 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
               <span>Agent</span>
               <span>Date</span>
               <span>Hours</span>
               <span>Origin</span>
               <span>Status</span>
-              <span>Action</span>
             </div>
             {sorted.map((rec) => {
               const agent = agentMap.get(rec.agentId);
               const status = (rec.status ?? "pending") as keyof typeof STATUS_CONFIG;
-              const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
-              const StatusIcon = cfg.icon;
               const isDenied = status === "denied";
               const coveredBy = rec.coveredByAgentId ? agentMap.get(rec.coveredByAgentId) : null;
 
@@ -197,7 +254,7 @@ function OvertimePanel() {
                 <div
                   key={rec.id}
                   className={cn(
-                    "grid grid-cols-[1fr_100px_80px_120px_100px_80px] gap-2 px-3 py-2.5 border-b border-border last:border-b-0 items-center text-xs transition-opacity",
+                    "grid grid-cols-[1fr_100px_80px_140px_110px] gap-2 px-3 py-2.5 border-b border-border last:border-b-0 items-center text-xs transition-opacity",
                     isDenied && "opacity-40"
                   )}
                 >
@@ -218,56 +275,28 @@ function OvertimePanel() {
                     {rec.overtimeHours > 0 ? `+${rec.overtimeHours.toFixed(1)}h` : `${rec.releasedHours.toFixed(1)}h`}
                   </span>
 
-                  {/* Origin */}
+                  {/* Origin — clickable when claimed-from-agent */}
                   <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                     {rec.origin === "claimed-from-agent" ? (
-                      <>
+                      <button
+                        onClick={() => navigateToTimeline(rec)}
+                        className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
+                        title="View on timeline"
+                      >
                         <ArrowRightLeft size={10} />
-                        <span>from {coveredBy?.name ?? "agent"}</span>
-                      </>
+                        <span>from <span style={{ color: coveredBy?.color }}>{coveredBy?.name ?? "agent"}</span></span>
+                        <ExternalLink size={9} className="opacity-50" />
+                      </button>
                     ) : (
                       <span>{rec.origin ?? "manager"}</span>
                     )}
                   </div>
 
-                  {/* Status badge */}
-                  <button
-                    onClick={() =>
-                      statusMutation.mutate({
-                        id: rec.id,
-                        status: STATUS_CYCLE[status] ?? "pending",
-                      })
-                    }
-                    className={cn(
-                      "flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-all hover:scale-105 cursor-pointer",
-                      cfg.bg,
-                      cfg.color
-                    )}
-                    title={`Click to change status → ${STATUS_CYCLE[status]}`}
-                  >
-                    <StatusIcon size={11} />
-                    {cfg.label}
-                  </button>
-
-                  {/* Quick actions */}
-                  <div className="flex gap-1">
-                    {status !== "denied" && (
-                      <button
-                        onClick={() => statusMutation.mutate({ id: rec.id, status: "denied" })}
-                        className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
-                      >
-                        Deny
-                      </button>
-                    )}
-                    {status === "denied" && (
-                      <button
-                        onClick={() => statusMutation.mutate({ id: rec.id, status: "pending" })}
-                        className="text-[9px] px-1.5 py-0.5 rounded bg-muted border border-border text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        Reopen
-                      </button>
-                    )}
-                  </div>
+                  {/* Status dropdown */}
+                  <StatusDropdown
+                    current={status}
+                    onSelect={(s) => statusMutation.mutate({ id: rec.id, status: s })}
+                  />
                 </div>
               );
             })}

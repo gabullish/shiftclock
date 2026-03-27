@@ -106,6 +106,9 @@ function runMigrations() {
   // New columns for activity log
   safeAlter("ALTER TABLE agent_logs ADD COLUMN action_type TEXT");
   safeAlter("ALTER TABLE agent_logs ADD COLUMN description TEXT");
+  // New columns for approval-gated assignment
+  safeAlter("ALTER TABLE overtime_log ADD COLUMN from_shift_id INTEGER");
+  safeAlter("ALTER TABLE overtime_log ADD COLUMN day_of_week INTEGER");
 }
 
 export async function registerRoutes(httpServer: Server, app: Express) {
@@ -187,14 +190,55 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!status || !["pending", "approved", "denied", "paid"].includes(status)) {
       return res.status(400).json({ message: "Valid status required: pending|approved|denied|paid" });
     }
+    // Get current record to know old status before updating
+    const existing = storage.getOvertimeLogs().find(r => r.id === id);
+    if (!existing) return res.status(404).json({ message: "Not found" });
+    const oldStatus = existing.status ?? "pending";
+
     const updated = storage.updateOvertimeLog(id, { status, statusUpdatedAt: new Date().toISOString() });
     if (!updated) return res.status(404).json({ message: "Not found" });
 
-    // Log the status change
+    // When a claimed-from-agent record is approved, extend the receiver's shift
+    if (status === "approved" && updated.origin === "claimed-from-agent" && updated.fromShiftId) {
+      const dow = updated.dayOfWeek ?? (() => {
+        const fromShift = storage.getShifts().find(s => s.id === updated.fromShiftId);
+        return fromShift?.dayOfWeek;
+      })();
+      if (dow != null) {
+        const toShifts = storage.getShifts().filter(s => s.agentId === updated.agentId && s.dayOfWeek === dow);
+        if (toShifts.length > 0) {
+          const toShift = toShifts[0];
+          const curEnd = toShift.activeEnd ?? (toShift.endUtc <= toShift.startUtc ? toShift.endUtc + 24 : toShift.endUtc);
+          storage.updateShift(toShift.id, { activeEnd: curEnd + updated.overtimeHours });
+        }
+      }
+    }
+
+    // When reverting from approved (to pending/denied), undo the receiver's shift extension
+    if ((status === "denied" || status === "pending") && oldStatus === "approved" && updated.origin === "claimed-from-agent" && updated.fromShiftId) {
+      const dow = updated.dayOfWeek ?? (() => {
+        const fromShift = storage.getShifts().find(s => s.id === updated.fromShiftId);
+        return fromShift?.dayOfWeek;
+      })();
+      if (dow != null) {
+        const toShifts = storage.getShifts().filter(s => s.agentId === updated.agentId && s.dayOfWeek === dow);
+        if (toShifts.length > 0) {
+          const toShift = toShifts[0];
+          const normEnd = toShift.endUtc <= toShift.startUtc ? toShift.endUtc + 24 : toShift.endUtc;
+          const curEnd = toShift.activeEnd ?? normEnd;
+          // Only revert if activeEnd is currently extended beyond base
+          if (curEnd > normEnd) {
+            storage.updateShift(toShift.id, { activeEnd: Math.max(normEnd, curEnd - updated.overtimeHours) });
+          }
+        }
+      }
+    }
+
+    // Log the status change (deduped — rapid clicks collapse into one entry)
     const agents = storage.getAgents();
     const agent = agents.find(a => a.id === updated.agentId);
     if (agent) {
-      storage.createAgentLog({
+      storage.upsertRecentAgentLog({
         agentId: updated.agentId,
         date: updated.date,
         type: "overtime-status",
@@ -228,21 +272,18 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const normEnd = fromShift.endUtc <= fromShift.startUtc ? fromShift.endUtc + 24 : fromShift.endUtc;
     storage.updateShift(fromShift.id, { activeEnd: normEnd });
 
-    // Extend the receiving agent's shift on that day
-    const toShifts = storage.getShifts().filter(s => s.agentId === toAgentId && s.dayOfWeek === (dayOfWeek ?? fromShift.dayOfWeek));
-    if (toShifts.length > 0) {
-      const toShift = toShifts[0];
-      const curEnd = toShift.activeEnd ?? (toShift.endUtc <= toShift.startUtc ? toShift.endUtc + 24 : toShift.endUtc);
-      storage.updateShift(toShift.id, { activeEnd: curEnd + hours });
-    }
+    // DON'T extend receiver's shift yet — wait for manager approval.
+    // The PATCH /api/overtime/:id endpoint handles extending on "approved".
 
-    // Create overtime record for the receiving agent
+    // Create overtime record for the receiving agent (pending approval)
     const otLog = storage.upsertOvertimeLog(toAgentId, date, {
       overtimeHours: hours,
       origin: "claimed-from-agent",
       coveredByAgentId: fromShift.agentId,
       status: "pending",
       statusUpdatedAt: new Date().toISOString(),
+      fromShiftId: fromShift.id,
+      dayOfWeek: dayOfWeek ?? fromShift.dayOfWeek,
     });
 
     // Log: freed segment removed
@@ -275,7 +316,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!agentId || !date || !type) {
       return res.status(400).json({ message: "agentId, date and type are required" });
     }
-    const log = storage.createAgentLog({
+    const log = storage.upsertRecentAgentLog({
       agentId,
       date,
       type,

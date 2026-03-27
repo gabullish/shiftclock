@@ -53,6 +53,9 @@ export const overtimeLog = sqliteTable("overtime_log", {
   origin: text("origin"), // manager-extended | claimed-from-agent
   coveredByAgentId: integer("covered_by_agent_id"), // nullable — who freed the time (for claims)
   statusUpdatedAt: text("status_updated_at"),
+  // Source shift info for approval-gated assignment
+  fromShiftId: integer("from_shift_id"),
+  dayOfWeek: integer("day_of_week"),
 });
 
 export const insertOvertimeLogSchema = createInsertSchema(overtimeLog).omit({ id: true });
