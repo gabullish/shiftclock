@@ -3,6 +3,16 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 // Always use relative URLs so the app works on any host/port
 const API_BASE = "";
 
+// Read admin token from query string (set once on page load)
+const ADMIN_TOKEN = (() => {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("admin") || "";
+})();
+
+export function getAdminToken(): string {
+  return ADMIN_TOKEN;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -15,9 +25,12 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (data) headers["Content-Type"] = "application/json";
+  if (ADMIN_TOKEN) headers["x-admin-token"] = ADMIN_TOKEN;
   const res = await fetch(`${API_BASE}${url}`, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers,
     body: data ? JSON.stringify(data) : undefined,
   });
 

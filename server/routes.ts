@@ -1,8 +1,16 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { agents, shifts } from "@shared/schema";
+
+const ADMIN_TOKEN = "shiftclock-admin-2024";
+
+/** Middleware: reject non-admin requests to mutating endpoints */
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (req.headers["x-admin-token"] === ADMIN_TOKEN) return next();
+  res.status(403).json({ message: "Admin access required" });
+}
 
 // Solflare-inspired agent default colors (yellow + dark accents)
 const DEFAULT_COLORS = [
@@ -122,24 +130,24 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getAgents());
   });
 
-  app.post("/api/agents", (req, res) => {
+  app.post("/api/agents", requireAdmin, (req, res) => {
     const agent = storage.createAgent(req.body);
     res.json(agent);
   });
 
-  app.patch("/api/agents/:id", (req, res) => {
+  app.patch("/api/agents/:id", requireAdmin, (req, res) => {
     const agent = storage.updateAgent(Number(req.params.id), req.body);
     if (!agent) return res.status(404).json({ message: "Not found" });
     res.json(agent);
   });
 
-  app.delete("/api/agents/:id", (req, res) => {
+  app.delete("/api/agents/:id", requireAdmin, (req, res) => {
     storage.deleteAgent(Number(req.params.id));
     res.json({ ok: true });
   });
 
   // --- Apply week template ---
-  app.post("/api/agents/:id/apply-week", (req, res) => {
+  app.post("/api/agents/:id/apply-week", requireAdmin, (req, res) => {
     const agentId = Number(req.params.id);
     const agent = storage.getAgent(agentId);
     if (!agent) return res.status(404).json({ message: "Not found" });
@@ -158,18 +166,18 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getShifts());
   });
 
-  app.post("/api/shifts", (req, res) => {
+  app.post("/api/shifts", requireAdmin, (req, res) => {
     const shift = storage.upsertShift(req.body);
     res.json(shift);
   });
 
-  app.patch("/api/shifts/:id", (req, res) => {
+  app.patch("/api/shifts/:id", requireAdmin, (req, res) => {
     const shift = storage.updateShift(Number(req.params.id), req.body);
     if (!shift) return res.status(404).json({ message: "Not found" });
     res.json(shift);
   });
 
-  app.delete("/api/shifts/:id", (req, res) => {
+  app.delete("/api/shifts/:id", requireAdmin, (req, res) => {
     storage.deleteShift(Number(req.params.id));
     res.json({ ok: true });
   });
@@ -179,14 +187,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getOvertimeLogs());
   });
 
-  app.post("/api/overtime", (req, res) => {
+  app.post("/api/overtime", requireAdmin, (req, res) => {
     const { agentId, date, ...rest } = req.body;
     const log = storage.upsertOvertimeLog(agentId, date, rest);
     res.json(log);
   });
 
   // Update overtime record status (approve / deny / paid)
-  app.patch("/api/overtime/:id", (req, res) => {
+  app.patch("/api/overtime/:id", requireAdmin, (req, res) => {
     const id = Number(req.params.id);
     const { status } = req.body;
     if (!status || !["pending", "approved", "denied", "paid"].includes(status)) {
@@ -227,7 +235,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Assign freed overtime from one agent to another
-  app.post("/api/overtime/assign", (req, res) => {
+  app.post("/api/overtime/assign", requireAdmin, (req, res) => {
     const { fromShiftId, toAgentId, hours, date, dayOfWeek } = req.body;
     if (!fromShiftId || !toAgentId || !hours || !date) {
       return res.status(400).json({ message: "fromShiftId, toAgentId, hours, and date required" });
@@ -289,7 +297,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getAgentLogsByAgent(Number(req.params.agentId)));
   });
 
-  app.post("/api/agent-logs", (req, res) => {
+  app.post("/api/agent-logs", requireAdmin, (req, res) => {
     const { agentId, date, type, coverPct, coveredByAgentId, notes, actionType, description } = req.body;
     if (!agentId || !date || !type) {
       return res.status(400).json({ message: "agentId, date and type are required" });
