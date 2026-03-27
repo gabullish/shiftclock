@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useMemo, useState } from "react";
 
 type DragScrollContextValue = {
   enabled: boolean;
@@ -32,62 +32,5 @@ export function useDragScrollPreference() {
   const ctx = useContext(DragScrollContext);
   if (!ctx) throw new Error("useDragScrollPreference must be used within DragScrollProvider");
   return ctx;
-}
-
-export function useDragScroll<T extends HTMLElement>(
-  ref: React.RefObject<T>,
-  enabled: boolean
-) {
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !enabled) return;
-
-    let dragging = false;
-    let startX = 0;
-    let startY = 0;
-    let baseLeft = 0;
-    let baseTop = 0;
-
-    const onDown = (e: MouseEvent) => {
-      if (e.button !== 0) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, button, a, [data-no-drag-scroll='true']")) {
-        return;
-      }
-      dragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      baseLeft = el.scrollLeft;
-      baseTop = el.scrollTop;
-      el.style.cursor = "grabbing";
-      el.style.userSelect = "none";
-      e.preventDefault();
-    };
-
-    const onMove = (e: MouseEvent) => {
-      if (!dragging) return;
-      el.scrollLeft = baseLeft - (e.clientX - startX);
-      el.scrollTop = baseTop - (e.clientY - startY);
-    };
-
-    const onUp = () => {
-      if (!dragging) return;
-      dragging = false;
-      el.style.cursor = "";
-      el.style.userSelect = "";
-    };
-
-    el.addEventListener("mousedown", onDown);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-
-    return () => {
-      el.removeEventListener("mousedown", onDown);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      el.style.cursor = "";
-      el.style.userSelect = "";
-    };
-  }, [ref, enabled]);
 }
 
