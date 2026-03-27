@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
-import { useDragScroll, useDragScrollPreference } from "@/hooks/use-drag-scroll";
+import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import {
   segmentShift,
   resolveShift,
@@ -20,6 +21,78 @@ import {
   normaliseEndUtc,
   displayHour,
 } from "@/lib/shiftUtils";
+
+// Reusable drag-scroll hook with PointerCapture
+const useDragScroll = () => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const startX = useRef(0);
+  const scrollLeft = useRef(0);
+  const dragged = useRef(false);
+  const DRAG_THRESHOLD = 5;
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ref.current) return;
+    ref.current.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    startX.current = e.pageX - ref.current.offsetLeft;
+    scrollLeft.current = ref.current.scrollLeft;
+    dragged.current = false;
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging || !ref.current) return;
+    const x = e.pageX - ref.current.offsetLeft;
+    const walk = (x - startX.current) * 2.5;
+    if (Math.abs(walk) > DRAG_THRESHOLD) dragged.current = true;
+    ref.current.scrollLeft = scrollLeft.current - walk;
+  };
+
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ref.current) return;
+    ref.current.releasePointerCapture(e.pointerId);
+    setIsDragging(false);
+    dragged.current = false;
+  };
+
+  const stopDrag = (e: React.PointerEvent) => {
+    if (dragged.current) e.stopPropagation();
+  };
+
+  return {
+    ref,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerLeave: onPointerUp,
+    stopDrag,
+    isDragging,
+  };
+};
+
+// Reusable overtime state hook with localStorage persistence
+const useOvertimeState = () => {
+  const [overtimeState, setOvertimeState] = useState(() => {
+    const saved = localStorage.getItem('shiftclock-overtime');
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  useEffect(() => {
+    localStorage.setItem('shiftclock-overtime', JSON.stringify(overtimeState));
+  }, [overtimeState]);
+
+  // Force refresh on tab focus / back navigation to ensure fresh data
+  useEffect(() => {
+    const onFocus = () => {
+      const saved = localStorage.getItem('shiftclock-overtime');
+      if (saved) setOvertimeState(JSON.parse(saved));
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  return [overtimeState, setOvertimeState] as const;
+};
 
 const DAYS   = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
@@ -91,7 +164,7 @@ function buildDays(pastDays: number, futureDays: number): DayDesc[] {
 
 export default function Dashboard() {
   const isAdmin = useAdminMode();
-  const { enabled: dragScrollEnabled } = useDragScrollPreference();
+  const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
 
   const initDay = () => {
     const d = getUTCDay();
@@ -101,7 +174,7 @@ export default function Dashboard() {
   const [selectedDay,    setSelectedDay]    = useState<number>(initDay);
   const [visible,        setVisible]        = useState<Set<number>>(new Set());
   const [highlighted,    setHighlighted]    = useState<number | null>(null);
-  const [leverState,     setLeverState]     = useState<Record<number, LeverState>>({});
+  const [leverState, setLeverState] = useOvertimeState();
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">("clock");
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">("day");
@@ -111,6 +184,12 @@ export default function Dashboard() {
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
+
+  const updateShiftMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<Shift> }) =>
+      apiRequest("PATCH", `/api/shifts/${id}`, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
+  });
 
   useEffect(() => {
     if (agents.length > 0 && visible.size === 0)
@@ -125,18 +204,17 @@ export default function Dashboard() {
   const todayShifts = allShifts.filter(s => s.dayOfWeek === selectedDay);
 
   useEffect(() => {
-    setLeverState(prev => {
-      const next: Record<number, LeverState> = { ...prev };
-      for (const s of allShifts) {
-        if (next[s.id]) continue;
+    const init: Record<number, LeverState> = { ...leverState };
+    for (const s of allShifts) {
+      if (!(s.id in init)) {
         const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
-        next[s.id] = {
+        init[s.id] = {
           activeStart: s.activeStart ?? s.startUtc,
           activeEnd:   s.activeEnd   ?? normEnd,
         };
       }
-      return next;
-    });
+    }
+    setLeverState(init);
   }, [allShifts]);
 
   const toggleVisible = (id: number) => {
@@ -227,7 +305,7 @@ export default function Dashboard() {
               {DAYS.map((d, i) => {
                 const hasShifts = allShifts.some(s => s.dayOfWeek === i);
                 return (
-                  <button key={d} onClick={() => setSelectedDay(i)} data-testid={`day-${d}`}
+                  <button key={d} onClick={() => { playSoftClick(); setSelectedDay(i); }} data-testid={`day-${d}`}
                     className={cn(
                       "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
                       selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -249,7 +327,7 @@ export default function Dashboard() {
 
           <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
             <button
-              onClick={() => setViewMode("clock")}
+              onClick={() => { playSoftClick(); setViewMode("clock"); }}
               className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
                 viewMode === "clock" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
               data-testid="view-clock"
@@ -257,7 +335,7 @@ export default function Dashboard() {
               <Clock size={13} /> Clock
             </button>
             <button
-              onClick={() => setViewMode("timeline")}
+              onClick={() => { playSoftClick(); setViewMode("timeline"); }}
               className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
                 viewMode === "timeline" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
               data-testid="view-timeline"
@@ -269,7 +347,7 @@ export default function Dashboard() {
               <>
                 <span className="mx-1 h-4 w-px bg-border" />
                 <button
-                  onClick={() => setTimelineScope("day")}
+                  onClick={() => { playSoftClick(); setTimelineScope("day"); }}
                   className={cn(
                     "px-2.5 py-1 rounded text-[11px] font-medium transition-all",
                     timelineScope === "day" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
@@ -279,7 +357,7 @@ export default function Dashboard() {
                   Day
                 </button>
                 <button
-                  onClick={() => setTimelineScope("multi")}
+                  onClick={() => { playSoftClick(); setTimelineScope("multi"); }}
                   className={cn(
                     "flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition-all",
                     timelineScope === "multi" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
@@ -315,11 +393,11 @@ export default function Dashboard() {
         )}
 
         {/* ── Main content ── */}
-        <div className="flex-1 flex overflow-hidden min-h-0 min-w-0">
+        <div className="flex-1 flex overflow-hidden min-h-0">
 
           {/* ── Timeline modes (day + multi): full-bleed, no centering wrapper ── */}
           {isTimeline ? (
-            <div className="flex-1 min-h-0 overflow-auto">
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
               <UnifiedTimeline
                 scope={isMulti ? "multi" : "day"}
                 agents={agents}
@@ -340,7 +418,7 @@ export default function Dashboard() {
             </div>
           ) : (
             /* ── Clock mode: centred layout + right panel ── */
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden min-h-0">
               <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
                 {!hasShiftsToday ? (
                   <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
@@ -392,7 +470,7 @@ export default function Dashboard() {
               </div>
 
               {/* Right panel */}
-              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0">
+              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0 min-h-0">
                 <div className="grid grid-cols-3 border-b border-border shrink-0">
                   <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
                   <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
@@ -430,9 +508,11 @@ export default function Dashboard() {
                         agent={agent}
                         shift={agentShifts[0]}
                         leverState={leverState[agentShifts[0]?.id]}
-                        onLeverChange={(id, start, end) =>
-                          setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }))
-                        }
+                        onLeverChange={(id, start, end) => {
+                          playSuccess();
+                          setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }));
+                          updateShiftMutation.mutate({ id, data: { activeStart: start, activeEnd: end } });
+                        }}
                         highlighted={highlighted === agent.id}
                         onHighlight={() => setHighlighted(agent.id)}
                         onUnhighlight={() => setHighlighted(null)}
@@ -442,6 +522,8 @@ export default function Dashboard() {
                         isAdmin={isAdmin}
                         utcHour={utcHour}
                         selectedDay={selectedDay}
+                        playDragWhoosh={playDragWhoosh}
+                        playSuccess={playSuccess}
                       />
                     ))}
                     {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (
@@ -454,14 +536,16 @@ export default function Dashboard() {
                   <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
                 </div>
 
-                <SummaryPanel
-                  agentSummaries={agentSummaries}
-                  selectedDay={selectedDay}
-                  zeroCoverageHours={zeroCoverageHours}
-                  peakCoverageHour={peakCoverageHour}
-                  totalOvertimeHours={totalOvertimeHours}
-                  totalReleasedHours={totalReleasedHours}
-                />
+                <div className="shrink-0 min-h-0" style={{ maxHeight: '13rem', overflow: 'hidden' }}>
+                  <SummaryPanel
+                    agentSummaries={agentSummaries}
+                    selectedDay={selectedDay}
+                    zeroCoverageHours={zeroCoverageHours}
+                    peakCoverageHour={peakCoverageHour}
+                    totalOvertimeHours={totalOvertimeHours}
+                    totalReleasedHours={totalReleasedHours}
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -509,12 +593,11 @@ function UnifiedTimeline({
   toggleVisible: (id: number) => void;
   toggleAll: () => void;
 }) {
-  const { enabled: dragScrollEnabled } = useDragScrollPreference();
-  const PX_PER_HOUR = 44;
-  const LABEL_W     = 92;
-  const RULER_H     = 40;
+  const PX_PER_HOUR = 56;
+  const LABEL_W     = 120;
+  const RULER_H     = 50;
   const COV_H       = 14;
-  const ROW_H       = agents.length > 12 ? 22 : agents.length > 8 ? 26 : 30;
+  const ROW_H       = agents.length > 12 ? 28 : agents.length > 8 ? 32 : 38;
 
   const PAST_DAYS   = 7;
   const FUTURE_DAYS = 6;
@@ -525,7 +608,7 @@ function UnifiedTimeline({
   const CANVAS_W    = TOTAL_HOURS * PX_PER_HOUR;
   const CANVAS_H    = RULER_H + agents.length * (ROW_H + 2) + COV_H + 20;
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const { ref: scrollRef, onPointerDown, onPointerMove, onPointerUp, isDragging, stopDrag } = useDragScroll();
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   useDragScroll(scrollRef, dragScrollEnabled);
 
@@ -560,7 +643,7 @@ function UnifiedTimeline({
     ? (todayIndex * 24 + utcHour) * PX_PER_HOUR
     : utcHour * PX_PER_HOUR;
 
-  const gridHours = [0, 3, 6, 9, 12, 15, 18, 21, 24];
+  const gridHours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
 
   const renderAgentRow = (agent: Agent, dayOffset: number, dayShifts: Shift[]) => {
     const isVis  = visible.has(agent.id);
@@ -632,6 +715,7 @@ function UnifiedTimeline({
                   boxShadow: isHigh ? `0 0 8px ${agent.color}60` : undefined,
                   cursor: "default",
                 }}
+                onPointerDownCapture={stopDrag}
                 onMouseEnter={!showLabel ? (e) => {
                   const rect = scrollRef.current?.getBoundingClientRect();
                   if (rect) setBarTooltip({ text: barLabel, x: e.clientX - rect.left + scrollRef.current!.scrollLeft, y: e.clientY - rect.top });
@@ -744,7 +828,7 @@ function UnifiedTimeline({
               color: isMajor ? "hsl(var(--primary) / 0.8)" : "hsl(var(--muted-foreground))",
               whiteSpace: "nowrap",
             }}>
-              {h.toString().padStart(2, "0")}
+              {h}h
             </span>
           )}
         </div>
@@ -753,7 +837,7 @@ function UnifiedTimeline({
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 min-w-0 bg-background" onMouseLeave={() => setBarTooltip(null)}>
+    <div className="flex flex-col h-full min-h-0 bg-background" onMouseLeave={() => setBarTooltip(null)}>
       {/* Sub-header: info + Now button + agent chips (day scope) */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0 gap-3 min-h-0">
         <span className="text-[11px] text-muted-foreground shrink-0">
@@ -803,11 +887,12 @@ function UnifiedTimeline({
       {/* Scrollable canvas */}
       <div
         ref={scrollRef}
-        className={cn(
-          "flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain",
-          dragScrollEnabled && "cursor-grab"
-        )}
-        style={{ scrollBehavior: "auto" }}
+        className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain"
+        style={{ scrollBehavior: "auto", cursor: isDragging ? "grabbing" : "grab" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
 
@@ -847,7 +932,7 @@ function UnifiedTimeline({
               ) : (
                 <>
                   {Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
-                    if (h % 3 !== 0) return null;
+                    if (h % 2 !== 0) return null;
                     const x        = h * PX_PER_HOUR;
                     const localH   = h % 24;
                     const isMid    = localH === 0;
@@ -943,7 +1028,7 @@ function UnifiedTimeline({
               ))
             ) : (
               Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
-                if (h % 3 !== 0 || h % 24 === 0) return null;
+                if (h % 24 === 0 || (h % 24 !== 0 && h % 2 !== 0)) return null;
                 return (
                   <div key={h} style={{
                     position: "absolute", left: h * PX_PER_HOUR,
@@ -1065,6 +1150,18 @@ function ClockVisualizer({
     return [{ start: NON_HOVER_END, end }];
   };
 
+  // Compute contiguous zero-coverage ranges for dashed arc segments
+  const gapRanges: { start: number; end: number }[] = [];
+  let gapStart: number | null = null;
+  for (let h = 0; h <= 24; h++) {
+    const isGap = h < 24 && coverage[h] === 0;
+    if (isGap && gapStart === null) gapStart = h;
+    if (!isGap && gapStart !== null) {
+      gapRanges.push({ start: gapStart, end: h });
+      gapStart = null;
+    }
+  }
+
   return (
     <div className="relative flex items-center justify-center">
       <svg
@@ -1111,36 +1208,30 @@ function ClockVisualizer({
           );
         })}
 
-        {coverage.map((cov, h) => {
-          if (cov === 0) {
-            return (
-              <path key={`cov-${h}`}
-                d={describeArc(CX, CY, HEAT_R, h, h + 1)}
-                fill="none" stroke="rgba(230,57,70,0.35)" strokeWidth={4} strokeLinecap="butt"
-              />
-            );
-          }
-          const coveringColors: string[] = [];
-          for (const agent of agents) {
-            if (!visible.has(agent.id)) continue;
-            const agentShift = shifts.find(s => s.agentId === agent.id);
-            if (!agentShift) continue;
-            const ls    = leverState[agentShift.id];
-            const start = ls?.activeStart ?? agentShift.startUtc;
-            const end   = ls?.activeEnd   ?? normaliseEndUtc(agentShift.startUtc, agentShift.endUtc);
-            const segs  = segmentShift(start, end);
-            const covers = segs.some(seg => h >= seg.start && h < seg.end);
-            if (covers) coveringColors.push(agent.color);
-          }
-          if (coveringColors.length === 0) coveringColors.push("#FFD700");
-          const intensity = cov / maxCoverage;
-          const color = coveringColors[0];
+        {/* Outer ring: white base full circle */}
+        <circle
+          cx={CX} cy={CY} r={HEAT_R}
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth={4}
+        />
+
+        {/* Outer ring: dashed red arcs over zero-coverage hours */}
+        {gapRanges.map((gap, i) => {
+          const d = describeArc(CX, CY, HEAT_R, gap.start, gap.end);
+          if (!d) return null;
+          // strokeDasharray approximates per-hour dash segments along the arc circumference
+          const arcLen = ((gap.end - gap.start) / 24) * 2 * Math.PI * HEAT_R;
+          const dash = Math.min(6, arcLen / 3);
           return (
-            <path key={`cov-${h}`}
-              d={describeArc(CX, CY, HEAT_R, h, h + 1)}
+            <path
+              key={i}
+              d={d}
               fill="none"
-              stroke={hexToRgba(color, 0.1 + intensity * 0.55)}
-              strokeWidth={6} strokeLinecap="butt"
+              stroke="rgba(230,57,70,0.85)"
+              strokeWidth={4}
+              strokeLinecap="butt"
+              strokeDasharray={`${dash} ${dash}`}
             />
           );
         })}
@@ -1370,13 +1461,12 @@ function ClockVisualizer({
 
       <div className="absolute top-0 right-0 flex flex-col gap-1.5 bg-card/80 rounded-lg p-2 border border-border">
         <div className="flex items-center gap-1.5">
-          <div className="flex gap-px rounded-sm overflow-hidden" style={{ width: 20, height: 6 }}>
-            {agents.slice(0, 6).map((a, i) => (
-              <div key={i} style={{ flex: 1, backgroundColor: a.color, opacity: 0.8 }} />
-            ))}
-            {agents.length === 0 && <div style={{ flex: 1, backgroundColor: "#FFD700", opacity: 0.7 }} />}
-          </div>
-          <span className="text-[9px] text-muted-foreground">Coverage</span>
+          <div className="w-4 h-1" style={{ backgroundColor: "rgba(255,255,255,0.3)", borderRadius: 2 }} />
+          <span className="text-[9px] text-muted-foreground">Covered</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(230,57,70,0.85)" }} />
+          <span className="text-[9px] text-muted-foreground">Gap</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,140,0,0.9)" }} />
@@ -1402,6 +1492,7 @@ function ShiftLever({
   agent, shift, leverState, onLeverChange,
   highlighted, onHighlight, onUnhighlight,
   baseHours, overtimeHours, releasedHours, isAdmin, utcHour, selectedDay,
+  playDragWhoosh, playSuccess,
 }: {
   agent: Agent; shift: Shift | undefined;
   leverState: LeverState | undefined;
@@ -1409,6 +1500,7 @@ function ShiftLever({
   highlighted: boolean; onHighlight: () => void; onUnhighlight: () => void;
   baseHours: number; overtimeHours: number; releasedHours: number;
   isAdmin: boolean; utcHour: number; selectedDay: number;
+  playDragWhoosh: () => void; playSuccess: () => void;
 }) {
   if (!shift || !leverState) return null;
 
@@ -1437,6 +1529,7 @@ function ShiftLever({
   const onMouseDown = (e: React.MouseEvent, type: "start" | "end" | "move") => {
     if (!isAdmin) return;
     e.preventDefault();
+    playDragWhoosh();
     dragging.current = { type, startX: e.clientX, startVal: activeStart, startEnd: activeEnd };
     const snap = (h: number) => Math.round(h * 2) / 2;
     const onMove = (ev: MouseEvent) => {
@@ -1456,7 +1549,12 @@ function ShiftLever({
         onLeverChange(shift.id, ns, ns + dur);
       }
     };
-    const onUp = () => { dragging.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    const onUp = () => { 
+      playSuccess();
+      dragging.current = null; 
+      window.removeEventListener("mousemove", onMove); 
+      window.removeEventListener("mouseup", onUp); 
+    };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
@@ -1574,15 +1672,15 @@ function ShiftLever({
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
-          {isAdmin && <button onClick={() => adjustStart(-0.5)} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
-          {isAdmin && <button onClick={() => adjustStart(0.5)}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
         </div>
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{formatDuration(resolved.activeDuration)}</span>
         <div className="flex items-center gap-1">
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
-          {isAdmin && <button onClick={() => adjustEnd(-0.5)} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
-          {isAdmin && <button onClick={() => adjustEnd(0.5)}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
+          {isAdmin && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
         </div>
       </div>
     </div>

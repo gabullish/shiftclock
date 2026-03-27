@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
@@ -75,7 +76,6 @@ function getOffDays(offWeekend: number): number[] {
   return offWeekend === 1 ? [0, 6] : [4, 5];
 }
 
-// Pick any existing shift's start/end as a seed; fallback to 9/17
 function seedFromShifts(shifts: Shift[]): { start: number; end: number } {
   const s = shifts.find(sh => sh.startUtc != null && sh.endUtc != null);
   if (!s) return { start: 9, end: 17 };
@@ -88,6 +88,7 @@ function seedFromShifts(shifts: Shift[]): { start: number; end: number } {
 export default function Profiles() {
   const { toast } = useToast();
   const isAdmin = useAdminMode();
+  const { playSoftClick, playSuccess } = useSoothingSounds();
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -158,172 +159,179 @@ export default function Profiles() {
   });
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-lg font-semibold">Agents</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">{agents.length} agents · global team</p>
+    <div className="h-full overflow-y-auto">
+      <div className="p-6 max-w-5xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-lg font-semibold">Agents</h1>
+            <p className="text-xs text-muted-foreground mt-0.5">{agents.length} agents · global team</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {!isAdmin && (
+              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground border border-border rounded-md px-2 py-1">
+                <Lock size={10} />
+                View-only
+              </div>
+            )}
+            {isAdmin && (
+              <Dialog open={showCreate} onOpenChange={setShowCreate}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gap-1.5" onClick={playSoftClick} data-testid="btn-create-agent">
+                    <Plus size={14} /> Add Agent
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>New Agent</DialogTitle>
+                  </DialogHeader>
+                  <AgentForm
+                    defaultColor={DEFAULT_COLORS[agents.length % DEFAULT_COLORS.length]}
+                    onSubmit={(data) => createMutation.mutate(data)}
+                    loading={createMutation.isPending}
+                    playSuccess={playSuccess}
+                    playSoftClick={playSoftClick}
+                  />
+                </DialogContent>
+              </Dialog>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {!isAdmin && (
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground border border-border rounded-md px-2 py-1">
-              <Lock size={10} />
-              View-only
-            </div>
-          )}
-          {isAdmin && (
-            <Dialog open={showCreate} onOpenChange={setShowCreate}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5" data-testid="btn-create-agent">
-                  <Plus size={14} /> Add Agent
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-md">
-                <DialogHeader>
-                  <DialogTitle>New Agent</DialogTitle>
-                </DialogHeader>
-                <AgentForm
-                  defaultColor={DEFAULT_COLORS[agents.length % DEFAULT_COLORS.length]}
-                  onSubmit={(data) => createMutation.mutate(data)}
-                  loading={createMutation.isPending}
-                />
-              </DialogContent>
-            </Dialog>
-          )}
-        </div>
-      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        {agents.map(agent => {
-          const agentShifts = allShifts.filter(s => s.agentId === agent.id);
-          const offDays = getOffDays(agent.offWeekend ?? 1);
-          return (
-            <div
-              key={agent.id}
-              className="p-4 rounded-xl border border-border bg-card hover:border-opacity-50 transition-all"
-              style={{ borderColor: agent.color + "25" }}
-              data-testid={`card-agent-${agent.id}`}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
-                    style={{
-                      backgroundColor: agent.color + "20",
-                      border: `2px solid ${agent.color}40`,
-                      color: agent.color,
-                    }}
-                  >
-                    {agent.avatarUrl
-                      ? <img src={agent.avatarUrl} className="w-full h-full rounded-full object-cover" alt={agent.name} />
-                      : agent.name.slice(0, 2).toUpperCase()}
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">{agent.name}</p>
-                    <p className="text-[10px] text-muted-foreground">{agent.role}</p>
-                  </div>
-                </div>
-                {isAdmin && (
-                  <div className="flex items-center gap-1">
-                    <Dialog open={editingAgent?.id === agent.id} onOpenChange={open => !open && setEditingAgent(null)}>
-                      <DialogTrigger asChild>
-                        <button
-                          onClick={() => setEditingAgent(agent)}
-                          className="p-1.5 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-                          data-testid={`btn-edit-agent-${agent.id}`}
-                        >
-                          <Pencil size={13} />
-                        </button>
-                      </DialogTrigger>
-                      <DialogContent className="max-w-md">
-                        <DialogHeader>
-                          <DialogTitle>Edit {agent.name}</DialogTitle>
-                        </DialogHeader>
-                        {editingAgent?.id === agent.id && (
-                          <AgentForm
-                            defaultValues={{
-                              name: agent.name,
-                              color: agent.color,
-                              timezone: agent.timezone,
-                              role: agent.role,
-                              avatarUrl: agent.avatarUrl || "",
-                            }}
-                            onSubmit={(data) => updateMutation.mutate({ id: agent.id, data })}
-                            loading={updateMutation.isPending}
-                          />
-                        )}
-                      </DialogContent>
-                    </Dialog>
-
-                    <button
-                      onClick={() => deleteMutation.mutate(agent.id)}
-                      className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
-                      data-testid={`btn-delete-agent-${agent.id}`}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-8">
+          {agents.map(agent => {
+            const agentShifts = allShifts.filter(s => s.agentId === agent.id);
+            const offDays = getOffDays(agent.offWeekend ?? 1);
+            return (
+              <div
+                key={agent.id}
+                className="p-4 rounded-xl border border-border bg-card hover:border-opacity-50 transition-all"
+                style={{ borderColor: agent.color + "25" }}
+                data-testid={`card-agent-${agent.id}`}
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
+                      style={{
+                        backgroundColor: agent.color + "20",
+                        border: `2px solid ${agent.color}40`,
+                        color: agent.color,
+                      }}
                     >
-                      <Trash2 size={13} />
+                      {agent.avatarUrl
+                        ? <img src={agent.avatarUrl} className="w-full h-full rounded-full object-cover" alt={agent.name} />
+                        : agent.name.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">{agent.name}</p>
+                      <p className="text-[10px] text-muted-foreground">{agent.role}</p>
+                    </div>
+                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-1">
+                      <Dialog open={editingAgent?.id === agent.id} onOpenChange={open => !open && setEditingAgent(null)}>
+                        <DialogTrigger asChild>
+                          <button
+                            onClick={() => { playSoftClick(); setEditingAgent(agent); }}
+                            className="p-1.5 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+                            data-testid={`btn-edit-agent-${agent.id}`}
+                          >
+                            <Pencil size={13} />
+                          </button>
+                        </DialogTrigger>
+                        <DialogContent className="max-w-md">
+                          <DialogHeader>
+                            <DialogTitle>Edit {agent.name}</DialogTitle>
+                          </DialogHeader>
+                          {editingAgent?.id === agent.id && (
+                            <AgentForm
+                              defaultValues={{
+                                name: agent.name,
+                                color: agent.color,
+                                timezone: agent.timezone,
+                                role: agent.role,
+                                avatarUrl: agent.avatarUrl || "",
+                              }}
+                              onSubmit={(data) => updateMutation.mutate({ id: agent.id, data })}
+                              loading={updateMutation.isPending}
+                              playSuccess={playSuccess}
+                              playSoftClick={playSoftClick}
+                            />
+                          )}
+                        </DialogContent>
+                      </Dialog>
+
+                      <button
+                        onClick={() => { playSoftClick(); deleteMutation.mutate(agent.id); }}
+                        className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                        data-testid={`btn-delete-agent-${agent.id}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Clock size={11} className="text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground font-mono">{agent.timezone}</span>
+                  <span className="text-[10px] text-muted-foreground ml-1">
+                    ({getLocalTime(agent.timezone)})
+                  </span>
+                </div>
+
+                {isAdmin && (
+                  <div className="flex items-center justify-between mb-3 gap-2">
+                    <button
+                      onClick={() => { playSoftClick(); toggleOffDayMutation.mutate({ id: agent.id, offWeekend: (agent.offWeekend ?? 1) === 1 ? 0 : 1 }); }}
+                      className={cn(
+                        "flex items-center gap-1.5 text-[9px] px-2 py-1 rounded-md border transition-all font-medium",
+                        (agent.offWeekend ?? 1) === 1
+                          ? "border-border bg-muted text-muted-foreground"
+                          : "border-primary/40 bg-primary/10 text-primary"
+                      )}
+                      title="Toggle days off: Weekend (Sat/Sun) or Midweek (Thu/Fri)"
+                    >
+                      <CalendarDays size={10} />
+                      {(agent.offWeekend ?? 1) === 1 ? "Off: Sat/Sun" : "Off: Thu/Fri"}
                     </button>
+
+                    <ApplyWeekRow
+                      agentId={agent.id}
+                      agentShifts={agentShifts}
+                      offWeekend={agent.offWeekend ?? 1}
+                      onApply={(startUtc, endUtc) => applyWeekMutation.mutate({ id: agent.id, startUtc, endUtc })}
+                      loading={applyWeekMutation.isPending}
+                      playSuccess={playSuccess}
+                    />
                   </div>
                 )}
-              </div>
 
-              <div className="flex items-center gap-1.5 mb-2">
-                <Clock size={11} className="text-muted-foreground" />
-                <span className="text-[10px] text-muted-foreground font-mono">{agent.timezone}</span>
-                <span className="text-[10px] text-muted-foreground ml-1">
-                  ({getLocalTime(agent.timezone)})
-                </span>
-              </div>
-
-              {isAdmin && (
-                <div className="flex items-center justify-between mb-3 gap-2">
-                  <button
-                    onClick={() => toggleOffDayMutation.mutate({ id: agent.id, offWeekend: (agent.offWeekend ?? 1) === 1 ? 0 : 1 })}
-                    className={cn(
-                      "flex items-center gap-1.5 text-[9px] px-2 py-1 rounded-md border transition-all font-medium",
-                      (agent.offWeekend ?? 1) === 1
-                        ? "border-border bg-muted text-muted-foreground"
-                        : "border-primary/40 bg-primary/10 text-primary"
-                    )}
-                    title="Toggle days off: Weekend (Sat/Sun) or Midweek (Thu/Fri)"
-                  >
-                    <CalendarDays size={10} />
-                    {(agent.offWeekend ?? 1) === 1 ? "Off: Sat/Sun" : "Off: Thu/Fri"}
-                  </button>
-
-                  <ApplyWeekRow
-                    agentId={agent.id}
-                    agentShifts={agentShifts}
-                    offWeekend={agent.offWeekend ?? 1}
-                    onApply={(startUtc, endUtc) => applyWeekMutation.mutate({ id: agent.id, startUtc, endUtc })}
-                    loading={applyWeekMutation.isPending}
-                  />
+                <div className="flex flex-wrap gap-1">
+                  {DAYS.map((day, di) => {
+                    const shift = agentShifts.find(s => s.dayOfWeek === di);
+                    const isDayOff = offDays.includes(di);
+                    return (
+                      <ShiftPill
+                        key={di}
+                        day={day}
+                        dayIdx={di}
+                        shift={shift}
+                        agentId={agent.id}
+                        color={agent.color}
+                        isAdmin={isAdmin}
+                        isDayOff={isDayOff}
+                        agentShifts={agentShifts}
+                        onUpsert={upsertShiftMutation.mutate}
+                        onUpdateShift={(id, data) => updateShiftMutation.mutate({ id, data })}
+                      />
+                    );
+                  })}
                 </div>
-              )}
-
-              <div className="flex flex-wrap gap-1">
-                {DAYS.map((day, di) => {
-                  const shift = agentShifts.find(s => s.dayOfWeek === di);
-                  const isDayOff = offDays.includes(di);
-                  return (
-                    <ShiftPill
-                      key={di}
-                      day={day}
-                      dayIdx={di}
-                      shift={shift}
-                      agentId={agent.id}
-                      color={agent.color}
-                      isAdmin={isAdmin}
-                      isDayOff={isDayOff}
-                      agentShifts={agentShifts}
-                      onUpsert={upsertShiftMutation.mutate}
-                      onUpdateShift={(id, data) => updateShiftMutation.mutate({ id, data })}
-                    />
-                  );
-                })}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -342,17 +350,16 @@ function getLocalTime(tz: string) {
   }
 }
 
-// ── Apply Week Row ───────────────────────────────────────────────────────────────────────────
 function ApplyWeekRow({
-  agentId, agentShifts, offWeekend, onApply, loading,
+  agentId, agentShifts, offWeekend, onApply, loading, playSuccess,
 }: {
   agentId: number;
   agentShifts: Shift[];
   offWeekend: number;
   onApply: (startUtc: number, endUtc: number) => void;
   loading: boolean;
+  playSuccess: () => void;
 }) {
-  // Seed from agent's existing shifts so the default is never wrong
   const seed = seedFromShifts(agentShifts);
   const [startH, setStartH] = useState<number>(seed.start);
   const [endH, setEndH]     = useState<number>(seed.end);
@@ -387,7 +394,7 @@ function ApplyWeekRow({
         <span className="text-[9px] text-amber-400 font-mono" title={`${dur}h overnight`}>+1 {dur}h</span>
       )}
       <button
-        onClick={() => onApply(startH, endH)}
+        onClick={() => { playSuccess(); onApply(startH, endH); }}
         disabled={loading || dur <= 0}
         className="text-[9px] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
       >
@@ -398,17 +405,20 @@ function ApplyWeekRow({
   );
 }
 
-// ── Agent Form ──────────────────────────────────────────────────────────────────────────────
 function AgentForm({
   defaultValues,
   defaultColor = "#FFD700",
   onSubmit,
   loading,
+  playSuccess,
+  playSoftClick,
 }: {
   defaultValues?: AgentFormData;
   defaultColor?: string;
   onSubmit: (data: AgentFormData) => void;
   loading: boolean;
+  playSuccess: () => void;
+  playSoftClick: () => void;
 }) {
   const [form, setForm] = useState<AgentFormData>({
     name: defaultValues?.name || "",
@@ -421,7 +431,7 @@ function AgentForm({
   const set = (k: keyof AgentFormData, v: string) => setForm(f => ({ ...f, [k]: v }));
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSubmit(form); }} className="space-y-4">
+    <form onSubmit={(e) => { e.preventDefault(); playSuccess(); onSubmit(form); }} className="space-y-4">
       <div className="space-y-1.5">
         <Label className="text-xs">Name</Label>
         <Input
@@ -460,7 +470,7 @@ function AgentForm({
                 <button
                   key={c}
                   type="button"
-                  onClick={() => set("color", c)}
+                  onClick={() => { playSoftClick(); set("color", c); }}
                   className="w-4 h-4 rounded-full border border-transparent hover:scale-110 transition-transform"
                   style={{ backgroundColor: c, borderColor: form.color === c ? "white" : "transparent" }}
                 />
@@ -514,7 +524,6 @@ function AgentForm({
   );
 }
 
-// ── Shift Pill ──────────────────────────────────────────────────────────────────────────────
 function ShiftPill({
   day, dayIdx, shift, agentId, color, isAdmin, isDayOff,
   agentShifts, onUpsert, onUpdateShift,
@@ -526,15 +535,13 @@ function ShiftPill({
   color: string;
   isAdmin: boolean;
   isDayOff: boolean;
-  agentShifts: Shift[];          // all shifts for this agent, used to seed empty pills
+  agentShifts: Shift[];
   onUpsert: (data: any) => void;
   onUpdateShift: (id: number, data: any) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [settingBreak, setSettingBreak] = useState(false);
 
-  // If this pill has a saved shift, seed from it.
-  // If not, seed from any other shift this agent has (so empty days start at the agent's time).
   function resolveDefaults() {
     if (shift) {
       return {
@@ -553,7 +560,6 @@ function ShiftPill({
     shift?.breakStart != null ? String(((shift.breakStart % 24) + 24) % 24) : ""
   );
 
-  // Always re-seed from the current shift when opening the editor
   const openEdit = () => {
     const d = resolveDefaults();
     setStartH(d.s);
@@ -596,7 +602,6 @@ function ShiftPill({
   const showBreakWarning = shift && savedBreak != null &&
     isBreakBadTiming(savedBreak, shift.startUtc, shift.endUtc);
 
-  // ── Editing inline ──
   if (editing && isAdmin) {
     return (
       <div className="flex flex-col gap-1 text-[9px] bg-muted rounded p-1.5 min-w-[130px]">
@@ -634,7 +639,6 @@ function ShiftPill({
     );
   }
 
-  // ── Break time selector ──
   if (settingBreak && isAdmin && shift) {
     const dur2 = shiftDurH(shift.startUtc, shift.endUtc);
     const breakOptions = HALF_HOUR_OPTIONS.filter(h => {
