@@ -1109,11 +1109,7 @@ function ClockVisualizer({
           const strokeW = isHigh ? RING_W + 2 : RING_W;
 
           return (
-            <g key={agent.id}
-              onMouseEnter={() => setHighlighted(agent.id)}
-              onMouseLeave={() => setHighlighted(null)}
-              style={{ cursor: "pointer" }}
-            >
+            <g key={agent.id} style={{ pointerEvents: "none" }}>
               <circle cx={CX} cy={CY} r={r} fill="none"
                 stroke={hexToRgba(agent.color, 0.12)} strokeWidth={RING_W}
               />
@@ -1138,18 +1134,27 @@ function ClockVisualizer({
                         d={describeArc(CX, CY, r, seg.start, seg.end)}
                         fill="none" stroke={hexToRgba(agent.color, isVis ? 0.22 : 0.06)}
                         strokeWidth={RING_W}
+                        style={{ pointerEvents: "none" }}
                       />
                     ))}
                     {baseSegs.map((seg, si) => (
                       <path key={`hit-${si}`}
                         d={describeArc(CX, CY, r, seg.start, seg.end)}
                         fill="none" stroke="white" strokeWidth={RING_W + 6} strokeOpacity={0}
-                        style={{ cursor: "pointer", pointerEvents: "all" }}
+                        style={{ cursor: "pointer", pointerEvents: "stroke" }}
                         onMouseEnter={(e) => {
+                          const rect = svgRef.current?.getBoundingClientRect();
+                          setHighlighted(agent.id);
+                          if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
+                        }}
+                        onMouseMove={(e) => {
                           const rect = svgRef.current?.getBoundingClientRect();
                           if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
                         }}
-                        onMouseLeave={() => setTooltipInfo(null)}
+                        onMouseLeave={() => {
+                          setTooltipInfo(null);
+                          setHighlighted(null);
+                        }}
                       />
                     ))}
                     {isVis && bk == null && activeSegs.map((seg, si) => {
@@ -1159,6 +1164,7 @@ function ClockVisualizer({
                         <path key={`active-${si}`}
                           d={describeArc(CX, CY, r, seg.start, segEnd)}
                           fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
+                          style={{ pointerEvents: "none" }}
                         />
                       );
                     })}
@@ -1173,15 +1179,18 @@ function ClockVisualizer({
                           {beforeEnd > seg.start && (
                             <path d={describeArc(CX, CY, r, seg.start, beforeEnd)}
                               fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
+                              style={{ pointerEvents: "none" }}
                             />
                           )}
                           {afterStart < segEnd && (
                             <path d={describeArc(CX, CY, r, afterStart, segEnd)}
                               fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
+                              style={{ pointerEvents: "none" }}
                             />
                           )}
                           <path d={describeArc(CX, CY, r, bk, Math.min(bkEnd, segEnd))}
                             fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth={strokeW + 2}
+                            style={{ pointerEvents: "none" }}
                           />
                           {(() => {
                             const p = polarToCartesian(CX, CY, r, hourToAngle(bk + 0.25));
@@ -1206,7 +1215,7 @@ function ClockVisualizer({
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
                           fill="none" stroke={agent.color} strokeWidth={strokeW + 2}
                           strokeOpacity={isHigh ? 1 : 0.9}
-                          style={{ filter: `drop-shadow(0 0 3px white) drop-shadow(0 0 6px ${agent.color})` }}
+                          style={{ filter: `drop-shadow(0 0 3px white) drop-shadow(0 0 6px ${agent.color})`, pointerEvents: "none" }}
                         />
                       ));
                     })()}
@@ -1217,6 +1226,7 @@ function ClockVisualizer({
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
                           fill="none" stroke="rgba(255,140,0,0.85)"
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
+                          style={{ pointerEvents: "none" }}
                         />
                       ));
                     })()}
