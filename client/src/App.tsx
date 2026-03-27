@@ -17,7 +17,7 @@ export default function App() {
         <Router hook={useHashLocation}>
           <div className="flex h-screen overflow-hidden bg-background">
             <Sidebar />
-            <main className="flex-1 overflow-y-auto overscroll-contain">
+            <main className="flex-1 overflow-hidden">
               <Switch>
                 <Route path="/" component={Dashboard} />
                 <Route path="/profiles" component={Profiles} />
