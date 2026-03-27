@@ -198,8 +198,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const updated = storage.updateOvertimeLog(id, { status, statusUpdatedAt: new Date().toISOString() });
     if (!updated) return res.status(404).json({ message: "Not found" });
 
-    // When a claimed-from-agent record is approved, extend the receiver's shift
-    if (status === "approved" && updated.origin === "claimed-from-agent" && updated.fromShiftId) {
+    // When a claimed-from-agent record is approved (and wasn't already), extend the receiver's shift
+    if (status === "approved" && oldStatus !== "approved" && updated.origin === "claimed-from-agent" && updated.fromShiftId) {
       const dow = updated.dayOfWeek ?? (() => {
         const fromShift = storage.getShifts().find(s => s.id === updated.fromShiftId);
         return fromShift?.dayOfWeek;
