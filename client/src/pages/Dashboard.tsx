@@ -201,7 +201,8 @@ export default function Dashboard() {
     setLeverState(reset);
   };
 
-  const isMulti = viewMode === "timeline" && timelineScope === "multi";
+  const isMulti    = viewMode === "timeline" && timelineScope === "multi";
+  const isTimeline = viewMode === "timeline";
 
   return (
     <TooltipProvider>
@@ -285,7 +286,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* ── Online now bar ── */}
+        {/* ── Online now bar — clock + day timeline only ── */}
         {!isMulti && selectedDay === todayUTCDay && (
           <div className="flex items-center gap-3 px-6 py-2 border-b border-border bg-card/20 shrink-0">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
@@ -308,10 +309,12 @@ export default function Dashboard() {
 
         {/* ── Main content ── */}
         <div className="flex-1 flex overflow-hidden">
-          {isMulti ? (
+
+          {/* ── Timeline modes (day + multi): full-bleed, no centering wrapper ── */}
+          {isTimeline ? (
             <div className="flex-1 overflow-hidden">
               <UnifiedTimeline
-                scope="multi"
+                scope={isMulti ? "multi" : "day"}
                 agents={agents}
                 allShifts={allShifts}
                 visible={visible}
@@ -320,15 +323,21 @@ export default function Dashboard() {
                 leverState={leverState}
                 utcHour={utcHour}
                 selectedDay={selectedDay}
-                onSelectDay={(dow) => { setSelectedDay(dow); setTimelineScope("day"); }}
+                onSelectDay={(dow) => {
+                  setSelectedDay(dow);
+                  if (isMulti) setTimelineScope("day");
+                }}
+                toggleVisible={toggleVisible}
+                toggleAll={toggleAll}
               />
             </div>
           ) : (
+            /* ── Clock mode: centred layout + right panel ── */
             <div className="flex-1 flex overflow-hidden">
               <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
                 {!hasShiftsToday ? (
                   <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
-                ) : viewMode === "clock" ? (
+                ) : (
                   <ClockVisualizer
                     agents={agents}
                     shifts={todayShifts}
@@ -342,19 +351,6 @@ export default function Dashboard() {
                     tooltipInfo={tooltipInfo}
                     setTooltipInfo={setTooltipInfo}
                     selectedDay={selectedDay}
-                  />
-                ) : (
-                  <UnifiedTimeline
-                    scope="day"
-                    agents={agents}
-                    allShifts={allShifts}
-                    visible={visible}
-                    highlighted={highlighted}
-                    setHighlighted={setHighlighted}
-                    leverState={leverState}
-                    utcHour={utcHour}
-                    selectedDay={selectedDay}
-                    onSelectDay={(dow) => setSelectedDay(dow)}
                   />
                 )}
 
@@ -484,6 +480,7 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
 function UnifiedTimeline({
   scope, agents, allShifts, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, onSelectDay,
+  toggleVisible, toggleAll,
 }: {
   scope: "day" | "multi";
   agents: Agent[];
@@ -495,6 +492,8 @@ function UnifiedTimeline({
   utcHour: number;
   selectedDay: number;
   onSelectDay: (dow: number) => void;
+  toggleVisible: (id: number) => void;
+  toggleAll: () => void;
 }) {
   const PX_PER_HOUR = 44;
   const LABEL_W     = 92;
@@ -547,7 +546,7 @@ function UnifiedTimeline({
 
   const gridHours = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 
-  const renderAgentRow = (agent: Agent, dayOffset: number, dayShifts: Shift[], coverageForDay?: number[]) => {
+  const renderAgentRow = (agent: Agent, dayOffset: number, dayShifts: Shift[]) => {
     const isVis  = visible.has(agent.id);
     const isHigh = highlighted === agent.id;
 
@@ -739,20 +738,53 @@ function UnifiedTimeline({
 
   return (
     <div className="flex flex-col h-full bg-background" onMouseLeave={() => setBarTooltip(null)}>
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
-        <span className="text-[11px] text-muted-foreground">
+      {/* Sub-header: info + Now button + agent chips (day scope) */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0 gap-3 min-h-0">
+        <span className="text-[11px] text-muted-foreground shrink-0">
           {scope === "multi"
             ? `${days![0].dateLabel} — ${days![days!.length - 1].dateLabel} · UTC`
-            : `${DAY_FULL[selectedDay]} · UTC · all times`}
+            : `${DAY_FULL[selectedDay]} · UTC`}
         </span>
+
+        {/* Agent toggle chips — only in day timeline */}
+        {scope === "day" && (
+          <div className="flex items-center gap-1 flex-wrap overflow-hidden">
+            <button onClick={toggleAll}
+              className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all shrink-0">
+              {visible.size === agents.length ? "Hide all" : "Show all"}
+            </button>
+            {agents.map(agent => (
+              <button key={agent.id}
+                onClick={() => toggleVisible(agent.id)}
+                onMouseEnter={() => setHighlighted(agent.id)}
+                onMouseLeave={() => setHighlighted(null)}
+                data-testid={`toggle-agent-${agent.id}`}
+                className={cn(
+                  "text-[10px] px-2 py-0.5 rounded-full border font-medium transition-all duration-150 shrink-0",
+                  visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
+                )}
+                style={{
+                  borderColor: agent.color + "60",
+                  backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
+                  color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
+                  boxShadow: highlighted === agent.id ? `0 0 6px ${agent.color}50` : undefined,
+                }}
+              >
+                {agent.name}
+              </button>
+            ))}
+          </div>
+        )}
+
         <button
           onClick={scrollToNow}
-          className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-md bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-all font-medium"
+          className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-md bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-all font-medium shrink-0"
         >
           <Clock size={11} /> Now
         </button>
       </div>
 
+      {/* Scrollable canvas */}
       <div
         ref={scrollRef}
         className="flex-1 overflow-x-auto overflow-y-auto"
@@ -760,6 +792,7 @@ function UnifiedTimeline({
       >
         <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
 
+          {/* Sticky agent label column */}
           <div style={{
             position: "sticky", left: 0,
             width: LABEL_W, minWidth: LABEL_W, zIndex: 20,
@@ -785,8 +818,10 @@ function UnifiedTimeline({
             </div>
           </div>
 
+          {/* Canvas */}
           <div style={{ position: "relative", width: CANVAS_W, flexShrink: 0 }}>
 
+            {/* Ruler */}
             <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: RULER_H, zIndex: 10, borderBottom: "1px solid hsl(var(--border) / 0.6)" }}>
               {scope === "day" ? (
                 renderDayRuler(0)
@@ -850,6 +885,7 @@ function UnifiedTimeline({
               )}
             </div>
 
+            {/* Current hour highlight */}
             {scope === "day" ? (
               <div style={{
                 position: "absolute",
@@ -877,6 +913,7 @@ function UnifiedTimeline({
               })
             )}
 
+            {/* Grid lines */}
             {scope === "day" ? (
               gridHours.map(h => (
                 <div key={h} style={{
@@ -898,6 +935,7 @@ function UnifiedTimeline({
               })
             )}
 
+            {/* Agent rows */}
             {agents.map((agent, ai) => {
               const rowTop = RULER_H + ai * (ROW_H + 2);
               const isHigh = highlighted === agent.id;
@@ -928,6 +966,7 @@ function UnifiedTimeline({
               );
             })}
 
+            {/* Coverage strip */}
             <div style={{
               position: "absolute",
               top: RULER_H + agents.length * (ROW_H + 2) + 4,
@@ -939,6 +978,7 @@ function UnifiedTimeline({
               }
             </div>
 
+            {/* Now line */}
             <div style={{
               position: "absolute", left: nowCanvasPx,
               top: 0, bottom: 0, width: 1,
