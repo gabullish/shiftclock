@@ -8,6 +8,7 @@ import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X } from "lucide-reac
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/useSoothingSounds";
+import { toast } from "@/hooks/use-toast";
 import {
   segmentShift,
   resolveShift,
@@ -19,6 +20,7 @@ import {
   shiftDuration,
   normaliseEndUtc,
   displayHour,
+  getPendingClaimForShift,
 } from "@/lib/shiftUtils";
 
 // Reusable drag-scroll hook with PointerCapture
@@ -161,6 +163,11 @@ function buildDays(pastDays: number, futureDays: number): DayDesc[] {
   return result;
 }
 
+function errorMessageFromUnknown(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return "Unexpected error";
+}
+
 export default function Dashboard() {
   const isAdmin = useAdminMode();
   const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
@@ -202,6 +209,13 @@ export default function Dashboard() {
     mutationFn: ({ id, data }: { id: number; data: Partial<Shift> }) =>
       apiRequest("PATCH", `/api/shifts/${id}`, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
+    onError: (error) => {
+      toast({
+        title: "Failed to update shift",
+        description: errorMessageFromUnknown(error),
+        variant: "destructive",
+      });
+    },
   });
 
   useEffect(() => {
@@ -276,13 +290,7 @@ export default function Dashboard() {
       releasedHours += resolved.shrinkHours;
 
       // Also include pending claim hours as "released"
-      const pendingClaimForShift = otRecords.find(
-        r => r.fromShiftId === s.id
-          && r.origin === "claimed-from-agent"
-          && r.status === "pending"
-          && r.coverStartUtc != null
-          && r.coverEndUtc != null
-      );
+      const pendingClaimForShift = getPendingClaimForShift(s, otRecords);
       if (pendingClaimForShift) {
         releasedHours += (pendingClaimForShift.coverEndUtc! - pendingClaimForShift.coverStartUtc!);
       }
@@ -338,12 +346,26 @@ export default function Dashboard() {
       setAssignModal(null);
       playSuccess();
     },
+    onError: (error) => {
+      toast({
+        title: "Failed to assign overtime",
+        description: errorMessageFromUnknown(error),
+        variant: "destructive",
+      });
+    },
   });
 
   const logActivityMutation = useMutation({
     mutationFn: (body: { agentId: number; date: string; type: string; actionType: string; description: string }) =>
       apiRequest("POST", "/api/agent-logs", body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] }),
+    onError: (error) => {
+      toast({
+        title: "Failed to write activity log",
+        description: errorMessageFromUnknown(error),
+        variant: "destructive",
+      });
+    },
   });
 
   const openAssignModal = (shift: Shift, agent: Agent, freedHours: number) => {
@@ -792,13 +814,7 @@ function UnifiedTimeline({
       const barLabel = `${agent.name}: ${shiftLabel(shift.startUtc, shift.endUtc)} · ${formatDuration(resolved.baseDuration)}`;
 
       // Check if there's a pending OT record claiming a portion of this shift
-      const pendingClaimForShift = otRecords.find(
-        r => r.fromShiftId === shift.id
-          && r.origin === "claimed-from-agent"
-          && r.status === "pending"
-          && r.coverStartUtc != null
-          && r.coverEndUtc != null
-      );
+      const pendingClaimForShift = getPendingClaimForShift(shift, otRecords);
 
       return (
         <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
@@ -1488,13 +1504,7 @@ function ClockVisualizer({
                 const as_ = ls?.activeStart ?? shift.startUtc;
                 const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
                 const resolved = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
-                const pendingClaimForShift = otRecords.find(
-                  r => r.fromShiftId === shift.id
-                    && r.origin === "claimed-from-agent"
-                    && r.status === "pending"
-                    && r.coverStartUtc != null
-                    && r.coverEndUtc != null
-                );
+                const pendingClaimForShift = getPendingClaimForShift(shift, otRecords);
                 const bk = resolved.breakStart;
                 const { pct, otPct } = isToday
                   ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)

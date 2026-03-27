@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -23,43 +23,56 @@ export type Agent = typeof agents.$inferSelect;
 
 // Shifts table — per agent, per weekday (0=Sun, 1=Mon ... 6=Sat)
 // start/end are hours in UTC (0–23.99, endUtc can exceed 24 for overnight e.g. 23–7 stored as 23–31)
-export const shifts = sqliteTable("shifts", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  agentId: integer("agent_id").notNull(),
-  dayOfWeek: integer("day_of_week").notNull(), // 0-6
-  startUtc: real("start_utc").notNull(), // 0..23.99
-  endUtc: real("end_utc").notNull(),     // can exceed 24 for overnight (e.g. 31 = 07:00 next day)
-  // Lever adjustments for today's override
-  activeStart: real("active_start"),   // null = same as startUtc
-  activeEnd: real("active_end"),       // null = same as endUtc
-  // Break: 30-min fixed duration, stored as UTC hour float (null = no break set)
-  breakStart: real("break_start"),
-});
+export const shifts = sqliteTable(
+  "shifts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    agentId: integer("agent_id").notNull(),
+    dayOfWeek: integer("day_of_week").notNull(), // 0-6
+    startUtc: real("start_utc").notNull(), // 0..23.99
+    endUtc: real("end_utc").notNull(),     // can exceed 24 for overnight (e.g. 31 = 07:00 next day)
+    // Lever adjustments for today's override
+    activeStart: real("active_start"),   // null = same as startUtc
+    activeEnd: real("active_end"),       // null = same as endUtc
+    // Break: 30-min fixed duration, stored as UTC hour float (null = no break set)
+    breakStart: real("break_start"),
+  },
+  (table) => ({
+    shiftsAgentDayIdx: index("idx_shifts_agent_day").on(table.agentId, table.dayOfWeek),
+  })
+);
 
 export const insertShiftSchema = createInsertSchema(shifts).omit({ id: true });
 export type InsertShift = z.infer<typeof insertShiftSchema>;
 export type Shift = typeof shifts.$inferSelect;
 
 // Overtime log
-export const overtimeLog = sqliteTable("overtime_log", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  agentId: integer("agent_id").notNull(),
-  date: text("date").notNull(), // ISO date string
-  overtimeHours: real("overtime_hours").notNull().default(0),
-  releasedHours: real("released_hours").notNull().default(0),
-  note: text("note"),
-  // New columns for approval flow
-  status: text("status").notNull().default("pending"), // pending | approved | denied | paid
-  origin: text("origin"), // manager-extended | claimed-from-agent
-  coveredByAgentId: integer("covered_by_agent_id"), // nullable — who freed the time (for claims)
-  statusUpdatedAt: text("status_updated_at"),
-  // Source shift info for approval-gated assignment
-  fromShiftId: integer("from_shift_id"),
-  dayOfWeek: integer("day_of_week"),
-  // Exact UTC timeslot being covered (the slot the freeing agent gave up)
-  coverStartUtc: real("cover_start_utc"),
-  coverEndUtc: real("cover_end_utc"),
-});
+export const overtimeLog = sqliteTable(
+  "overtime_log",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    agentId: integer("agent_id").notNull(),
+    date: text("date").notNull(), // ISO date string
+    overtimeHours: real("overtime_hours").notNull().default(0),
+    releasedHours: real("released_hours").notNull().default(0),
+    note: text("note"),
+    // New columns for approval flow
+    status: text("status").notNull().default("pending"), // pending | approved | denied | paid
+    origin: text("origin"), // manager-extended | claimed-from-agent
+    coveredByAgentId: integer("covered_by_agent_id"), // nullable — who freed the time (for claims)
+    statusUpdatedAt: text("status_updated_at"),
+    // Source shift info for approval-gated assignment
+    fromShiftId: integer("from_shift_id"),
+    dayOfWeek: integer("day_of_week"),
+    // Exact UTC timeslot being covered (the slot the freeing agent gave up)
+    coverStartUtc: real("cover_start_utc"),
+    coverEndUtc: real("cover_end_utc"),
+  },
+  (table) => ({
+    overtimeAgentDateStatusIdx: index("idx_overtime_agent_date_status").on(table.agentId, table.date, table.status),
+    overtimeFromShiftStatusIdx: index("idx_overtime_from_shift_status").on(table.fromShiftId, table.status),
+  })
+);
 
 export const insertOvertimeLogSchema = createInsertSchema(overtimeLog).omit({ id: true });
 export type InsertOvertimeLog = z.infer<typeof insertOvertimeLogSchema>;
