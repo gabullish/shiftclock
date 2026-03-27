@@ -1,10 +1,8 @@
 import { createContext, useContext, useMemo } from "react";
+import { getEffectiveAdminToken } from "@/lib/adminAccess";
 
 function readAdminFromUrl(): boolean {
-  // Read from regular query string: ?admin=TOKEN (before the hash).
-  // The server validates the token value via x-admin-token.
-  const params = new URLSearchParams(window.location.search);
-  return Boolean(params.get("admin"));
+  return Boolean(getEffectiveAdminToken());
 }
 
 export const AdminContext = createContext<boolean>(false);

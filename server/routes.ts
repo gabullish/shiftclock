@@ -137,6 +137,10 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   await seedDefaultData();
 
   // --- Agents ---
+  app.get("/api/admin/verify", requireAdmin, (_req, res) => {
+    res.json({ ok: true });
+  });
+
   app.get("/api/agents", (_req, res) => {
     res.json(storage.getAgents());
   });
