@@ -56,6 +56,9 @@ export const overtimeLog = sqliteTable("overtime_log", {
   // Source shift info for approval-gated assignment
   fromShiftId: integer("from_shift_id"),
   dayOfWeek: integer("day_of_week"),
+  // Exact UTC timeslot being covered (the slot the freeing agent gave up)
+  coverStartUtc: real("cover_start_utc"),
+  coverEndUtc: real("cover_end_utc"),
 });
 
 export const insertOvertimeLogSchema = createInsertSchema(overtimeLog).omit({ id: true });
