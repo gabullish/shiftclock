@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
-import { Clock, Users, LayoutDashboard } from "lucide-react";
+import { Clock, Users, LayoutDashboard, Hand } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDragScrollPreference } from "@/hooks/use-drag-scroll";
 
 const navItems = [
   { href: "/", label: "Command", icon: LayoutDashboard },
@@ -9,6 +10,7 @@ const navItems = [
 
 export default function Sidebar() {
   const [location] = useLocation();
+  const { enabled: dragScrollEnabled, setEnabled: setDragScrollEnabled } = useDragScrollPreference();
 
   return (
     <aside className="w-16 lg:w-56 flex flex-col border-r border-border bg-sidebar shrink-0 h-screen overflow-hidden">
@@ -52,7 +54,21 @@ export default function Sidebar() {
       </nav>
 
       {/* UTC Clock */}
-      <div className="p-3 border-t border-border">
+      <div className="p-3 border-t border-border space-y-2">
+        <button
+          onClick={() => setDragScrollEnabled(!dragScrollEnabled)}
+          className={cn(
+            "w-full flex items-center gap-2 rounded-md border px-2 py-1.5 text-[10px] transition-colors",
+            dragScrollEnabled
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:text-foreground"
+          )}
+          data-testid="toggle-drag-scroll"
+        >
+          <Hand size={11} />
+          <span className="hidden lg:inline">Drag scroll</span>
+          <span className="ml-auto font-mono">{dragScrollEnabled ? "ON" : "OFF"}</span>
+        </button>
         <LiveUTCClock />
       </div>
     </aside>
