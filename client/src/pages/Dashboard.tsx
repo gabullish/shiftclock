@@ -741,17 +741,19 @@ export default function Dashboard() {
 
   return (
     <TooltipProvider>
-      <div className="flex flex-col h-screen overflow-hidden">
+      <div className="flex flex-col h-full overflow-hidden">
         {/* ── Header ── */}
-        <header className="h-14 flex items-center justify-between px-6 border-b border-border shrink-0 bg-card/50 backdrop-blur">
-          <div className="flex items-center gap-3">
+        <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur px-3 py-2 sm:px-4 lg:px-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
             <h1 className="text-sm font-semibold">Coverage Command</h1>
             <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
-          </div>
+            </div>
 
           {/* Day nav — hidden in multi-day timeline */}
-          {!isMulti && (
-            <div className="flex items-center gap-1">
+            {!isMulti && (
+              <div className="order-3 w-full md:order-none md:w-auto">
+                <div className="flex items-center gap-1 overflow-x-auto pb-1 md:pb-0">
               <button
                 onClick={goToPreviousWeek}
                 className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -766,7 +768,7 @@ export default function Dashboard() {
                 return (
                   <button key={day.date} onClick={() => { playSoftClick(); updateSelectedDay(day.dayOfWeek, day.date); }} data-testid={`day-${day.date}`}
                     className={cn(
-                      "px-2.5 py-1 rounded text-xs font-medium transition-all relative min-w-[54px]",
+                      "px-2.5 py-1 rounded text-xs font-medium transition-all relative min-w-[58px] shrink-0",
                       isSelected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     )}
                   >
@@ -788,14 +790,15 @@ export default function Dashboard() {
               >
                 <ChevronRight size={14} />
               </button>
+                </div>
             </div>
           )}
 
-          {isMulti && (
-            <span className="text-xs text-muted-foreground font-mono">14-day view · scroll to navigate · click day label → Day view</span>
-          )}
+            {isMulti && (
+              <span className="order-3 w-full text-[11px] text-muted-foreground font-mono md:order-none md:w-auto">14-day view · scroll to navigate · click day label → Day view</span>
+            )}
 
-          <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
+            <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
             <button
               onClick={() => { playSoftClick(); setViewMode("clock"); }}
               className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
@@ -838,12 +841,13 @@ export default function Dashboard() {
                 </button>
               </>
             )}
+            </div>
           </div>
         </header>
 
         {/* ── Online now bar — clock + day timeline only ── */}
         {!isMulti && isSelectedDateToday && (
-          <div className="flex items-center gap-3 px-6 py-2 border-b border-border bg-card/20 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4 lg:px-6 border-b border-border bg-card/20 shrink-0">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
             {onlineAgents.length === 0 ? (
               <span className="text-[11px] text-muted-foreground">No agents currently on shift</span>
@@ -896,8 +900,8 @@ export default function Dashboard() {
             </div>
           ) : (
             /* ── Clock mode: centred layout + right panel ── */
-            <div className="flex-1 flex overflow-hidden min-h-0">
-              <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
+            <div className="flex-1 flex flex-col xl:flex-row overflow-hidden min-h-0">
+              <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 overflow-hidden min-w-0 relative min-h-[320px]">
                 {!hasShiftsToday ? (
                     <EmptyState
                       isWeekend={isWeekend}
@@ -959,7 +963,7 @@ export default function Dashboard() {
               </div>
 
               {/* Right panel */}
-              <div className="w-80 xl:w-96 flex flex-col border-l border-border overflow-hidden shrink-0 min-h-0">
+              <div className="w-full xl:w-80 2xl:w-96 flex flex-col border-t xl:border-t-0 xl:border-l border-border overflow-hidden shrink-0 min-h-0 max-h-[48vh] xl:max-h-none">
                 <div className="grid grid-cols-3 border-b border-border shrink-0">
                   <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
                   <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
@@ -967,7 +971,7 @@ export default function Dashboard() {
                 </div>
 
                 <div className="relative flex-1 min-h-0">
-                  <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
+                  <div className="absolute inset-0 overflow-y-auto overscroll-contain p-2 sm:p-3 space-y-1.5" id="lever-scroll">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
                         <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {selectedDayShortLabel}</p>
@@ -1034,7 +1038,7 @@ export default function Dashboard() {
                   <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background to-transparent" />
                 </div>
 
-                <div className="shrink-0 min-h-0" style={{ maxHeight: '13rem', overflow: 'hidden' }}>
+                <div className="shrink-0 min-h-0" style={{ maxHeight: '12rem', overflow: 'hidden' }}>
                   <SummaryPanel
                     agentSummaries={agentSummaries}
                     selectedDay={selectedDay}
