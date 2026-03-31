@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, AgentLog, OvertimeLog } from "@shared/schema";
 import { cn } from "@/lib/utils";
@@ -15,12 +16,19 @@ type Tab = (typeof TABS)[number];
 
 export default function ActivityLog() {
   const isAdmin = useAdminMode();
+  const [location] = useLocation();
+  const pathOnly = location.split("?")[0];
+  const isOvertimeRoute = pathOnly === "/overtime";
   const availableTabs = isAdmin ? TABS : (["Overtime"] as const);
-  const [tab, setTab] = useState<Tab>(isAdmin ? "Activity Log" : "Overtime");
+  const [tab, setTab] = useState<Tab>(isAdmin && !isOvertimeRoute ? "Activity Log" : "Overtime");
 
   useEffect(() => {
-    if (!isAdmin) setTab("Overtime");
-  }, [isAdmin]);
+    if (!isAdmin || isOvertimeRoute) {
+      setTab("Overtime");
+      return;
+    }
+    setTab((prev) => (prev === "Overtime" || prev === "Activity Log" ? prev : "Activity Log"));
+  }, [isAdmin, isOvertimeRoute]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -256,6 +264,7 @@ function StatusBadge({ current }: { current: string }) {
 }
 
 function OvertimePanel({ canManage }: { canManage: boolean }) {
+  const [location] = useLocation();
   const { data: records = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
 
@@ -345,6 +354,26 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
   });
 
   const hasRecords = sorted.length > 0;
+  const rowRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const [focusedOtId, setFocusedOtId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.split("?")[1] || "");
+    const raw = params.get("otId");
+    if (!raw) {
+      setFocusedOtId(null);
+      return;
+    }
+    const parsed = Number(raw);
+    setFocusedOtId(Number.isFinite(parsed) ? parsed : null);
+  }, [location]);
+
+  useEffect(() => {
+    if (focusedOtId == null) return;
+    const target = rowRefs.current[focusedOtId];
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusedOtId, sorted]);
 
   const navigateToTimeline = (rec: OvertimeLog) => {
     const d = new Date(rec.date + "T00:00:00Z");
@@ -432,9 +461,13 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
               return (
                 <div
                   key={rec.id}
+                  ref={(el) => {
+                    rowRefs.current[rec.id] = el;
+                  }}
                   className={cn(
                     "grid grid-cols-[1fr_100px_80px_140px_110px] gap-2 px-3 py-2.5 border-b border-border last:border-b-0 items-center text-xs transition-opacity",
-                    isDenied && "opacity-40"
+                    isDenied && "opacity-40",
+                    focusedOtId === rec.id && "ring-1 ring-primary/60 bg-primary/5"
                   )}
                 >
                   {/* Agent */}

@@ -115,7 +115,10 @@ export default function App() {
               <Sidebar />
               <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <Switch>
-                  <Route path="/" component={Dashboard} />                <Route path="/activity" component={ActivityLog} />                  <Route path="/profiles" component={Profiles} />
+                  <Route path="/" component={Dashboard} />
+                  <Route path="/activity" component={ActivityLog} />
+                  <Route path="/overtime" component={ActivityLog} />
+                  <Route path="/profiles" component={Profiles} />
                   <Route component={NotFound} />
                 </Switch>
               </main>

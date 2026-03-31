@@ -7,6 +7,7 @@ import { useDragScrollPreference } from "@/hooks/use-drag-scroll";
 const navItems = [
   { href: "/", label: "Command", icon: LayoutDashboard },
   { href: "/activity", label: "Activity", icon: ScrollText },
+  { href: "/overtime", label: "Overtime", icon: Clock },
   { href: "/profiles", label: "Agents", icon: Users },
 ];
 

@@ -4,7 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift, OvertimeLog } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X } from "lucide-react";
+import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/useSoothingSounds";
@@ -287,6 +287,16 @@ export default function Dashboard() {
   const [focusHour] = useState<number | null>(initFocusHour);
   const [tooltipInfo,    setTooltipInfo]    = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
 
+  const openOvertimeForRecord = (record: OvertimeLog) => {
+    const params = new URLSearchParams();
+    params.set("otId", String(record.id));
+    params.set("date", record.date);
+    params.set("day", String(record.dayOfWeek));
+    if (record.coverStartUtc != null) params.set("focusHour", String(record.coverStartUtc));
+    params.set("focusAgentId", String(record.agentId));
+    window.location.href = `${window.location.pathname}#/overtime?${params.toString()}`;
+  };
+
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
   const { data: otRecords = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
@@ -478,6 +488,14 @@ export default function Dashboard() {
   const peakCoverageHour   = coverage.indexOf(Math.max(...coverage));
   const totalOvertimeHours = agentSummaries.reduce((a, s) => a + s.overtimeHours, 0);
   const totalReleasedHours = agentSummaries.reduce((a, s) => a + s.releasedHours, 0);
+  const pendingCoverageClaims = otRecords.filter(
+    (record) =>
+      isCoverageClaim(record) &&
+      record.status === "pending" &&
+      record.dayOfWeek === selectedDay &&
+      record.coverStartUtc != null &&
+      record.coverEndUtc != null
+  );
 
   const todayUTCDay  = getUTCDay();
   const onlineAgents = agents.filter(agent => {
@@ -768,7 +786,8 @@ export default function Dashboard() {
                 toggleVisible={toggleVisible}
                 toggleAll={toggleAll}
                 onAssignOvertime={openAssignModal}
-                  onAssignGap={openGapAssignModal}
+                onAssignGap={openGapAssignModal}
+                onOpenOvertime={openOvertimeForRecord}
               />
             </div>
           ) : (
@@ -800,6 +819,7 @@ export default function Dashboard() {
                     selectedDay={selectedDay}
                     onAssignOvertime={openAssignModal}
                     onAssignGap={openGapAssignModal}
+                    onOpenOvertime={openOvertimeForRecord}
                   />
                 )}
 
@@ -916,6 +936,9 @@ export default function Dashboard() {
                     isAdmin={isAdmin}
                     gapSlices={gapSlices}
                     onAssignGap={openGapAssignModal}
+                    pendingClaims={pendingCoverageClaims}
+                    agents={agents}
+                    onOpenOvertime={openOvertimeForRecord}
                   />
                 </div>
               </div>
@@ -1005,7 +1028,7 @@ function EmptyState({
 function UnifiedTimeline({
   scope, agents, allShifts, otRecords, isAdmin, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, selectedDate, focusHour, onSelectDay,
-  toggleVisible, toggleAll, onAssignOvertime, onAssignGap,
+  toggleVisible, toggleAll, onAssignOvertime, onAssignGap, onOpenOvertime,
 }: {
   scope: "day" | "multi";
   agents: Agent[];
@@ -1025,6 +1048,7 @@ function UnifiedTimeline({
   toggleAll: () => void;
   onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
   onAssignGap: (startUtc: number, endUtc: number, dayOfWeek?: number, date?: string) => void;
+  onOpenOvertime: (record: OvertimeLog) => void;
 }) {
   const PX_PER_HOUR = 56;
   const LABEL_W     = 120;
@@ -1266,6 +1290,7 @@ function UnifiedTimeline({
             const isPending = activeClaimForShift.status === "pending";
             return claimSegs.map((seg, si) => (
               <div key={`pending-shrink-${si}`}
+                onClick={() => onOpenOvertime(activeClaimForShift)}
                 title={isPending
                   ? `Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`
                   : `Claimed coverage: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} (${activeClaimForShift.status})`}
@@ -1276,7 +1301,7 @@ function UnifiedTimeline({
                   top: 8, height: ROW_H - 16, borderRadius: 2,
                   background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
                   border: isPending ? "1px dashed rgba(255,140,0,0.6)" : "1px dashed rgba(255,255,255,0.85)",
-                  cursor: "default",
+                  cursor: "pointer",
                   zIndex: 9,
                 }}
               />
@@ -1321,17 +1346,19 @@ function UnifiedTimeline({
       return segs.map((seg, si) => (
         <div
           key={`cov-${slot.id}-${si}`}
+          onClick={() => onOpenOvertime(slot)}
           title={`${isPending ? "Pending preview" : "Covering"} ${sourceLabel}: ${formatUtcHour(slot.coverStartUtc!)}–${formatUtcHour(slot.coverEndUtc!)} UTC`}
           style={{
             position: "absolute",
             left: covSegOffsetX(seg) + seg.start * PX_PER_HOUR,
             width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
             top: 4, height: ROW_H - 8,
-            backgroundColor: agent.color,
-            opacity: isPending ? 0.55 : 0.85,
+            backgroundColor: isPending ? "transparent" : agent.color,
+            opacity: isPending ? 0.75 : 0.85,
             borderRadius: 3,
-            border: isPending ? `2px dashed rgba(255,255,255,0.7)` : `2px dashed white`,
-            boxShadow: isPending ? `0 0 3px ${agent.color}50` : `0 0 6px ${agent.color}80`,
+            border: isPending ? `2px dashed ${hexToRgba(agent.color, 0.9)}` : `2px dashed white`,
+            boxShadow: isPending ? "none" : `0 0 6px ${agent.color}80`,
+            cursor: "pointer",
           }}
         >
           <span style={{
@@ -1737,7 +1764,7 @@ function UnifiedTimeline({
 function ClockVisualizer({
   agents, shifts, isAdmin, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage, otRecords,
-  tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime, onAssignGap,
+  tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime, onAssignGap, onOpenOvertime,
 }: {
   agents: Agent[]; shifts: Shift[]; isAdmin: boolean; visible: Set<number>;
   highlighted: number | null; setHighlighted: (id: number | null) => void;
@@ -1747,6 +1774,7 @@ function ClockVisualizer({
   selectedDay: number;
   onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
   onAssignGap: (startUtc: number, endUtc: number) => void;
+  onOpenOvertime: (record: OvertimeLog) => void;
 }) {
   const SIZE   = 360;
   const CX = SIZE / 2, CY = SIZE / 2;
@@ -2013,7 +2041,8 @@ function ClockVisualizer({
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
                           fill="none" stroke="rgba(255,140,0,0.85)"
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
-                          style={{ cursor: "default" }}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => onOpenOvertime(activeClaimForShift)}
                         >
                           <title>{`Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`}</title>
                         </path>
@@ -2043,14 +2072,16 @@ function ClockVisualizer({
                       fill="none"
                       stroke={hexToRgba(agent.color, isPending ? 0.65 : 0.96)}
                       strokeWidth={RING_W}
-                      strokeDasharray={isPending ? "3 4" : "6 3"}
-                      strokeLinecap="round"
+                      strokeDasharray={isPending ? "2 5" : "6 3"}
+                      strokeLinecap={isPending ? "butt" : "round"}
                       style={{
                         filter: isPending
-                          ? `drop-shadow(0 0 2px ${agent.color}) drop-shadow(0 0 5px ${agent.color}60)`
+                          ? "none"
                           : `drop-shadow(0 0 4px ${agent.color}) drop-shadow(0 0 8px ${agent.color}80)`,
-                        pointerEvents: "none",
+                        pointerEvents: "auto",
+                        cursor: "pointer",
                       }}
+                      onClick={() => onOpenOvertime(slot)}
                     >
                       <title>{`${isPending ? "Pending coverage preview" : "Approved claimed coverage"}: ${formatUtcHour(slot.coverStartUtc!)}-${formatUtcHour(slot.coverEndUtc!)} UTC`}</title>
                     </path>
@@ -2432,7 +2463,13 @@ function SummaryPanel({
   isAdmin,
   gapSlices,
   onAssignGap,
+  pendingClaims,
+  agents,
+  onOpenOvertime,
 }: any) {
+  const agentMap = new Map<number, Agent>((agents ?? []).map((a: Agent) => [a.id, a]));
+  const coveredByName = (id: number | null) => (id != null ? agentMap.get(id)?.name : null);
+
   return (
     <div className="border-t border-border p-3 max-h-52 min-h-0 overflow-y-auto overscroll-contain bg-card/30 shrink-0">
       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-medium">
@@ -2458,6 +2495,36 @@ function SummaryPanel({
           )}
         </div>
       )}
+
+      {pendingClaims.length > 0 && (
+        <div className="mb-2 p-2 rounded border border-amber-500/30 bg-amber-500/10">
+          <p className="text-[10px] text-amber-300 font-medium mb-1">
+            {pendingClaims.length} claim{pendingClaims.length !== 1 ? "s" : ""} waiting manager approval
+          </p>
+          <div className="space-y-1">
+            {pendingClaims.slice(0, 4).map((claim: OvertimeLog) => {
+              const target = agentMap.get(claim.agentId)?.name ?? "Agent";
+              const fromName = coveredByName(claim.coveredByAgentId);
+              const context = claim.origin === "claimed-open-gap"
+                ? `open gap ${formatUtcHour(claim.coverStartUtc!)}-${formatUtcHour(claim.coverEndUtc!)} UTC`
+                : `${fromName ?? "agent"} → ${target} ${formatUtcHour(claim.coverStartUtc!)}-${formatUtcHour(claim.coverEndUtc!)} UTC`;
+
+              return (
+                <button
+                  key={claim.id}
+                  onClick={() => onOpenOvertime(claim)}
+                  className="w-full flex items-center justify-between text-left text-[10px] text-amber-100 hover:text-primary transition-colors"
+                  title="Open overtime log"
+                >
+                  <span>{target} waiting approval from manager · {context}</span>
+                  <ExternalLink size={10} className="opacity-60 shrink-0" />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-1">
         {agentSummaries.map(({ agent, baseHours, activeHours, overtimeHours, releasedHours }: any) => {
           if (baseHours === 0) return null;
