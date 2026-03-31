@@ -188,7 +188,6 @@ function AgentSelectorPopup({
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-xs">← Back</button>
           <div>
             <h1 className="text-base font-semibold">Who are you?</h1>
-            <p className="text-xs text-muted-foreground">Select your agent to start a session.</p>
           </div>
         </div>
         <div className="space-y-1 max-h-80 overflow-y-auto">

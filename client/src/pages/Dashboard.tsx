@@ -628,9 +628,17 @@ export default function Dashboard() {
       playSuccess();
     },
     onError: (error) => {
+      const message = errorMessageFromUnknown(error);
+      if (message.toLowerCase().includes("already joined")) {
+        toast({
+          title: "Already in line",
+          description: "You already have a pending request for this coverage slot.",
+        });
+        return;
+      }
       toast({
-        title: "Failed to assign overtime",
-        description: errorMessageFromUnknown(error),
+        title: "Join line failed",
+        description: message,
         variant: "destructive",
       });
     },
@@ -651,6 +659,7 @@ export default function Dashboard() {
 
   const openAssignModal = (shift: Shift, agent: Agent, freedHours: number) => {
     if (!canClaimCoverage) return;
+    if (assignOvertimeMutation.isPending) return;
     playSoftClick();
     const normEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
     const activeEnd = leverState[shift.id]?.activeEnd ?? shift.activeEnd ?? normEnd;
@@ -680,6 +689,7 @@ export default function Dashboard() {
 
   const openGapAssignModal = (startUtc: number, endUtc: number, dayOfWeek = selectedDay, date = selectedDate) => {
     if (!canClaimCoverage || endUtc <= startUtc) return;
+    if (assignOvertimeMutation.isPending) return;
     playSoftClick();
 
     if (!isAdmin && agentSession) {
@@ -706,6 +716,28 @@ export default function Dashboard() {
 
   const selectedDayShortLabel = formatWeekdayWithDate(selectedDay, selectedDate);
   const weekCycleDays = buildWeekCycleDays(weekAnchorDate);
+
+  const commitBreakChange = (agent: Agent, shift: Shift, breakStart: number | null) => {
+    if (!canEditAgentLane(agent.id)) return;
+    const nextBreak = breakStart == null ? null : Math.round(breakStart * 2) / 2;
+    const currentBreak = shift.breakStart ?? null;
+    if (currentBreak === nextBreak) return;
+
+    updateShiftMutation.mutate({
+      id: shift.id,
+      data: { breakStart: nextBreak },
+    });
+
+    logActivityMutation.mutate({
+      agentId: agent.id,
+      date: selectedDate,
+      type: "break",
+      actionType: "break-updated",
+      description: nextBreak == null
+        ? `${agent.name} removed their break on ${formatWeekdayWithDate(selectedDay, selectedDate)}.`
+        : `${agent.name} set break at ${formatUtcHour(nextBreak)} UTC on ${formatWeekdayWithDate(selectedDay, selectedDate)}.`,
+    });
+  };
 
   return (
     <TooltipProvider>
@@ -973,6 +1005,11 @@ export default function Dashboard() {
                           const shift = agentShifts[0];
                           if (!shift) return;
                           commitLeverChange(agent, shift, start, end);
+                        }}
+                        onBreakChange={(_id, breakStart) => {
+                          const shift = agentShifts[0];
+                          if (!shift) return;
+                          commitBreakChange(agent, shift, breakStart);
                         }}
                         highlighted={highlighted === agent.id}
                         onHighlight={() => setHighlighted(agent.id)}
@@ -2284,6 +2321,7 @@ function ClockVisualizer({
 
 function ShiftLever({
   agent, shift, leverState, onLeverPreview, onLeverCommit,
+  onBreakChange,
   highlighted, onHighlight, onUnhighlight,
   baseHours, overtimeHours, releasedHours, canEdit, utcHour, selectedDay,
   playSoftClick, playDragWhoosh,
@@ -2292,6 +2330,7 @@ function ShiftLever({
   leverState: LeverState | undefined;
   onLeverPreview: (id: number, start: number, end: number) => void;
   onLeverCommit: (id: number, start: number, end: number) => void;
+  onBreakChange: (id: number, breakStart: number | null) => void;
   highlighted: boolean; onHighlight: () => void; onUnhighlight: () => void;
   baseHours: number; overtimeHours: number; releasedHours: number;
   canEdit: boolean; utcHour: number; selectedDay: number;
@@ -2330,6 +2369,32 @@ function ShiftLever({
   const adjustStart = (delta: number) => {
     if (!canEdit) return;
     commitWindow(activeStart + delta, activeEnd);
+  };
+
+  const setBreakAt = (nextBreak: number | null) => {
+    if (!canEdit) return;
+    if (nextBreak == null) {
+      onBreakChange(shift.id, null);
+      return;
+    }
+    const min = activeStart;
+    const max = activeEnd - 0.5;
+    if (max < min) return;
+    const snapped = Math.round(nextBreak * 2) / 2;
+    const clamped = Math.max(min, Math.min(max, snapped));
+    onBreakChange(shift.id, clamped);
+  };
+
+  const moveBreakBy = (delta: number) => {
+    if (!canEdit || shift.breakStart == null) return;
+    setBreakAt(shift.breakStart + delta);
+  };
+
+  const setBreakDefault = () => {
+    if (!canEdit) return;
+    const duration = Math.max(0.5, activeEnd - activeStart);
+    const centered = activeStart + Math.max(0, (duration - 0.5) / 2);
+    setBreakAt(centered);
   };
 
   const barRef   = useRef<HTMLDivElement>(null);
@@ -2513,6 +2578,44 @@ function ShiftLever({
           {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
         </div>
       </div>
+
+      {canEdit && (
+        <div className="mt-1.5 flex items-center gap-1 text-[9px]">
+          {shift.breakStart == null ? (
+            <button
+              onClick={() => { playSoftClick(); setBreakDefault(); }}
+              className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
+              title="Set 30m break near center of current shift"
+            >
+              ☕ Set break
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => { playSoftClick(); moveBreakBy(-0.5); }}
+                className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
+                title="Move break earlier by 30m"
+              >
+                ☕ ←
+              </button>
+              <button
+                onClick={() => { playSoftClick(); moveBreakBy(0.5); }}
+                className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
+                title="Move break later by 30m"
+              >
+                ☕ →
+              </button>
+              <button
+                onClick={() => { playSoftClick(); setBreakAt(null); }}
+                className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
+                title="Clear break"
+              >
+                Clear break
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

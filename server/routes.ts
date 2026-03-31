@@ -642,17 +642,80 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     const assignedHours = slotEndUtc - slotStartUtc;
 
-    // Create overtime record with the exact coverage timeslot (pending approval)
+    const sameCoverageOpportunity = storage
+      .getOvertimeLogs()
+      .find((record) => {
+        if (record.status !== "pending") return false;
+        if (record.date !== date) return false;
+        if (record.dayOfWeek !== resolvedDayOfWeek) return false;
+        if (record.origin !== origin) return false;
+        if (record.fromShiftId !== sourceShiftId) return false;
+        if (record.coveredByAgentId !== sourceAgentId) return false;
+        if (record.coverStartUtc !== slotStartUtc) return false;
+        if (record.coverEndUtc !== slotEndUtc) return false;
+        return true;
+      });
+
+    const nowIso = new Date().toISOString();
+
+    if (sameCoverageOpportunity) {
+      const existingPendingClaim = storage
+        .getClaimsForOpportunity(sameCoverageOpportunity.id)
+        .find((claim) => claim.agentId === toAgentId && claim.status === "pending");
+
+      if (existingPendingClaim) {
+        return res.status(409).json({
+          message: "You already joined this line",
+          overtimeLog: sameCoverageOpportunity,
+          claim: existingPendingClaim,
+        });
+      }
+
+      const joinedClaim = storage.createClaim({
+        opportunityId: sameCoverageOpportunity.id,
+        agentId: toAgentId,
+        status: "pending",
+        note: null,
+        createdAt: nowIso,
+      });
+
+      storage.createAgentLog({
+        agentId: toAgentId,
+        date,
+        type: "shift-claim",
+        coverPct: null,
+        coveredByAgentId: sourceAgentId,
+        notes: null,
+        createdAt: nowIso,
+        actionType: "shift-claimed",
+        description: sourceAgentName
+          ? `${toAgent.name} joined line for ${assignedHours.toFixed(1)}h from ${sourceAgentName}'s ${date} shift.`
+          : `${toAgent.name} joined line for ${assignedHours.toFixed(1)}h open-gap coverage on ${date}.`,
+      });
+
+      return res.json({ ok: true, reused: true, overtimeLog: sameCoverageOpportunity, claim: joinedClaim });
+    }
+
+    // Create a single pending opportunity for this coverage slot.
     const otLog = storage.createOvertimeLog(toAgentId, date, {
       overtimeHours: assignedHours,
       origin,
       coveredByAgentId: sourceAgentId,
       status: "pending",
-      statusUpdatedAt: new Date().toISOString(),
+      statusUpdatedAt: nowIso,
       fromShiftId: sourceShiftId,
       dayOfWeek: resolvedDayOfWeek,
       coverStartUtc: slotStartUtc,
       coverEndUtc: slotEndUtc,
+    });
+
+    // First requester becomes #1 in line for this opportunity.
+    const firstClaim = storage.createClaim({
+      opportunityId: otLog.id,
+      agentId: toAgentId,
+      status: "pending",
+      note: null,
+      createdAt: nowIso,
     });
 
     storage.createAgentLog({
@@ -662,14 +725,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       coverPct: null,
       coveredByAgentId: sourceAgentId,
       notes: null,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
       actionType: "shift-claimed",
       description: sourceAgentName
-        ? `${toAgent.name} claimed ${assignedHours.toFixed(1)}h freed from ${sourceAgentName}'s ${date} shift.`
-        : `${toAgent.name} claimed ${assignedHours.toFixed(1)}h of open-gap coverage on ${date}.`,
+        ? `${toAgent.name} opened line for ${assignedHours.toFixed(1)}h from ${sourceAgentName}'s ${date} shift.`
+        : `${toAgent.name} opened line for ${assignedHours.toFixed(1)}h open-gap coverage on ${date}.`,
     });
 
-    res.json({ ok: true, overtimeLog: otLog });
+    res.json({ ok: true, overtimeLog: otLog, claim: firstClaim });
   });
 
   // --- Overtime Claims (multi-agent competing) ---
@@ -692,6 +755,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const opportunityId = Number(req.params.id);
     const opportunity = storage.getOvertimeLogs().find(r => r.id === opportunityId);
     if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
+    if (opportunity.status !== "pending") {
+      return res.status(409).json({ message: "This line is no longer open" });
+    }
 
     // Prevent duplicate pending claims from same agent for same opportunity
     const existing = storage.getClaimsForOpportunity(opportunityId)
@@ -811,13 +877,25 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getAgentLogsByAgent(Number(req.params.agentId)));
   });
 
-  app.post("/api/agent-logs", requireAdmin, (req, res) => {
+  app.post("/api/agent-logs", (req, res) => {
     const { agentId, date, type, coverPct, coveredByAgentId, notes, actionType, description } = req.body;
     if (!agentId || !date || !type) {
       return res.status(400).json({ message: "agentId, date and type are required" });
     }
+
+    const targetAgentId = Number(agentId);
+    if (!Number.isFinite(targetAgentId)) {
+      return res.status(400).json({ message: "Invalid agentId" });
+    }
+
+    const admin = isAdminRequest(req);
+    const sessionAgentId = getAgentSession(req);
+    if (!admin && sessionAgentId !== targetAgentId) {
+      return res.status(403).json({ message: "You can only write logs for your own agent session" });
+    }
+
     const log = storage.upsertRecentAgentLog({
-      agentId,
+      agentId: targetAgentId,
       date,
       type,
       coverPct: coverPct ?? null,
@@ -830,7 +908,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(log);
   });
 
-  app.delete("/api/agent-logs/:id", (req, res) => {
+  app.delete("/api/agent-logs/:id", requireAdmin, (req, res) => {
     storage.deleteAgentLog(Number(req.params.id));
     res.json({ ok: true });
   });

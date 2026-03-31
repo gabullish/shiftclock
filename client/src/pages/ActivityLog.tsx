@@ -298,9 +298,10 @@ function OvertimePanel({
       toast({ title: "Joined line", description: "Waiting for manager approval." });
     },
     onError: (err) => {
+      const msg = err instanceof Error ? err.message : "Unknown error";
       toast({
-        title: "Claim failed",
-        description: err instanceof Error ? err.message : "Unknown error",
+        title: msg.toLowerCase().includes("already joined") ? "Already in line" : "Join line failed",
+        description: msg,
         variant: "destructive",
       });
     },
@@ -412,6 +413,28 @@ function OvertimePanel({
 
   const rowRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const [focusedOtId, setFocusedOtId] = useState<number | null>(null);
+  const [activeJoinId, setActiveJoinId] = useState<number | null>(null);
+  const [activeUndoId, setActiveUndoId] = useState<number | null>(null);
+
+  const handleJoinLine = async (opportunityId: number) => {
+    if (activeJoinId != null) return;
+    setActiveJoinId(opportunityId);
+    try {
+      await claimMutation.mutateAsync(opportunityId);
+    } finally {
+      setActiveJoinId(null);
+    }
+  };
+
+  const handleUndoLine = async (opportunityId: number) => {
+    if (activeUndoId != null) return;
+    setActiveUndoId(opportunityId);
+    try {
+      await cancelClaimMutation.mutateAsync(opportunityId);
+    } finally {
+      setActiveUndoId(null);
+    }
+  };
 
   useEffect(() => {
     const hashQuery = location.split("?")[1] || "";
@@ -569,18 +592,20 @@ function OvertimePanel({
                       {agentSession && isOpportunity && !canManage && (
                         myPendingClaim ? (
                           <button
-                            onClick={() => cancelClaimMutation.mutate(rec.id)}
+                            onClick={() => void handleUndoLine(rec.id)}
+                            disabled={activeUndoId === rec.id || cancelClaimMutation.isPending}
                             className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive transition-colors"
                             title="Cancel your claim"
                           >
-                            <Undo2 size={10} /> Undo
+                            <Undo2 size={10} /> {activeUndoId === rec.id ? "Undoing..." : "Undo"}
                           </button>
                         ) : (
                           <button
-                            onClick={() => claimMutation.mutate(rec.id)}
-                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 transition-colors"
+                            onClick={() => void handleJoinLine(rec.id)}
+                            disabled={activeJoinId === rec.id || claimMutation.isPending}
+                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                           >
-                            Join line
+                            {activeJoinId === rec.id ? "Joining..." : "Join line"}
                           </button>
                         )
                       )}
