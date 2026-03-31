@@ -216,7 +216,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
   app.post("/api/overtime", requireAdmin, (req, res) => {
     const { agentId, date, ...rest } = req.body;
-    const log = storage.upsertOvertimeLog(agentId, date, rest);
+    const log = storage.createOvertimeLog(agentId, date, rest);
     res.json(log);
   });
 
@@ -230,8 +230,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     // Get current record to know old status before updating
     const existing = storage.getOvertimeLogs().find(r => r.id === id);
     if (!existing) return res.status(404).json({ message: "Not found" });
-    const oldStatus = existing.status ?? "pending";
-
     const updated = storage.updateOvertimeLog(id, { status, statusUpdatedAt: new Date().toISOString() });
     if (!updated) return res.status(404).json({ message: "Not found" });
 
@@ -283,11 +281,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const coverStartUtc = curActiveEnd;
     const coverEndUtc = curActiveEnd + hours;
 
-    // Reset the freeing agent's shift — restore activeEnd to match original endUtc
-    storage.updateShift(fromShift.id, { activeEnd: normEnd });
-
     // Create overtime record with the exact coverage timeslot (pending approval)
-    const otLog = storage.upsertOvertimeLog(toAgentId, date, {
+    const otLog = storage.createOvertimeLog(toAgentId, date, {
       overtimeHours: hours,
       origin: "claimed-from-agent",
       coveredByAgentId: fromShift.agentId,

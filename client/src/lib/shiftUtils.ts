@@ -57,6 +57,9 @@ export interface ShiftProgress {
   otPct: number;
 }
 
+export const MIN_SHIFT_DURATION_HOURS = 0.5;
+export const MAX_SHIFT_SPAN_HOURS = 24;
+
 // ─── Core duration ────────────────────────────────────────────────────────────
 
 /**
@@ -86,6 +89,30 @@ export function normaliseEndUtc(startUtc: number, endUtc: number): number {
  */
 export function displayHour(h: number): number {
   return ((h % 24) + 24) % 24;
+}
+
+function snapHalfHour(hour: number): number {
+  return Math.round(hour * 2) / 2;
+}
+
+export function clampShiftWindow(startUtc: number, endUtc: number): { activeStart: number; activeEnd: number } {
+  const activeStart = snapHalfHour(Math.max(0, Math.min(24, startUtc)));
+  const maxEnd = Math.min(48, activeStart + MAX_SHIFT_SPAN_HOURS);
+  const activeEnd = snapHalfHour(
+    Math.max(activeStart + MIN_SHIFT_DURATION_HOURS, Math.min(maxEnd, endUtc))
+  );
+
+  return { activeStart, activeEnd };
+}
+
+export function shiftHasOverride(
+  startUtc: number,
+  endUtc: number,
+  activeStart: number,
+  activeEnd: number
+): boolean {
+  const normEnd = normaliseEndUtc(startUtc, endUtc);
+  return activeStart !== startUtc || activeEnd !== normEnd;
 }
 
 // ─── Segmentation ─────────────────────────────────────────────────────────────

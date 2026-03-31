@@ -10,6 +10,7 @@ import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import { toast } from "@/hooks/use-toast";
 import {
+  clampShiftWindow,
   segmentShift,
   resolveShift,
   shiftProgress,
@@ -21,6 +22,7 @@ import {
   normaliseEndUtc,
   displayHour,
   getActiveClaimForShift,
+  shiftHasOverride,
 } from "@/lib/shiftUtils";
 
 // Reusable drag-scroll hook with PointerCapture
@@ -69,30 +71,6 @@ const useDragScroll = () => {
     stopDrag,
     isDragging,
   };
-};
-
-// Reusable overtime state hook with localStorage persistence
-const useOvertimeState = () => {
-  const [overtimeState, setOvertimeState] = useState<Record<number, LeverState>>(() => {
-    const saved = localStorage.getItem('shiftclock-overtime');
-    return saved ? (JSON.parse(saved) as Record<number, LeverState>) : {};
-  });
-
-  useEffect(() => {
-    localStorage.setItem('shiftclock-overtime', JSON.stringify(overtimeState));
-  }, [overtimeState]);
-
-  // Force refresh on tab focus / back navigation to ensure fresh data
-  useEffect(() => {
-    const onFocus = () => {
-      const saved = localStorage.getItem('shiftclock-overtime');
-      if (saved) setOvertimeState(JSON.parse(saved));
-    };
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, []);
-
-  return [overtimeState, setOvertimeState] as const;
 };
 
 const DAYS   = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -163,6 +141,12 @@ function buildDays(pastDays: number, futureDays: number): DayDesc[] {
   return result;
 }
 
+function resolveDateForWeekday(dayOfWeek: number, anchor = new Date()): string {
+  const d = new Date(anchor);
+  d.setUTCDate(d.getUTCDate() + (dayOfWeek - d.getUTCDay()));
+  return d.toISOString().slice(0, 10);
+}
+
 function errorMessageFromUnknown(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Unexpected error";
@@ -171,6 +155,13 @@ function errorMessageFromUnknown(error: unknown): string {
 export default function Dashboard() {
   const isAdmin = useAdminMode();
   const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
+
+  const initDate = () => {
+    const params = new URLSearchParams(window.location.search);
+    const dateParam = params.get("date");
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) return dateParam;
+    return resolveDateForWeekday(initDay());
+  };
 
   const initDay = () => {
     // Support ?day=N query param from overtime page navigation
@@ -190,9 +181,10 @@ export default function Dashboard() {
   };
 
   const [selectedDay,    setSelectedDay]    = useState<number>(initDay);
+  const [selectedDate,   setSelectedDate]   = useState<string>(initDate);
   const [visible,        setVisible]        = useState<Set<number>>(new Set());
   const [highlighted,    setHighlighted]    = useState<number | null>(null);
-  const [leverState, setLeverState] = useOvertimeState();
+  const [leverState,     setLeverState]     = useState<Record<number, LeverState>>({});
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">(() => {
     const params = new URLSearchParams(window.location.search);
@@ -231,25 +223,61 @@ export default function Dashboard() {
   const todayShifts = allShifts.filter(s => s.dayOfWeek === selectedDay);
 
   useEffect(() => {
-    const init: Record<number, LeverState> = { ...leverState };
+    const next: Record<number, LeverState> = {};
     for (const s of allShifts) {
       const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
-      const serverStart = s.activeStart ?? s.startUtc;
-      const serverEnd   = s.activeEnd   ?? normEnd;
-      if (!(s.id in init)) {
-        init[s.id] = { activeStart: serverStart, activeEnd: serverEnd };
-      } else {
-        // Sync from server when DB values change (e.g. OT approval extended activeEnd)
-        if (s.activeStart != null && init[s.id].activeStart !== serverStart) {
-          init[s.id] = { ...init[s.id], activeStart: serverStart };
-        }
-        if (s.activeEnd != null && init[s.id].activeEnd !== serverEnd) {
-          init[s.id] = { ...init[s.id], activeEnd: serverEnd };
-        }
-      }
+      next[s.id] = {
+        activeStart: s.activeStart ?? s.startUtc,
+        activeEnd: s.activeEnd ?? normEnd,
+      };
     }
-    setLeverState(init);
+    setLeverState(next);
   }, [allShifts]);
+
+  const updateSelectedDay = (dayOfWeek: number, date = resolveDateForWeekday(dayOfWeek)) => {
+    setSelectedDay(dayOfWeek);
+    setSelectedDate(date);
+  };
+
+  const previewLeverChange = (id: number, start: number, end: number) => {
+    const next = clampShiftWindow(start, end);
+    setLeverState((prev) => ({ ...prev, [id]: next }));
+  };
+
+  const commitLeverChange = (agent: Agent, shift: Shift, start: number, end: number) => {
+    const next = clampShiftWindow(start, end);
+    const normEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
+    const serverStart = shift.activeStart ?? shift.startUtc;
+    const serverEnd = shift.activeEnd ?? normEnd;
+
+    setLeverState((prev) => ({ ...prev, [shift.id]: next }));
+
+    if (next.activeStart === serverStart && next.activeEnd === serverEnd) return;
+
+    playSuccess();
+    updateShiftMutation.mutate({
+      id: shift.id,
+      data: { activeStart: next.activeStart, activeEnd: next.activeEnd },
+    });
+
+    if (next.activeEnd > normEnd) {
+      logActivityMutation.mutate({
+        agentId: agent.id,
+        date: selectedDate,
+        type: "overtime",
+        actionType: "overtime-extended",
+        description: `${agent.name} extended their ${DAYS[selectedDay]} (${selectedDate}) shift by ${formatDuration(next.activeEnd - normEnd)}.`,
+      });
+    } else if (next.activeEnd < normEnd) {
+      logActivityMutation.mutate({
+        agentId: agent.id,
+        date: selectedDate,
+        type: "shift-freed",
+        actionType: "shift-freed",
+        description: `${agent.name} freed ${formatDuration(normEnd - next.activeEnd)} of their ${DAYS[selectedDay]} (${selectedDate}) shift. Now up for grabs.`,
+      });
+    }
+  };
 
   const toggleVisible = (id: number) => {
     setVisible(prev => {
@@ -270,12 +298,37 @@ export default function Dashboard() {
         activeStart: ls?.activeStart ?? s.startUtc,
         activeEnd:   ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc),
       };
-    });
+    })
+    .concat(
+      otRecords
+        .filter(
+          (record) =>
+            visible.has(record.agentId) &&
+            record.origin === "claimed-from-agent" &&
+            (record.status === "approved" || record.status === "paid") &&
+            record.dayOfWeek === selectedDay &&
+            record.coverStartUtc != null &&
+            record.coverEndUtc != null
+        )
+        .map((record) => ({
+          activeStart: record.coverStartUtc!,
+          activeEnd: record.coverEndUtc!,
+        }))
+    );
   const coverage    = calcCoverageForDay(coverageInput);
   const maxCoverage = Math.max(...coverage, 1);
 
   const agentSummaries = agents.map(agent => {
     const agentTodayShifts = todayShifts.filter(s => s.agentId === agent.id);
+    const approvedClaims = otRecords.filter(
+      (record) =>
+        record.agentId === agent.id &&
+        record.origin === "claimed-from-agent" &&
+        (record.status === "approved" || record.status === "paid") &&
+        record.dayOfWeek === selectedDay &&
+        record.coverStartUtc != null &&
+        record.coverEndUtc != null
+    );
     let baseHours = 0, activeHours = 0, overtimeHours = 0, releasedHours = 0;
     for (const s of agentTodayShifts) {
       const ls = leverState[s.id];
@@ -295,6 +348,11 @@ export default function Dashboard() {
         releasedHours += (activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!);
       }
     }
+    for (const claim of approvedClaims) {
+      const claimHours = claim.coverEndUtc! - claim.coverStartUtc!;
+      activeHours += claimHours;
+      overtimeHours += claimHours;
+    }
     return { agent, baseHours, activeHours, overtimeHours, releasedHours, shifts: agentTodayShifts };
   });
 
@@ -306,13 +364,26 @@ export default function Dashboard() {
   const todayUTCDay  = getUTCDay();
   const onlineAgents = agents.filter(agent => {
     if (selectedDay !== todayUTCDay) return false;
-    return todayShifts.some(s => {
+    const isOnShift = todayShifts.some(s => {
       if (s.agentId !== agent.id) return false;
       const ls    = leverState[s.id];
       const start = ls?.activeStart ?? s.startUtc;
       const end   = ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc);
       if (end <= 24) return utcHour >= start && utcHour <= end;
       return utcHour >= start || utcHour <= (end - 24);
+    });
+    if (isOnShift) return true;
+
+    return otRecords.some((record) => {
+      if (record.agentId !== agent.id) return false;
+      if (record.origin !== "claimed-from-agent") return false;
+      if (record.status !== "approved" && record.status !== "paid") return false;
+      if (record.dayOfWeek !== selectedDay) return false;
+      if (record.coverStartUtc == null || record.coverEndUtc == null) return false;
+
+      const end = normaliseEndUtc(record.coverStartUtc, record.coverEndUtc);
+      if (end <= 24) return utcHour >= record.coverStartUtc && utcHour <= end;
+      return utcHour >= record.coverStartUtc || utcHour <= (end - 24);
     });
   });
 
@@ -321,8 +392,13 @@ export default function Dashboard() {
 
   const resetLevers = () => {
     const reset: Record<number, LeverState> = { ...leverState };
-    for (const s of todayShifts)
+    for (const s of todayShifts) {
       reset[s.id] = { activeStart: s.startUtc, activeEnd: normaliseEndUtc(s.startUtc, s.endUtc) };
+      updateShiftMutation.mutate({
+        id: s.id,
+        data: { activeStart: s.startUtc, activeEnd: normaliseEndUtc(s.startUtc, s.endUtc) },
+      });
+    }
     setLeverState(reset);
   };
 
@@ -390,7 +466,7 @@ export default function Dashboard() {
               {DAYS.map((d, i) => {
                 const hasShifts = allShifts.some(s => s.dayOfWeek === i);
                 return (
-                  <button key={d} onClick={() => { playSoftClick(); setSelectedDay(i); }} data-testid={`day-${d}`}
+                  <button key={d} onClick={() => { playSoftClick(); updateSelectedDay(i); }} data-testid={`day-${d}`}
                     className={cn(
                       "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
                       selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -495,8 +571,8 @@ export default function Dashboard() {
                 leverState={leverState}
                 utcHour={utcHour}
                 selectedDay={selectedDay}
-                onSelectDay={(dow) => {
-                  setSelectedDay(dow);
+                onSelectDay={(dow, date) => {
+                  updateSelectedDay(dow, date);
                   if (isMulti) setTimelineScope("day");
                 }}
                 toggleVisible={toggleVisible}
@@ -592,33 +668,11 @@ export default function Dashboard() {
                         agent={agent}
                         shift={agentShifts[0]}
                         leverState={leverState[agentShifts[0]?.id]}
-                        onLeverChange={(id, start, end) => {
-                          playSuccess();
-                          setLeverState(prev => ({ ...prev, [id]: { activeStart: start, activeEnd: end } }));
-                          updateShiftMutation.mutate({ id, data: { activeStart: start, activeEnd: end } });
-
-                          // Log activity for significant lever changes
+                        onLeverPreview={previewLeverChange}
+                        onLeverCommit={(_id, start, end) => {
                           const shift = agentShifts[0];
-                          if (shift) {
-                            const normEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
-                            const dateStr = new Date().toISOString().slice(0, 10);
-                            const dayName = DAYS[selectedDay];
-                            if (end > normEnd) {
-                              const otHours = end - normEnd;
-                              logActivityMutation.mutate({
-                                agentId: agent.id, date: dateStr, type: "overtime",
-                                actionType: "overtime-extended",
-                                description: `${agent.name} extended their ${dayName} (${dateStr}) shift by ${formatDuration(otHours)}.`,
-                              });
-                            } else if (end < normEnd) {
-                              const freedH = normEnd - end;
-                              logActivityMutation.mutate({
-                                agentId: agent.id, date: dateStr, type: "shift-freed",
-                                actionType: "shift-freed",
-                                description: `${agent.name} freed ${formatDuration(freedH)} of their ${dayName} (${dateStr}) shift. Now up for grabs.`,
-                              });
-                            }
-                          }
+                          if (!shift) return;
+                          commitLeverChange(agent, shift, start, end);
                         }}
                         highlighted={highlighted === agent.id}
                         onHighlight={() => setHighlighted(agent.id)}
@@ -631,7 +685,6 @@ export default function Dashboard() {
                         selectedDay={selectedDay}
                         playSoftClick={playSoftClick}
                         playDragWhoosh={playDragWhoosh}
-                        playSuccess={playSuccess}
                       />
                     ))}
                     {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (
@@ -669,13 +722,11 @@ export default function Dashboard() {
           agents={agents}
           selectedDay={selectedDay}
           onAssign={(toAgentId) => {
-            const today = new Date();
-            const dateStr = today.toISOString().slice(0, 10);
             assignOvertimeMutation.mutate({
               fromShiftId: assignModal.shift.id,
               toAgentId,
               hours: assignModal.freedHours,
-              date: dateStr,
+              date: selectedDate,
               dayOfWeek: assignModal.shift.dayOfWeek,
             });
           }}
@@ -722,7 +773,7 @@ function UnifiedTimeline({
   leverState: Record<number, LeverState>;
   utcHour: number;
   selectedDay: number;
-  onSelectDay: (dow: number) => void;
+  onSelectDay: (dow: number, date?: string) => void;
   toggleVisible: (id: number) => void;
   toggleAll: () => void;
   onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
@@ -794,6 +845,7 @@ function UnifiedTimeline({
       const activeSegs = segmentShift(as_, ae);
       const normBaseEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
       const isOvernight = baseSegs.length > 1;
+      const showGhost = isVis && shiftHasOverride(shift.startUtc, shift.endUtc, as_, ae);
 
       // For overnight shifts in multi-day scope:
       //   dayOfWeek = the labeled/operational day (where the bulk of hours fall)
@@ -818,7 +870,7 @@ function UnifiedTimeline({
 
       return (
         <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
-          {baseSegs.map((seg, si) => {
+          {showGhost && baseSegs.map((seg, si) => {
             const offX = segOffsetX(seg);
             return (
             <div key={`ghost-${si}`}
@@ -1207,7 +1259,7 @@ function UnifiedTimeline({
                         key={day.date}
                         onClick={() => {
                           const d = new Date(day.date + "T00:00:00Z");
-                          onSelectDay(d.getUTCDay());
+                          onSelectDay(d.getUTCDay(), day.date);
                         }}
                         title={`Open ${DAY_FULL[day.dayOfWeek]} ${day.dateLabel} in Day view`}
                         style={{ position: "absolute", left: x + 4, top: 4, cursor: "pointer", userSelect: "none" }}
@@ -1509,6 +1561,7 @@ function ClockVisualizer({
                 const resolved = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
                 const activeClaimForShift = getActiveClaimForShift(shift, otRecords, selectedDay);
                 const bk = resolved.breakStart;
+                const showGhost = isVis && shiftHasOverride(shift.startUtc, shift.endUtc, as_, ae);
                 const { pct, otPct } = isToday
                   ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)
                   : { pct: 0, otPct: 0 };
@@ -1519,7 +1572,7 @@ function ClockVisualizer({
 
                 return (
                   <g key={shift.id}>
-                    {baseSegs.map((seg, si) => (
+                    {showGhost && baseSegs.map((seg, si) => (
                       <path key={`ghost-${si}`}
                         d={describeArc(CX, CY, r, seg.start, seg.end)}
                         fill="none" stroke={hexToRgba(agent.color, isVis ? 0.22 : 0.06)}
@@ -1657,17 +1710,16 @@ function ClockVisualizer({
                 )
                 .flatMap((slot) => {
                   const segs = segmentShift(slot.coverStartUtc!, slot.coverEndUtc!);
-                  const covR = r + RING_W * 0.7;
                   return segs.map((seg, si) => (
                     <path
                       key={`cov-claim-${slot.id}-${si}`}
-                      d={describeArc(CX, CY, covR, seg.start, seg.end)}
+                      d={describeArc(CX, CY, r, seg.start, seg.end)}
                       fill="none"
-                      stroke="rgba(255,255,255,0.96)"
-                      strokeWidth={Math.max(2, strokeW * 0.38)}
-                      strokeDasharray="2.5 2"
+                      stroke={hexToRgba(agent.color, 0.96)}
+                      strokeWidth={RING_W}
+                      strokeDasharray="6 3"
                       strokeLinecap="round"
-                      style={{ filter: `drop-shadow(0 0 4px ${agent.color})`, pointerEvents: "none" }}
+                      style={{ filter: `drop-shadow(0 0 4px ${agent.color}) drop-shadow(0 0 8px ${agent.color}80)`, pointerEvents: "none" }}
                     >
                       <title>{`Approved claimed coverage: ${formatUtcHour(slot.coverStartUtc!)}-${formatUtcHour(slot.coverEndUtc!)} UTC`}</title>
                     </path>
@@ -1793,19 +1845,20 @@ function ClockVisualizer({
 }
 
 function ShiftLever({
-  agent, shift, leverState, onLeverChange,
+  agent, shift, leverState, onLeverPreview, onLeverCommit,
   highlighted, onHighlight, onUnhighlight,
   baseHours, overtimeHours, releasedHours, isAdmin, utcHour, selectedDay,
-  playSoftClick, playDragWhoosh, playSuccess,
+  playSoftClick, playDragWhoosh,
 }: {
   agent: Agent; shift: Shift | undefined;
   leverState: LeverState | undefined;
-  onLeverChange: (id: number, start: number, end: number) => void;
+  onLeverPreview: (id: number, start: number, end: number) => void;
+  onLeverCommit: (id: number, start: number, end: number) => void;
   highlighted: boolean; onHighlight: () => void; onUnhighlight: () => void;
   baseHours: number; overtimeHours: number; releasedHours: number;
   isAdmin: boolean; utcHour: number; selectedDay: number;
   playSoftClick: () => void;
-  playDragWhoosh: () => void; playSuccess: () => void;
+  playDragWhoosh: () => void;
 }) {
   if (!shift || !leverState) return null;
 
@@ -1818,44 +1871,78 @@ function ShiftLever({
     ? shiftProgress(startUtc, endUtc, activeStart, activeEnd, utcHour)
     : { pct: 0, otPct: 0 };
 
-  const barMax    = 24;
+  const barMax    = 48;
   const normEnd   = normaliseEndUtc(startUtc, endUtc);
   const baseLeft  = (startUtc / barMax) * 100;
   const baseWidth = (resolved.baseDuration / barMax) * 100;
   const actLeft   = (activeStart / barMax) * 100;
   const actWidth  = (resolved.activeDuration / barMax) * 100;
 
-  const adjustEnd   = (delta: number) => { if (!isAdmin) return; onLeverChange(shift.id, activeStart, Math.max(activeStart + 0.5, Math.min(48, activeEnd + delta))); };
-  const adjustStart = (delta: number) => { if (!isAdmin) return; onLeverChange(shift.id, Math.max(0, Math.min(activeEnd - 0.5, activeStart + delta)), activeEnd); };
+  const commitWindow = (start: number, end: number) => {
+    const next = clampShiftWindow(start, end);
+    onLeverPreview(shift.id, next.activeStart, next.activeEnd);
+    onLeverCommit(shift.id, next.activeStart, next.activeEnd);
+  };
+
+  const adjustEnd = (delta: number) => {
+    if (!isAdmin) return;
+    commitWindow(activeStart, activeEnd + delta);
+  };
+
+  const adjustStart = (delta: number) => {
+    if (!isAdmin) return;
+    commitWindow(activeStart + delta, activeEnd);
+  };
 
   const barRef   = useRef<HTMLDivElement>(null);
-  const dragging = useRef<{ type: "start" | "end" | "move"; startX: number; startVal: number; startEnd: number } | null>(null);
+  const dragging = useRef<{
+    type: "start" | "end" | "move";
+    startX: number;
+    startVal: number;
+    startEnd: number;
+    currentStart: number;
+    currentEnd: number;
+  } | null>(null);
 
   const onMouseDown = (e: React.MouseEvent, type: "start" | "end" | "move") => {
     if (!isAdmin) return;
     e.preventDefault();
     playDragWhoosh();
-    dragging.current = { type, startX: e.clientX, startVal: activeStart, startEnd: activeEnd };
-    const snap = (h: number) => Math.round(h * 2) / 2;
+    dragging.current = {
+      type,
+      startX: e.clientX,
+      startVal: activeStart,
+      startEnd: activeEnd,
+      currentStart: activeStart,
+      currentEnd: activeEnd,
+    };
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current || !barRef.current) return;
       const rect  = barRef.current.getBoundingClientRect();
-      const delta = ((ev.clientX - dragging.current.startX) / rect.width) * 24;
+      const delta = ((ev.clientX - dragging.current.startX) / rect.width) * barMax;
       const { type: t, startVal, startEnd } = dragging.current;
       if (t === "start") {
-        const ns = snap(Math.max(0, Math.min(startEnd - 0.5, startVal + delta)));
-        onLeverChange(shift.id, ns, startEnd);
+        const next = clampShiftWindow(startVal + delta, startEnd);
+        dragging.current.currentStart = next.activeStart;
+        dragging.current.currentEnd = next.activeEnd;
+        onLeverPreview(shift.id, next.activeStart, next.activeEnd);
       } else if (t === "end") {
-        const ne = snap(Math.max(startVal + 0.5, Math.min(48, startEnd + delta)));
-        onLeverChange(shift.id, startVal, ne);
+        const next = clampShiftWindow(startVal, startEnd + delta);
+        dragging.current.currentStart = next.activeStart;
+        dragging.current.currentEnd = next.activeEnd;
+        onLeverPreview(shift.id, next.activeStart, next.activeEnd);
       } else {
         const dur = startEnd - startVal;
-        const ns  = snap(Math.max(0, Math.min(48 - dur, startVal + delta)));
-        onLeverChange(shift.id, ns, ns + dur);
+        const next = clampShiftWindow(startVal + delta, startVal + delta + dur);
+        dragging.current.currentStart = next.activeStart;
+        dragging.current.currentEnd = next.activeEnd;
+        onLeverPreview(shift.id, next.activeStart, next.activeEnd);
       }
     };
     const onUp = () => { 
-      playSuccess();
+      if (dragging.current) {
+        onLeverCommit(shift.id, dragging.current.currentStart, dragging.current.currentEnd);
+      }
       dragging.current = null; 
       window.removeEventListener("mousemove", onMove); 
       window.removeEventListener("mouseup", onUp); 
