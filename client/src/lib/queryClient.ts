@@ -1,5 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { getEffectiveAdminToken } from "@/lib/adminAccess";
+import { getAgentToken } from "@/lib/agentAccess";
 
 // Always use relative URLs so the app works on any host/port
 const API_BASE = "";
@@ -22,8 +23,10 @@ export async function apiRequest(
 ): Promise<Response> {
   const headers: Record<string, string> = {};
   const adminToken = getAdminToken();
+  const agentToken = getAgentToken();
   if (data) headers["Content-Type"] = "application/json";
   if (adminToken) headers["x-admin-token"] = adminToken;
+  if (agentToken) headers["x-agent-session"] = agentToken;
   const res = await fetch(`${API_BASE}${url}`, {
     method,
     headers,

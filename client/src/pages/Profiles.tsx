@@ -13,6 +13,7 @@ import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDa
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { getEffectiveAdminToken } from "@/lib/adminAccess";
+import { useAgentSession } from "@/App";
 
 const TIMEZONES = [
   "UTC",
@@ -95,6 +96,7 @@ function seedFromShifts(shifts: Shift[]): { start: number; end: number } {
 export default function Profiles() {
   const { toast } = useToast();
   const isAdmin = useAdminMode();
+  const agentSession = useAgentSession();
   const { playSoftClick, playSuccess } = useSoothingSounds();
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -254,7 +256,7 @@ export default function Profiles() {
             {!isAdmin && (
               <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground border border-border rounded-md px-2 py-1">
                 <Lock size={10} />
-                View-only
+                Limited mode
               </div>
             )}
             {isAdmin && (
@@ -330,7 +332,7 @@ export default function Profiles() {
                       <p className="text-[10px] text-muted-foreground">{agent.role}</p>
                     </div>
                   </div>
-                  {isAdmin && (
+                  {(isAdmin || agentSession?.agentId === agent.id) && (
                     <div className="flex items-center gap-1">
                       <Dialog open={editingAgent?.id === agent.id} onOpenChange={open => !open && setEditingAgent(null)}>
                         <DialogTrigger asChild>
@@ -364,13 +366,15 @@ export default function Profiles() {
                         </DialogContent>
                       </Dialog>
 
-                      <button
-                        onClick={() => { playSoftClick(); deleteMutation.mutate(agent.id); }}
-                        className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
-                        data-testid={`btn-delete-agent-${agent.id}`}
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {isAdmin && (
+                        <button
+                          onClick={() => { playSoftClick(); deleteMutation.mutate(agent.id); }}
+                          className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                          data-testid={`btn-delete-agent-${agent.id}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

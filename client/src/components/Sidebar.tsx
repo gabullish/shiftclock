@@ -1,8 +1,9 @@
 import React from "react";
 import { Link, useLocation } from "wouter";
-import { Clock, Users, LayoutDashboard, Hand, ScrollText } from "lucide-react";
+import { Clock, Users, LayoutDashboard, Hand, ScrollText, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDragScrollPreference } from "@/hooks/use-drag-scroll";
+import type { AgentSession } from "@/lib/agentAccess";
 
 const navItems = [
   { href: "/", label: "Command", icon: LayoutDashboard },
@@ -11,7 +12,13 @@ const navItems = [
   { href: "/profiles", label: "Agents", icon: Users },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({
+  agentSession,
+  onAgentSignOff,
+}: {
+  agentSession?: AgentSession | null;
+  onAgentSignOff?: () => void;
+}) {
   const [location] = useLocation();
   const { enabled: dragScrollEnabled, setEnabled: setDragScrollEnabled } = useDragScrollPreference();
 
@@ -56,7 +63,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* UTC Clock */}
+      {/* Bottom area: agent indicator or UTC clock */}
       <div className="p-3 border-t border-border space-y-2">
         <button
           onClick={() => setDragScrollEnabled(!dragScrollEnabled)}
@@ -72,11 +79,42 @@ export default function Sidebar() {
           <span className="hidden lg:inline">Drag scroll</span>
           <span className="ml-auto font-mono">{dragScrollEnabled ? "ON" : "OFF"}</span>
         </button>
-        <LiveUTCClock />
+
+        {agentSession ? (
+          <AgentIndicator session={agentSession} onSignOff={onAgentSignOff} />
+        ) : (
+          <LiveUTCClock />
+        )}
       </div>
     </aside>
   );
 }
+
+function AgentIndicator({ session, onSignOff }: { session: AgentSession; onSignOff?: () => void }) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <div className="relative w-2 h-2 shrink-0">
+        <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+      </div>
+      <div className="hidden lg:flex flex-1 items-center justify-between min-w-0 gap-1">
+        <div className="min-w-0">
+          <p className="text-[10px] text-blue-400 leading-none font-semibold truncate">AGENT SESSION</p>
+          <p className="text-xs font-medium text-foreground truncate mt-0.5">{session.agentName}</p>
+        </div>
+        {onSignOff && (
+          <button
+            onClick={onSignOff}
+            title="Sign off"
+            className="shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+          >
+            <LogOut size={11} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 function LiveUTCClock() {
   const [time, setTime] = React.useState(new Date());

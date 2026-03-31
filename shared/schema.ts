@@ -99,3 +99,26 @@ export const agentLogs = sqliteTable("agent_logs", {
 export const insertAgentLogSchema = createInsertSchema(agentLogs).omit({ id: true });
 export type InsertAgentLog = z.infer<typeof insertAgentLogSchema>;
 export type AgentLog = typeof agentLogs.$inferSelect;
+
+// Overtime claims — multiple agents competing for the same gap/opportunity
+// opportunityId references overtime_log.id (the gap or shrink opportunity)
+export const overtimeClaims = sqliteTable(
+  "overtime_claims",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    opportunityId: integer("opportunity_id").notNull(), // FK to overtime_log
+    agentId: integer("agent_id").notNull(),
+    status: text("status").notNull().default("pending"), // pending | approved | rejected | cancelled
+    claimOrder: integer("claim_order").notNull(), // 1=first, 2=second, etc.
+    note: text("note"),
+    createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+  },
+  (table) => ({
+    claimsOpportunityIdx: index("idx_claims_opportunity").on(table.opportunityId, table.status),
+    claimsAgentIdx: index("idx_claims_agent").on(table.agentId, table.status),
+  })
+);
+
+export const insertOvertimeClaimSchema = createInsertSchema(overtimeClaims).omit({ id: true });
+export type InsertOvertimeClaim = z.infer<typeof insertOvertimeClaimSchema>;
+export type OvertimeClaim = typeof overtimeClaims.$inferSelect;

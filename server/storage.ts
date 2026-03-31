@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { agents, shifts, overtimeLog, agentLogs } from "@shared/schema";
-import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog, AgentLog, InsertAgentLog } from "@shared/schema";
+import { agents, shifts, overtimeLog, agentLogs, overtimeClaims } from "@shared/schema";
+import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog, AgentLog, InsertAgentLog, OvertimeClaim, InsertOvertimeClaim } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 
 export interface IStorage {
@@ -38,6 +38,15 @@ export interface IStorage {
   upsertRecentAgentLog(data: InsertAgentLog, dedupeWindowMs?: number): AgentLog;
   deleteAgentLog(id: number): void;
   clearAllAgentLogs(): void;
+
+  // Overtime claims (multi-agent competing for same opportunity)
+  getClaimsForOpportunity(opportunityId: number): OvertimeClaim[];
+  getClaimsByAgent(agentId: number): OvertimeClaim[];
+  createClaim(data: Omit<InsertOvertimeClaim, "claimOrder">): OvertimeClaim;
+  updateClaim(id: number, data: Partial<InsertOvertimeClaim>): OvertimeClaim | undefined;
+  cancelClaim(id: number, agentId: number): OvertimeClaim | undefined;
+  approveClaimAndRejectOthers(claimId: number, opportunityId: number): OvertimeClaim | undefined;
+  deleteClaimsByOpportunity(opportunityId: number): void;
 
   // Backup / restore
   exportAll(): { agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] };
@@ -192,6 +201,61 @@ export const storage: IStorage = {
   },
   clearAllAgentLogs() {
     db.delete(agentLogs).run();
+  },
+
+  // --- Overtime claims ---
+  getClaimsForOpportunity(opportunityId) {
+    return db.select().from(overtimeClaims)
+      .where(eq(overtimeClaims.opportunityId, opportunityId))
+      .all()
+      .sort((a, b) => a.claimOrder - b.claimOrder);
+  },
+  getClaimsByAgent(agentId) {
+    return db.select().from(overtimeClaims)
+      .where(eq(overtimeClaims.agentId, agentId))
+      .all();
+  },
+  createClaim(data) {
+    // Determine next order for this opportunity
+    const existing = db.select().from(overtimeClaims)
+      .where(eq(overtimeClaims.opportunityId, data.opportunityId))
+      .all();
+    const nextOrder = existing.length + 1;
+    return db.insert(overtimeClaims)
+      .values({ ...data, claimOrder: nextOrder })
+      .returning().get();
+  },
+  updateClaim(id, data) {
+    return db.update(overtimeClaims).set(data).where(eq(overtimeClaims.id, id)).returning().get();
+  },
+  cancelClaim(id, agentId) {
+    const claim = db.select().from(overtimeClaims)
+      .where(and(eq(overtimeClaims.id, id), eq(overtimeClaims.agentId, agentId)))
+      .get();
+    if (!claim) return undefined;
+    return db.update(overtimeClaims)
+      .set({ status: "cancelled" })
+      .where(eq(overtimeClaims.id, id))
+      .returning().get();
+  },
+  approveClaimAndRejectOthers(claimId, opportunityId) {
+    const approved = db.update(overtimeClaims)
+      .set({ status: "approved" })
+      .where(eq(overtimeClaims.id, claimId))
+      .returning().get();
+    // Reject all other pending claims for same opportunity
+    const others = db.select().from(overtimeClaims)
+      .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")))
+      .all();
+    for (const other of others) {
+      if (other.id !== claimId) {
+        db.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id)).run();
+      }
+    }
+    return approved;
+  },
+  deleteClaimsByOpportunity(opportunityId) {
+    db.delete(overtimeClaims).where(eq(overtimeClaims.opportunityId, opportunityId)).run();
   },
 
   exportAll() {

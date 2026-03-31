@@ -1,21 +1,47 @@
-import { useState, useEffect, useRef, type ChangeEvent } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Agent, AgentLog, OvertimeLog } from "@shared/schema";
+import type { Agent, AgentLog, OvertimeClaim, OvertimeLog } from "@shared/schema";
 import { cn } from "@/lib/utils";
-import { ScrollText, Clock, CheckCircle, XCircle, DollarSign, ArrowRightLeft, ExternalLink, ChevronDown } from "lucide-react";
+import {
+  ArrowRightLeft,
+  CheckCircle,
+  ChevronDown,
+  Clock,
+  DollarSign,
+  Download,
+  MoreHorizontal,
+  ScrollText,
+  Trash2,
+  Undo2,
+  Upload,
+  Users,
+  XCircle,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useAdminMode } from "@/hooks/use-admin-mode";
-import { Trash2, Download, Upload } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { formatUtcHour, isCoverageClaim } from "@/lib/shiftUtils";
+import { useAgentSession } from "@/App";
+import { agentAuthHeaders } from "@/lib/agentAccess";
 
 const TABS = ["Activity Log", "Overtime"] as const;
 type Tab = (typeof TABS)[number];
 
+const STATUS_CONFIG = {
+  pending: { label: "Pending", color: "text-yellow-400", bg: "bg-yellow-500/15 border-yellow-500/30", icon: Clock },
+  approved: { label: "Approved", color: "text-blue-400", bg: "bg-blue-500/15 border-blue-500/30", icon: CheckCircle },
+  denied: { label: "Denied", color: "text-red-400", bg: "bg-red-500/15 border-red-500/30", icon: XCircle },
+  paid: { label: "Paid", color: "text-green-400", bg: "bg-green-500/15 border-green-500/30", icon: DollarSign },
+} as const;
+
+const ALL_STATUSES = ["pending", "approved", "paid", "denied"] as const;
+
 export default function ActivityLog() {
   const isAdmin = useAdminMode();
+  const agentSession = useAgentSession();
+  const isAgent = Boolean(agentSession);
   const [location] = useLocation();
   const pathOnly = location.split("?")[0];
   const isOvertimeRoute = pathOnly === "/overtime";
@@ -30,9 +56,16 @@ export default function ActivityLog() {
     setTab((prev) => (prev === "Overtime" || prev === "Activity Log" ? prev : "Activity Log"));
   }, [isAdmin, isOvertimeRoute]);
 
+  if (!isAdmin && !isAgent) {
+    return (
+      <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+        Sign in as manager or agent to access overtime.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
       <header className="h-14 flex items-center justify-between px-6 border-b border-border shrink-0 bg-card/50 backdrop-blur">
         <div className="flex items-center gap-3">
           <ScrollText size={16} className="text-primary" />
@@ -45,9 +78,7 @@ export default function ActivityLog() {
               onClick={() => setTab(t)}
               className={cn(
                 "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
-                tab === t
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {t === "Activity Log" ? <ScrollText size={13} /> : <Clock size={13} />}
@@ -58,113 +89,109 @@ export default function ActivityLog() {
       </header>
 
       <div className="flex-1 min-h-0 overflow-hidden">
-        {tab === "Activity Log" && isAdmin ? <ActivityFeed /> : <OvertimePanel canManage={isAdmin} />}
+        {tab === "Activity Log" && isAdmin ? (
+          <ActivityFeed />
+        ) : (
+          <OvertimePanel canManage={isAdmin} agentSession={agentSession} />
+        )}
       </div>
     </div>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Activity Feed — newest-first, terminal-style
-   ────────────────────────────────────────────────────────────── */
-
 function ActivityFeed() {
   const { data: logs = [] } = useQuery<AgentLog[]>({ queryKey: ["/api/agent-logs"] });
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
 
-  const agentMap = new Map(agents.map((a) => [a.id, a]));
-    const isAdmin = useAdminMode();
-    const [confirmClear, setConfirmClear] = useState(false);
-    const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
+  const isAdmin = useAdminMode();
+  const [confirmClear, setConfirmClear] = useState(false);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
 
-    const clearLogMutation = useMutation({
-      mutationFn: () => apiRequest("DELETE", "/api/agent-logs", {}),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-        setConfirmClear(false);
-        toast({ title: "Activity log cleared" });
-      },
-    });
+  const clearLogMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", "/api/agent-logs", {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      setConfirmClear(false);
+      toast({ title: "Activity log cleared" });
+    },
+  });
 
-    const handleClear = () => {
-      if (!confirmClear) {
-        setConfirmClear(true);
-        clearTimeout(confirmTimer.current);
-        confirmTimer.current = setTimeout(() => setConfirmClear(false), 3500);
-        return;
-      }
+  const sorted = useMemo(
+    () =>
+      [...logs]
+        .filter((l) => l.description)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [logs],
+  );
+
+  const handleClear = () => {
+    if (!confirmClear) {
+      setConfirmClear(true);
       clearTimeout(confirmTimer.current);
-      clearLogMutation.mutate();
-    };
+      confirmTimer.current = setTimeout(() => setConfirmClear(false), 3500);
+      return;
+    }
+    clearTimeout(confirmTimer.current);
+    clearLogMutation.mutate();
+  };
 
-    const handleExport = () => {
-      const data = JSON.stringify(sorted, null, 2);
-      const blob = new Blob([data], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `activity-log-${new Date().toISOString().split("T")[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    };
+  const handleExport = () => {
+    const data = JSON.stringify(sorted, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `activity-log-${new Date().toISOString().split("T")[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-  const sorted = [...logs]
-    .filter((l) => l.description)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const agentMap = new Map(agents.map((a) => [a.id, a]));
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain p-4">
-        {/* Toolbar */}
-        {logs.length > 0 && (
-          <div className="flex items-center justify-end gap-2 mb-3 max-w-3xl mx-auto">
+      {sorted.length > 0 && (
+        <div className="flex items-center justify-end gap-2 mb-3 max-w-3xl mx-auto">
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Download size={11} /> Export
+          </button>
+          {isAdmin && (
             <button
-              onClick={handleExport}
-              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              onClick={handleClear}
+              className={cn(
+                "flex items-center gap-1 text-[10px] transition-colors",
+                confirmClear ? "text-destructive font-semibold" : "text-muted-foreground hover:text-destructive",
+              )}
             >
-              <Download size={11} /> Export
+              <Trash2 size={11} />
+              {confirmClear ? "Confirm clear?" : "Clear log"}
             </button>
-            {isAdmin && (
-              <button
-                onClick={handleClear}
-                className={cn(
-                  "flex items-center gap-1 text-[10px] transition-colors",
-                  confirmClear
-                    ? "text-destructive font-semibold"
-                    : "text-muted-foreground hover:text-destructive"
-                )}
-              >
-                <Trash2 size={11} />
-                {confirmClear ? "Confirm clear?" : "Clear log"}
-              </button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
+      )}
+
       {sorted.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
           <ScrollText size={32} className="text-muted-foreground" />
           <p className="text-sm text-muted-foreground">No activity yet.</p>
-          <p className="text-xs text-muted-foreground">
-            Actions like shift changes, overtime assignments, and status updates will appear here.
-          </p>
         </div>
       ) : (
         <div className="space-y-1 max-w-3xl mx-auto font-mono text-[12px]">
           {sorted.map((log) => {
             const agent = agentMap.get(log.agentId);
-            const ts = formatLogTimestamp(log.createdAt);
             return (
-              <div
-                key={log.id}
-                className="flex gap-3 py-1.5 px-2 rounded hover:bg-muted/50 transition-colors"
-              >
-                <span className="text-muted-foreground shrink-0 tabular-nums">{ts}</span>
+              <div key={log.id} className="flex gap-3 py-1.5 px-2 rounded hover:bg-muted/50 transition-colors">
+                <span className="text-muted-foreground shrink-0 tabular-nums">{formatLogTimestamp(log.createdAt)}</span>
                 <span className="text-[10px] shrink-0 mt-0.5">
                   {log.actionType && (
                     <Badge
                       variant="outline"
                       className="text-[9px] px-1 py-0"
                       style={{
-                        borderColor: agent ? agent.color + "50" : undefined,
+                        borderColor: agent ? `${agent.color}50` : undefined,
                         color: agent ? agent.color : undefined,
                       }}
                     >
@@ -182,107 +209,144 @@ function ActivityFeed() {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Overtime Panel — grouped list with status badges
-   ────────────────────────────────────────────────────────────── */
-
-const STATUS_CONFIG = {
-  pending: { label: "Pending", color: "text-yellow-400", bg: "bg-yellow-500/15 border-yellow-500/30", icon: Clock },
-  approved: { label: "Approved", color: "text-blue-400", bg: "bg-blue-500/15 border-blue-500/30", icon: CheckCircle },
-  denied: { label: "Denied", color: "text-red-400", bg: "bg-red-500/15 border-red-500/30", icon: XCircle },
-  paid: { label: "Paid", color: "text-green-400", bg: "bg-green-500/15 border-green-500/30", icon: DollarSign },
-} as const;
-
-const ALL_STATUSES = ["pending", "approved", "paid", "denied"] as const;
-
-function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const status = current as keyof typeof STATUS_CONFIG;
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
-  const StatusIcon = cfg.icon;
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className={cn(
-          "flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-all hover:scale-105 cursor-pointer",
-          cfg.bg, cfg.color
-        )}
-      >
-        <StatusIcon size={11} />
-        {cfg.label}
-        <ChevronDown size={9} className="ml-0.5 opacity-60" />
-      </button>
-      {open && (
-        <div className="absolute z-50 top-full mt-1 right-0 bg-card border border-border rounded-lg shadow-xl py-1 min-w-[120px]">
-          {ALL_STATUSES.map((s) => {
-            const c = STATUS_CONFIG[s];
-            const Icon = c.icon;
-            const isActive = s === status;
-            return (
-              <button
-                key={s}
-                onClick={() => { if (!isActive) onSelect(s); setOpen(false); }}
-                className={cn(
-                  "w-full flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium transition-colors text-left",
-                  isActive ? "bg-muted/60 opacity-60 cursor-default" : "hover:bg-muted/40 cursor-pointer",
-                  c.color,
-                )}
-              >
-                <Icon size={12} />
-                {c.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StatusBadge({ current }: { current: string }) {
-  const status = current as keyof typeof STATUS_CONFIG;
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
-  const StatusIcon = cfg.icon;
-  return (
-    <div className={cn("inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium", cfg.bg, cfg.color)}>
-      <StatusIcon size={11} />
-      {cfg.label}
-    </div>
-  );
-}
-
-function OvertimePanel({ canManage }: { canManage: boolean }) {
+function OvertimePanel({
+  canManage,
+  agentSession,
+}: {
+  canManage: boolean;
+  agentSession: import("@/lib/agentAccess").AgentSession | null;
+}) {
   const [location] = useLocation();
   const { data: records = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
 
-  const agentMap = new Map(agents.map((a) => [a.id, a]));
+  const sorted = useMemo(() => {
+    const statusPriority: Record<string, number> = { pending: 0, approved: 1, paid: 2, denied: 3 };
+    return [...records].sort((a, b) => {
+      const pa = statusPriority[a.status ?? "pending"] ?? 99;
+      const pb = statusPriority[b.status ?? "pending"] ?? 99;
+      if (pa !== pb) return pa - pb;
+      return new Date(b.date).getTime() - new Date(a.date).getTime();
+    });
+  }, [records]);
+
+  const opportunityIds = useMemo(
+    () => sorted.filter((r) => r.status === "pending" && isCoverageClaim(r)).map((r) => r.id),
+    [sorted],
+  );
+
+  const { data: allClaims = [] } = useQuery<OvertimeClaim[]>({
+    queryKey: ["/api/overtime-claims", opportunityIds.join(",")],
+    queryFn: async () => {
+      if (opportunityIds.length === 0) return [];
+      const responses = await Promise.all(
+        opportunityIds.map(async (id) => {
+          const res = await fetch(`/api/overtime/${id}/claims`);
+          if (!res.ok) return [] as OvertimeClaim[];
+          return (await res.json()) as OvertimeClaim[];
+        }),
+      );
+      return responses.flat();
+    },
+    enabled: opportunityIds.length > 0,
+  });
+
+  const claimsByOpportunity = useMemo(() => {
+    const map = new Map<number, OvertimeClaim[]>();
+    for (const c of allClaims) {
+      const list = map.get(c.opportunityId) ?? [];
+      list.push(c);
+      map.set(c.opportunityId, list);
+    }
+    map.forEach((claims, id) => {
+      map.set(id, [...claims].sort((a, b) => a.claimOrder - b.claimOrder));
+    });
+    return map;
+  }, [allClaims]);
+
+  const agentMap = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const importFileRef = useRef<HTMLInputElement>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const handleExportOT = () => {
-    const data = JSON.stringify(sorted, null, 2);
-    const blob = new Blob([data], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `overtime-log-${new Date().toISOString().split("T")[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) => apiRequest("PATCH", `/api/overtime/${id}`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+    },
+  });
+
+  const claimMutation = useMutation({
+    mutationFn: async (opportunityId: number) => {
+      const res = await fetch(`/api/overtime/${opportunityId}/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...agentAuthHeaders() },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(body.message ?? "Claim failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime-claims"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      toast({ title: "Claim submitted", description: "Waiting for manager approval." });
+    },
+    onError: (err) => {
+      toast({
+        title: "Claim failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const cancelClaimMutation = useMutation({
+    mutationFn: async (opportunityId: number) => {
+      const res = await fetch(`/api/overtime/${opportunityId}/claim`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", ...agentAuthHeaders() },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(body.message ?? "Cancel failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime-claims"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      toast({ title: "Claim canceled" });
+    },
+    onError: (err) => {
+      toast({
+        title: "Cancel failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const approveClaimMutation = useMutation({
+    mutationFn: ({ opportunityId, claimId }: { opportunityId: number; claimId: number }) =>
+      apiRequest("POST", `/api/overtime/${opportunityId}/approve-claim/${claimId}`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime-claims"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      toast({ title: "Claim approved" });
+    },
+    onError: () => {
+      toast({ title: "Approval failed", variant: "destructive" });
+    },
+  });
 
   const clearOvertimeMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", "/api/overtime/all", {}),
@@ -306,6 +370,17 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
       toast({ title: "Import failed", description: "Check the JSON format.", variant: "destructive" });
     },
   });
+
+  const handleExportOT = () => {
+    const data = JSON.stringify(sorted, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `overtime-log-${new Date().toISOString().split("T")[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handleClear = () => {
     if (!confirmClear) {
@@ -335,25 +410,6 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
     }
   };
 
-  const statusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: number; status: string }) =>
-      apiRequest("PATCH", `/api/overtime/${id}`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
-    },
-  });
-
-  const statusPriority: Record<string, number> = { pending: 0, approved: 1, paid: 2, denied: 3 };
-  const sorted = [...records].sort((a, b) => {
-    const pa = statusPriority[a.status ?? "pending"] ?? 99;
-    const pb = statusPriority[b.status ?? "pending"] ?? 99;
-    if (pa !== pb) return pa - pb;
-    return new Date(b.date).getTime() - new Date(a.date).getTime();
-  });
-
-  const hasRecords = sorted.length > 0;
   const rowRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const [focusedOtId, setFocusedOtId] = useState<number | null>(null);
 
@@ -376,7 +432,7 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
   }, [focusedOtId, sorted]);
 
   const navigateToTimeline = (rec: OvertimeLog) => {
-    const d = new Date(rec.date + "T00:00:00Z");
+    const d = new Date(`${rec.date}T00:00:00Z`);
     const dow = d.getUTCDay();
     const focusHour = rec.coverStartUtc ?? 0;
     window.location.href = `${window.location.pathname}?day=${dow}&date=${rec.date}&scope=multi&focusHour=${focusHour}&focusAgentId=${rec.agentId}#/`;
@@ -384,79 +440,74 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain p-4">
-      {!hasRecords ? (
+      {sorted.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
           <Clock size={32} className="text-muted-foreground" />
           <p className="text-sm text-muted-foreground">No overtime records yet.</p>
-          <p className="text-xs text-muted-foreground">
-            Overtime from shift extensions and claimed segments will appear here for review.
-          </p>
         </div>
       ) : (
-        <div className="max-w-4xl mx-auto space-y-2">
-          {/* Summary bar */}
-            {/* Toolbar */}
-            <div className="flex justify-end mb-1 gap-2">
-              <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportOT} />
+        <div className="max-w-5xl mx-auto space-y-2">
+          <div className="flex justify-end mb-1 gap-2">
+            <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportOT} />
+            <button
+              onClick={handleExportOT}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Download size={11} /> Export
+            </button>
+            {canManage && (
               <button
-                onClick={handleExportOT}
+                onClick={() => importFileRef.current?.click()}
                 className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
               >
-                <Download size={11} /> Export
+                <Upload size={11} /> Import
               </button>
-              {canManage && (
-                <button
-                  onClick={() => importFileRef.current?.click()}
-                  className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Upload size={11} /> Import
-                </button>
-              )}
-              {canManage && (
-                <button
-                  onClick={handleClear}
-                  className={cn(
-                    "flex items-center gap-1 text-[10px] transition-colors",
-                    confirmClear ? "text-destructive font-semibold" : "text-muted-foreground hover:text-destructive"
-                  )}
-                >
-                  <Trash2 size={11} />
-                  {confirmClear ? "Confirm clear?" : "Clear log"}
-                </button>
-              )}
-            </div>
+            )}
+            {canManage && (
+              <button
+                onClick={handleClear}
+                className={cn(
+                  "flex items-center gap-1 text-[10px] transition-colors",
+                  confirmClear ? "text-destructive font-semibold" : "text-muted-foreground hover:text-destructive",
+                )}
+              >
+                <Trash2 size={11} />
+                {confirmClear ? "Confirm clear?" : "Clear log"}
+              </button>
+            )}
+          </div>
+
           <div className="grid grid-cols-4 gap-2 mb-4">
             {ALL_STATUSES.map((s) => {
               const count = sorted.filter((r) => (r.status ?? "pending") === s).length;
               const cfg = STATUS_CONFIG[s];
               return (
-                <div
-                  key={s}
-                  className={cn("rounded-md border p-2.5 text-center", cfg.bg)}
-                >
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">
-                    {cfg.label}
-                  </p>
+                <div key={s} className={cn("rounded-md border p-2.5 text-center", cfg.bg)}>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{cfg.label}</p>
                   <p className={cn("text-lg font-bold font-mono", cfg.color)}>{count}</p>
                 </div>
               );
             })}
           </div>
 
-          {/* Table */}
           <div className="rounded-lg border border-border overflow-visible">
-            <div className="grid grid-cols-[1fr_100px_80px_140px_110px] gap-2 px-3 py-2 border-b border-border bg-muted/30 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
-              <span>Agent</span>
+            <div className="grid grid-cols-[1fr_95px_72px_1fr_160px] gap-2 px-3 py-2 border-b border-border bg-muted/30 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
+              <span>Opportunity</span>
               <span>Date</span>
               <span>Hours</span>
               <span>Origin</span>
-              <span>Status</span>
+              <span>Status / Claims</span>
             </div>
+
             {sorted.map((rec) => {
               const agent = agentMap.get(rec.agentId);
               const status = (rec.status ?? "pending") as keyof typeof STATUS_CONFIG;
               const isDenied = status === "denied";
               const coveredBy = rec.coveredByAgentId ? agentMap.get(rec.coveredByAgentId) : null;
+              const recClaims = claimsByOpportunity.get(rec.id) ?? [];
+              const pendingClaims = recClaims.filter((c) => c.status === "pending");
+              const myPendingClaim = agentSession ? pendingClaims.find((c) => c.agentId === agentSession.agentId) : null;
+              const isOpportunity = isCoverageClaim(rec) && rec.status === "pending";
 
               return (
                 <div
@@ -465,57 +516,112 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
                     rowRefs.current[rec.id] = el;
                   }}
                   className={cn(
-                    "grid grid-cols-[1fr_100px_80px_140px_110px] gap-2 px-3 py-2.5 border-b border-border last:border-b-0 items-center text-xs transition-opacity",
+                    "border-b border-border last:border-b-0 transition-opacity",
                     isDenied && "opacity-40",
-                    focusedOtId === rec.id && "ring-1 ring-primary/60 bg-primary/5"
+                    focusedOtId === rec.id && "ring-1 ring-primary/60 bg-primary/5",
                   )}
                 >
-                  {/* Agent */}
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: agent?.color }}
-                    />
-                    <span className="font-medium truncate">{agent?.name ?? "Unknown"}</span>
-                  </div>
-
-                  {/* Date */}
-                  <span className="font-mono text-muted-foreground">{rec.date}</span>
-
-                  {/* Hours */}
-                  <span className="font-mono font-bold">
-                    {rec.overtimeHours > 0 ? `+${rec.overtimeHours.toFixed(1)}h` : `${rec.releasedHours.toFixed(1)}h`}
-                  </span>
-
-                  {/* Origin — clickable for coverage claims */}
-                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                    {isCoverageClaim(rec) ? (
-                      <button
-                        onClick={() => navigateToTimeline(rec)}
-                        className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
-                        title="View on timeline"
-                      >
-                        <ArrowRightLeft size={10} />
-                        <span>
-                          {rec.origin === "claimed-open-gap"
-                            ? `open gap ${rec.coverStartUtc != null && rec.coverEndUtc != null ? `${formatUtcHour(rec.coverStartUtc)}-${formatUtcHour(rec.coverEndUtc)}` : ""}`
-                            : <>from <span style={{ color: coveredBy?.color }}>{coveredBy?.name ?? "agent"}</span></>}
+                  <div className="grid grid-cols-[1fr_95px_72px_1fr_160px] gap-2 px-3 py-2.5 items-center text-xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: agent?.color ?? "#888" }} />
+                      <span className="font-medium truncate">{agent?.name ?? "Unknown"}</span>
+                      {pendingClaims.length > 0 && (
+                        <span className="flex items-center gap-0.5 text-[10px] text-yellow-400 font-semibold shrink-0">
+                          <Users size={10} /> {pendingClaims.length}
                         </span>
-                        <ExternalLink size={9} className="opacity-50" />
-                      </button>
-                    ) : (
-                      <span>{rec.origin ?? "manager"}</span>
-                    )}
+                      )}
+                    </div>
+
+                    <span className="font-mono text-muted-foreground">{rec.date}</span>
+
+                    <span className="font-mono font-bold">
+                      {rec.overtimeHours > 0 ? `+${rec.overtimeHours.toFixed(1)}h` : `${rec.releasedHours.toFixed(1)}h`}
+                    </span>
+
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground min-w-0">
+                      {isCoverageClaim(rec) ? (
+                        <button
+                          onClick={() => navigateToTimeline(rec)}
+                          className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer truncate"
+                          title="View on timeline"
+                        >
+                          <ArrowRightLeft size={10} className="shrink-0" />
+                          <span className="truncate">
+                            {rec.origin === "claimed-open-gap"
+                              ? `gap ${rec.coverStartUtc != null && rec.coverEndUtc != null ? `${formatUtcHour(rec.coverStartUtc)}-${formatUtcHour(rec.coverEndUtc)}` : ""}`
+                              : `from ${coveredBy?.name ?? "agent"}`}
+                          </span>
+                        </button>
+                      ) : (
+                        <span className="truncate">{rec.origin ?? "manager"}</span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1 justify-end">
+                      {agentSession && isOpportunity && !canManage && (
+                        myPendingClaim ? (
+                          <button
+                            onClick={() => cancelClaimMutation.mutate(rec.id)}
+                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive transition-colors"
+                            title="Cancel your claim"
+                          >
+                            <Undo2 size={10} /> Undo
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => claimMutation.mutate(rec.id)}
+                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 transition-colors"
+                          >
+                            Claim
+                          </button>
+                        )
+                      )}
+
+                      {canManage && pendingClaims.length > 0 && isOpportunity && (
+                        <ClaimApproverDropdown
+                          claims={pendingClaims}
+                          agentMap={agentMap}
+                          onApprove={(claimId) => approveClaimMutation.mutate({ opportunityId: rec.id, claimId })}
+                        />
+                      )}
+
+                      {canManage ? (
+                        <StatusDropdown
+                          current={status}
+                          onSelect={(s) => statusMutation.mutate({ id: rec.id, status: s })}
+                        />
+                      ) : (
+                        <StatusBadge current={status} />
+                      )}
+                    </div>
                   </div>
 
-                  {/* Status control: admins can update, view-only sees final manager decision */}
-                  {canManage ? (
-                    <StatusDropdown
-                      current={status}
-                      onSelect={(s) => statusMutation.mutate({ id: rec.id, status: s })}
-                    />
-                  ) : (
-                    <StatusBadge current={status} />
+                  {recClaims.length > 0 && (
+                    <div className="px-4 pb-2 space-y-1">
+                      {recClaims.map((claim) => {
+                        const claimAgent = agentMap.get(claim.agentId);
+                        const isMe = agentSession?.agentId === claim.agentId;
+                        return (
+                          <div
+                            key={claim.id}
+                            className={cn(
+                              "flex items-center gap-2 text-[10px] py-0.5 px-2 rounded",
+                              claim.status === "approved" && "bg-blue-500/10 text-blue-400",
+                              claim.status === "pending" && "text-muted-foreground",
+                              claim.status === "rejected" && "text-muted-foreground/40 line-through",
+                              claim.status === "cancelled" && "text-muted-foreground/30 line-through",
+                              isMe && claim.status === "pending" && "text-yellow-400",
+                            )}
+                          >
+                            <span className="font-mono w-7 text-center opacity-60">#{claim.claimOrder}</span>
+                            <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: claimAgent?.color }} />
+                            <span className="font-medium">{claimAgent?.name ?? `Agent #${claim.agentId}`}</span>
+                            {isMe && <span className="text-[9px] opacity-60">(you)</span>}
+                            <span className="ml-auto capitalize opacity-70">{claim.status}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               );
@@ -527,9 +633,134 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Helpers
-   ────────────────────────────────────────────────────────────── */
+function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const status = current as keyof typeof STATUS_CONFIG;
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
+  const StatusIcon = cfg.icon;
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={cn(
+          "flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-all hover:scale-105 cursor-pointer",
+          cfg.bg,
+          cfg.color,
+        )}
+      >
+        <StatusIcon size={11} />
+        {cfg.label}
+        <ChevronDown size={9} className="ml-0.5 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full mt-1 right-0 bg-card border border-border rounded-lg shadow-xl py-1 min-w-[120px]">
+          {ALL_STATUSES.map((s) => {
+            const c = STATUS_CONFIG[s];
+            const Icon = c.icon;
+            const isActive = s === status;
+            return (
+              <button
+                key={s}
+                onClick={() => {
+                  if (!isActive) onSelect(s);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium transition-colors text-left",
+                  isActive ? "bg-muted/60 opacity-60 cursor-default" : "hover:bg-muted/40 cursor-pointer",
+                  c.color,
+                )}
+              >
+                <Icon size={12} />
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusBadge({ current }: { current: string }) {
+  const status = current as keyof typeof STATUS_CONFIG;
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
+  const StatusIcon = cfg.icon;
+  return (
+    <div className={cn("inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium", cfg.bg, cfg.color)}>
+      <StatusIcon size={11} />
+      {cfg.label}
+    </div>
+  );
+}
+
+function ClaimApproverDropdown({
+  claims,
+  agentMap,
+  onApprove,
+}: {
+  claims: OvertimeClaim[];
+  agentMap: Map<number, Agent>;
+  onApprove: (claimId: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="h-7 w-7 inline-flex items-center justify-center rounded border border-border hover:bg-muted/60 text-muted-foreground hover:text-foreground"
+        title="Choose claim to approve"
+      >
+        <MoreHorizontal size={13} />
+      </button>
+      {open && (
+        <div className="absolute z-50 right-0 top-full mt-1 w-56 rounded-md border border-border bg-card shadow-xl p-1">
+          {claims.map((claim) => {
+            const claimant = agentMap.get(claim.agentId);
+            return (
+              <button
+                key={claim.id}
+                onClick={() => {
+                  onApprove(claim.id);
+                  setOpen(false);
+                }}
+                className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] opacity-70 w-7">#{claim.claimOrder}</span>
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: claimant?.color ?? "#888" }} />
+                  <span className="text-xs font-medium truncate">{claimant?.name ?? `Agent #${claim.agentId}`}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function formatLogTimestamp(iso: string) {
   const d = new Date(iso);
