@@ -185,6 +185,7 @@ export default function Dashboard() {
   const [visible,        setVisible]        = useState<Set<number>>(new Set());
   const [highlighted,    setHighlighted]    = useState<number | null>(null);
   const [leverState,     setLeverState]     = useState<Record<number, LeverState>>({});
+  const pendingCommit = useRef<Set<number>>(new Set());
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">(() => {
     const params = new URLSearchParams(window.location.search);
@@ -226,12 +227,15 @@ export default function Dashboard() {
     const next: Record<number, LeverState> = {};
     for (const s of allShifts) {
       const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
-      next[s.id] = {
-        activeStart: s.activeStart ?? s.startUtc,
-        activeEnd: s.activeEnd ?? normEnd,
-      };
+      // Only overwrite local lever state if this shift is NOT mid-drag/pending
+      if (!pendingCommit.current.has(s.id)) {
+        next[s.id] = {
+          activeStart: s.activeStart ?? s.startUtc,
+          activeEnd: s.activeEnd ?? normEnd,
+        };
+      }
     }
-    setLeverState(next);
+    setLeverState(prev => ({ ...prev, ...next }));
   }, [allShifts]);
 
   const updateSelectedDay = (dayOfWeek: number, date = resolveDateForWeekday(dayOfWeek)) => {
@@ -241,6 +245,7 @@ export default function Dashboard() {
 
   const previewLeverChange = (id: number, start: number, end: number) => {
     const next = clampShiftWindow(start, end);
+    pendingCommit.current.add(id);
     setLeverState((prev) => ({ ...prev, [id]: next }));
   };
 
@@ -252,12 +257,17 @@ export default function Dashboard() {
 
     setLeverState((prev) => ({ ...prev, [shift.id]: next }));
 
-    if (next.activeStart === serverStart && next.activeEnd === serverEnd) return;
+    if (next.activeStart === serverStart && next.activeEnd === serverEnd) {
+      pendingCommit.current.delete(shift.id);
+      return;
+    }
 
     playSuccess();
     updateShiftMutation.mutate({
       id: shift.id,
       data: { activeStart: next.activeStart, activeEnd: next.activeEnd },
+    }, {
+      onSettled: () => { pendingCommit.current.delete(shift.id); },
     });
 
     if (next.activeEnd > normEnd) {
@@ -1678,19 +1688,16 @@ function ClockVisualizer({
                         </path>
                       ));
                     })()}
-                    {isVis && activeClaimForShift && (() => {
+                    {isVis && activeClaimForShift && activeClaimForShift.status === "pending" && (() => {
                       const claimSegs = segmentShift(activeClaimForShift.coverStartUtc!, activeClaimForShift.coverEndUtc!);
-                      const isPending = activeClaimForShift.status === "pending";
                       return claimSegs.map((seg, si) => (
                         <path key={`pending-shrink-${si}`}
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
-                          fill="none" stroke={isPending ? "rgba(255,140,0,0.85)" : "rgba(255,255,255,0.92)"}
+                          fill="none" stroke="rgba(255,140,0,0.85)"
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
                           style={{ cursor: "default" }}
                         >
-                          <title>{isPending
-                            ? `Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`
-                            : `Claimed coverage: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} (${activeClaimForShift.status})`}</title>
+                          <title>{`Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`}</title>
                         </path>
                       ));
                     })()}
