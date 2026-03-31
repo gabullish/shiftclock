@@ -227,6 +227,17 @@ export default function App() {
     }
   }, []);
 
+  // Backward compatibility: convert old hash deeplinks like #/overtime?... to ?...#/overtime
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const overtimePrefix = "#/overtime?";
+    if (!hash.startsWith(overtimePrefix)) return;
+
+    const query = hash.slice(overtimePrefix.length);
+    const next = `${window.location.pathname}${query ? `?${query}` : ""}#/overtime`;
+    window.history.replaceState(null, "", next);
+  }, []);
+
   // Idle timeout for agent mode
   const resetIdle = useCallback(() => {
     if (accessMode !== "agent") return;
