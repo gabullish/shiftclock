@@ -433,50 +433,86 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
   // Assign freed overtime from one agent to another
   app.post("/api/overtime/assign", requireAdmin, (req, res) => {
-    const { fromShiftId, toAgentId, hours, date, dayOfWeek } = req.body;
-    if (!fromShiftId || !toAgentId || !hours || !date) {
-      return res.status(400).json({ message: "fromShiftId, toAgentId, hours, and date required" });
+    const { fromShiftId, toAgentId, hours, date, dayOfWeek, coverStartUtc, coverEndUtc } = req.body;
+    if (!toAgentId || !date) {
+      return res.status(400).json({ message: "toAgentId and date required" });
     }
 
-    const fromShift = storage.getShifts().find(s => s.id === fromShiftId);
-    if (!fromShift) return res.status(404).json({ message: "Source shift not found" });
-
     const allAgents = storage.getAgents();
-    const fromAgent = allAgents.find(a => a.id === fromShift.agentId);
     const toAgent = allAgents.find(a => a.id === toAgentId);
-    if (!fromAgent || !toAgent) return res.status(404).json({ message: "Agent not found" });
+    if (!toAgent) return res.status(404).json({ message: "Agent not found" });
 
-    // Calculate the exact freed timeslot from the shrunk shift
-    const normEnd = fromShift.endUtc <= fromShift.startUtc ? fromShift.endUtc + 24 : fromShift.endUtc;
-    const curActiveEnd = fromShift.activeEnd ?? normEnd;
-    // The freed slot is from curActiveEnd to curActiveEnd + hours
-    const coverStartUtc = curActiveEnd;
-    const coverEndUtc = curActiveEnd + hours;
+    let sourceShiftId: number | null = null;
+    let sourceAgentId: number | null = null;
+    let sourceAgentName: string | null = null;
+    let resolvedDayOfWeek: number | null = typeof dayOfWeek === "number" ? dayOfWeek : null;
+    let slotStartUtc: number | null = null;
+    let slotEndUtc: number | null = null;
+    let origin: "claimed-from-agent" | "claimed-open-gap" = "claimed-open-gap";
+
+    if (typeof fromShiftId === "number") {
+      const fromShift = storage.getShifts().find(s => s.id === fromShiftId);
+      if (!fromShift) return res.status(404).json({ message: "Source shift not found" });
+
+      const fromAgent = allAgents.find(a => a.id === fromShift.agentId);
+      if (!fromAgent) return res.status(404).json({ message: "Agent not found" });
+
+      const normEnd = fromShift.endUtc <= fromShift.startUtc ? fromShift.endUtc + 24 : fromShift.endUtc;
+      const curActiveEnd = fromShift.activeEnd ?? normEnd;
+      if (typeof hours !== "number" || hours <= 0) {
+        return res.status(400).json({ message: "hours required when assigning from a shift" });
+      }
+
+      sourceShiftId = fromShift.id;
+      sourceAgentId = fromShift.agentId;
+      sourceAgentName = fromAgent.name;
+      resolvedDayOfWeek = resolvedDayOfWeek ?? fromShift.dayOfWeek;
+      slotStartUtc = curActiveEnd;
+      slotEndUtc = curActiveEnd + hours;
+      origin = "claimed-from-agent";
+    } else {
+      if (typeof coverStartUtc !== "number" || typeof coverEndUtc !== "number") {
+        return res.status(400).json({ message: "coverStartUtc and coverEndUtc required for open-gap assignment" });
+      }
+      if (coverEndUtc <= coverStartUtc) {
+        return res.status(400).json({ message: "coverEndUtc must be greater than coverStartUtc" });
+      }
+      if (resolvedDayOfWeek == null) {
+        return res.status(400).json({ message: "dayOfWeek required for open-gap assignment" });
+      }
+
+      slotStartUtc = coverStartUtc;
+      slotEndUtc = coverEndUtc;
+      origin = "claimed-open-gap";
+    }
+
+    const assignedHours = slotEndUtc - slotStartUtc;
 
     // Create overtime record with the exact coverage timeslot (pending approval)
     const otLog = storage.createOvertimeLog(toAgentId, date, {
-      overtimeHours: hours,
-      origin: "claimed-from-agent",
-      coveredByAgentId: fromShift.agentId,
+      overtimeHours: assignedHours,
+      origin,
+      coveredByAgentId: sourceAgentId,
       status: "pending",
       statusUpdatedAt: new Date().toISOString(),
-      fromShiftId: fromShift.id,
-      dayOfWeek: dayOfWeek ?? fromShift.dayOfWeek,
-      coverStartUtc,
-      coverEndUtc,
+      fromShiftId: sourceShiftId,
+      dayOfWeek: resolvedDayOfWeek,
+      coverStartUtc: slotStartUtc,
+      coverEndUtc: slotEndUtc,
     });
 
-    // Log: freed segment removed
     storage.createAgentLog({
-      agentId: fromShift.agentId,
+      agentId: toAgentId,
       date,
       type: "shift-claim",
       coverPct: null,
-      coveredByAgentId: toAgentId,
+      coveredByAgentId: sourceAgentId,
       notes: null,
       createdAt: new Date().toISOString(),
       actionType: "shift-claimed",
-      description: `${toAgent.name} claimed ${hours.toFixed(1)}h freed from ${fromAgent.name}'s ${date} shift.`,
+      description: sourceAgentName
+        ? `${toAgent.name} claimed ${assignedHours.toFixed(1)}h freed from ${sourceAgentName}'s ${date} shift.`
+        : `${toAgent.name} claimed ${assignedHours.toFixed(1)}h of open-gap coverage on ${date}.`,
     });
 
     res.json({ ok: true, overtimeLog: otLog });

@@ -8,6 +8,10 @@
 
 import type { OvertimeLog, Shift } from "@shared/schema";
 
+export function isCoverageClaim(record: Pick<OvertimeLog, "origin">): boolean {
+  return record.origin === "claimed-from-agent" || record.origin === "claimed-open-gap";
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /** A contiguous segment of a shift within a single calendar day. */
@@ -314,7 +318,7 @@ export function getActiveClaimForShift(
     .filter(
       (r) =>
         r.fromShiftId === shift.id &&
-        r.origin === "claimed-from-agent" &&
+        isCoverageClaim(r) &&
         (r.status === "pending" || r.status === "approved" || r.status === "paid") &&
         (dayOfWeek == null || r.dayOfWeek === dayOfWeek) &&
         r.coverStartUtc != null &&

@@ -22,6 +22,7 @@ import {
   normaliseEndUtc,
   displayHour,
   getActiveClaimForShift,
+  isCoverageClaim,
   shiftHasOverride,
 } from "@/lib/shiftUtils";
 
@@ -75,7 +76,6 @@ const useDragScroll = () => {
 
 const DAYS   = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 function getUTCDay()  { return new Date().getUTCDay(); }
 function getUTCHour() {
@@ -119,21 +119,74 @@ interface DayDesc {
   dayIndex: number;
 }
 
-function buildDays(pastDays: number, futureDays: number): DayDesc[] {
+interface GapRange {
+  start: number;
+  end: number;
+}
+
+interface GapSlice {
+  startUtc: number;
+  endUtc: number;
+}
+
+function parseIsoDate(date: string): Date {
+  return new Date(`${date}T00:00:00Z`);
+}
+
+function formatDayMonth(value: Date | string): string {
+  const date = typeof value === "string" ? parseIsoDate(value) : value;
+  return `${date.getUTCDate().toString().padStart(2, "0")}/${(date.getUTCMonth() + 1).toString().padStart(2, "0")}`;
+}
+
+function formatWeekdayWithDate(dayOfWeek: number, date: string): string {
+  return `${DAYS[dayOfWeek]} ${formatDayMonth(date)}`;
+}
+
+function formatWeekdayLongWithDate(dayOfWeek: number, date: string): string {
+  return `${DAY_FULL[dayOfWeek]} ${formatDayMonth(date)}`;
+}
+
+function findGapRanges(coverage: number[]): GapRange[] {
+  const ranges: GapRange[] = [];
+  let start: number | null = null;
+
+  for (let hour = 0; hour <= 24; hour++) {
+    const isGap = hour < 24 && coverage[hour] === 0;
+    if (isGap && start == null) start = hour;
+    if (!isGap && start != null) {
+      ranges.push({ start, end: hour });
+      start = null;
+    }
+  }
+
+  return ranges;
+}
+
+function expandGapRangesToSlices(ranges: GapRange[]): GapSlice[] {
+  return ranges.flatMap((range) => {
+    const slices: GapSlice[] = [];
+    for (let hour = range.start; hour < range.end; hour++) {
+      slices.push({ startUtc: hour, endUtc: hour + 1 });
+    }
+    return slices;
+  });
+}
+
+function buildDays(pastDays: number, futureDays: number, anchor = new Date()): DayDesc[] {
   const today    = new Date();
   const todayStr = today.toISOString().slice(0, 10);
   const result: DayDesc[] = [];
   const total = pastDays + 1 + futureDays;
   for (let i = 0; i < total; i++) {
-    const d = new Date(today);
-    d.setUTCDate(today.getUTCDate() - pastDays + i);
+    const d = new Date(anchor);
+    d.setUTCDate(anchor.getUTCDate() - pastDays + i);
     const dateStr = d.toISOString().slice(0, 10);
     const dow     = d.getUTCDay();
     result.push({
       date: dateStr,
       dayOfWeek: dow,
       label: DAYS[dow],
-      dateLabel: `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`,
+      dateLabel: formatDayMonth(d),
       isToday: dateStr === todayStr,
       dayIndex: i,
     });
@@ -155,6 +208,7 @@ function errorMessageFromUnknown(error: unknown): string {
 export default function Dashboard() {
   const isAdmin = useAdminMode();
   const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
+  const selectedDateAnchor = (date: string) => parseIsoDate(date);
 
   const initDate = () => {
     const params = new URLSearchParams(window.location.search);
@@ -266,7 +320,10 @@ export default function Dashboard() {
     setLeverState(prev => ({ ...prev, ...next }));
   }, [allShifts]);
 
-  const updateSelectedDay = (dayOfWeek: number, date = resolveDateForWeekday(dayOfWeek)) => {
+  const updateSelectedDay = (
+    dayOfWeek: number,
+    date = resolveDateForWeekday(dayOfWeek, selectedDate ? selectedDateAnchor(selectedDate) : new Date())
+  ) => {
     setSelectedDay(dayOfWeek);
     setSelectedDate(date);
   };
@@ -304,7 +361,7 @@ export default function Dashboard() {
         date: selectedDate,
         type: "overtime",
         actionType: "overtime-extended",
-        description: `${agent.name} extended their ${DAYS[selectedDay]} (${selectedDate}) shift by ${formatDuration(next.activeEnd - normEnd)}.`,
+        description: `${agent.name} extended their ${formatWeekdayWithDate(selectedDay, selectedDate)} shift by ${formatDuration(next.activeEnd - normEnd)}.`,
       });
     } else if (next.activeEnd < normEnd) {
       logActivityMutation.mutate({
@@ -312,7 +369,7 @@ export default function Dashboard() {
         date: selectedDate,
         type: "shift-freed",
         actionType: "shift-freed",
-        description: `${agent.name} freed ${formatDuration(normEnd - next.activeEnd)} of their ${DAYS[selectedDay]} (${selectedDate}) shift. Now up for grabs.`,
+        description: `${agent.name} freed ${formatDuration(normEnd - next.activeEnd)} of their ${formatWeekdayWithDate(selectedDay, selectedDate)} shift. Now up for grabs.`,
       });
     }
   };
@@ -342,7 +399,7 @@ export default function Dashboard() {
         .filter(
           (record) =>
             visible.has(record.agentId) &&
-            record.origin === "claimed-from-agent" &&
+            isCoverageClaim(record) &&
             (record.status === "approved" || record.status === "paid") &&
             record.dayOfWeek === selectedDay &&
             record.coverStartUtc != null &&
@@ -354,14 +411,13 @@ export default function Dashboard() {
         }))
     );
   const coverage    = calcCoverageForDay(coverageInput);
-  const maxCoverage = Math.max(...coverage, 1);
 
   const agentSummaries = agents.map(agent => {
     const agentTodayShifts = todayShifts.filter(s => s.agentId === agent.id);
     const approvedClaims = otRecords.filter(
       (record) =>
         record.agentId === agent.id &&
-        record.origin === "claimed-from-agent" &&
+        isCoverageClaim(record) &&
         (record.status === "approved" || record.status === "paid") &&
         record.dayOfWeek === selectedDay &&
         record.coverStartUtc != null &&
@@ -395,6 +451,8 @@ export default function Dashboard() {
   });
 
   const zeroCoverageHours  = coverage.filter(c => c === 0).length;
+  const gapRanges          = findGapRanges(coverage);
+  const gapSlices          = expandGapRangesToSlices(gapRanges);
   const peakCoverageHour   = coverage.indexOf(Math.max(...coverage));
   const totalOvertimeHours = agentSummaries.reduce((a, s) => a + s.overtimeHours, 0);
   const totalReleasedHours = agentSummaries.reduce((a, s) => a + s.releasedHours, 0);
@@ -414,7 +472,7 @@ export default function Dashboard() {
 
     return otRecords.some((record) => {
       if (record.agentId !== agent.id) return false;
-      if (record.origin !== "claimed-from-agent") return false;
+      if (!isCoverageClaim(record)) return false;
       if (record.status !== "approved" && record.status !== "paid") return false;
       if (record.dayOfWeek !== selectedDay) return false;
       if (record.coverStartUtc == null || record.coverEndUtc == null) return false;
@@ -452,21 +510,45 @@ export default function Dashboard() {
         updateShiftMutation.mutate({ id: s.id, data: { activeStart: null, activeEnd: null } });
       }
       setLeverState(reset);
-      toast({ title: `${DAYS[selectedDay]} reset to base schedule` });
+      toast({ title: `${selectedDayShortLabel} reset to base schedule` });
     };
 
   const isMulti    = viewMode === "timeline" && timelineScope === "multi";
   const isTimeline = viewMode === "timeline";
 
   // Assign overtime modal state
-  const [assignModal, setAssignModal] = useState<{
-    shift: Shift;
-    agent: Agent;
-    freedHours: number;
-  } | null>(null);
+  const [assignModal, setAssignModal] = useState<
+    | {
+        kind: "shift";
+        shift: Shift;
+        fromAgent: Agent;
+        dayOfWeek: number;
+        date: string;
+        startUtc: number;
+        endUtc: number;
+        freedHours: number;
+      }
+    | {
+        kind: "gap";
+        dayOfWeek: number;
+        date: string;
+        startUtc: number;
+        endUtc: number;
+        freedHours: number;
+      }
+    | null
+  >(null);
 
   const assignOvertimeMutation = useMutation({
-    mutationFn: (body: { fromShiftId: number; toAgentId: number; hours: number; date: string; dayOfWeek: number }) =>
+    mutationFn: (body: {
+      fromShiftId?: number;
+      toAgentId: number;
+      hours: number;
+      date: string;
+      dayOfWeek: number;
+      coverStartUtc?: number;
+      coverEndUtc?: number;
+    }) =>
       apiRequest("POST", "/api/overtime/assign", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
@@ -500,8 +582,34 @@ export default function Dashboard() {
   const openAssignModal = (shift: Shift, agent: Agent, freedHours: number) => {
     if (!isAdmin) return;
     playSoftClick();
-    setAssignModal({ shift, agent, freedHours });
+    const normEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
+    const activeEnd = leverState[shift.id]?.activeEnd ?? shift.activeEnd ?? normEnd;
+    setAssignModal({
+      kind: "shift",
+      shift,
+      fromAgent: agent,
+      dayOfWeek: shift.dayOfWeek,
+      date: selectedDate,
+      startUtc: activeEnd,
+      endUtc: activeEnd + freedHours,
+      freedHours,
+    });
   };
+
+  const openGapAssignModal = (startUtc: number, endUtc: number, dayOfWeek = selectedDay, date = selectedDate) => {
+    if (!isAdmin || endUtc <= startUtc) return;
+    playSoftClick();
+    setAssignModal({
+      kind: "gap",
+      dayOfWeek,
+      date,
+      startUtc,
+      endUtc,
+      freedHours: endUtc - startUtc,
+    });
+  };
+
+  const selectedDayShortLabel = formatWeekdayWithDate(selectedDay, selectedDate);
 
   return (
     <TooltipProvider>
@@ -518,14 +626,18 @@ export default function Dashboard() {
             <div className="flex items-center gap-1">
               {DAYS.map((d, i) => {
                 const hasShifts = allShifts.some(s => s.dayOfWeek === i);
+                const dayDate = resolveDateForWeekday(i, selectedDateAnchor(selectedDate));
                 return (
                   <button key={d} onClick={() => { playSoftClick(); updateSelectedDay(i); }} data-testid={`day-${d}`}
                     className={cn(
-                      "px-2.5 py-1 rounded text-xs font-medium transition-all relative",
+                      "px-2.5 py-1 rounded text-xs font-medium transition-all relative min-w-[54px]",
                       selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     )}
                   >
-                    {d}
+                    <span className="flex flex-col leading-tight">
+                      <span>{d}</span>
+                      <span className={cn("text-[10px] font-mono", selectedDay === i ? "text-primary-foreground/80" : "text-muted-foreground")}>{formatDayMonth(dayDate)}</span>
+                    </span>
                     {hasShifts && selectedDay !== i && (
                       <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
                     )}
@@ -633,6 +745,7 @@ export default function Dashboard() {
                 toggleVisible={toggleVisible}
                 toggleAll={toggleAll}
                 onAssignOvertime={openAssignModal}
+                  onAssignGap={openGapAssignModal}
               />
             </div>
           ) : (
@@ -640,7 +753,13 @@ export default function Dashboard() {
             <div className="flex-1 flex overflow-hidden min-h-0">
               <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden min-w-0 relative">
                 {!hasShiftsToday ? (
-                  <EmptyState isWeekend={isWeekend} day={DAYS[selectedDay]} />
+                    <EmptyState
+                      isWeekend={isWeekend}
+                      dayLabel={selectedDayShortLabel}
+                      isAdmin={isAdmin}
+                      gapSlices={gapSlices}
+                      onAssignGap={openGapAssignModal}
+                    />
                 ) : (
                   <ClockVisualizer
                     agents={agents}
@@ -652,12 +771,12 @@ export default function Dashboard() {
                     leverState={leverState}
                     utcHour={utcHour}
                     coverage={coverage}
-                    maxCoverage={maxCoverage}
                     otRecords={otRecords}
                     tooltipInfo={tooltipInfo}
                     setTooltipInfo={setTooltipInfo}
                     selectedDay={selectedDay}
                     onAssignOvertime={openAssignModal}
+                    onAssignGap={openGapAssignModal}
                   />
                 )}
 
@@ -703,7 +822,7 @@ export default function Dashboard() {
                   <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 space-y-1.5" id="lever-scroll">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
-                        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {DAYS[selectedDay]}</p>
+                        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {selectedDayShortLabel}</p>
                         {!isAdmin && (
                           <span className="flex items-center gap-1 text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5">
                             <Lock size={8} /> View-only
@@ -766,10 +885,14 @@ export default function Dashboard() {
                   <SummaryPanel
                     agentSummaries={agentSummaries}
                     selectedDay={selectedDay}
+                    selectedDate={selectedDate}
                     zeroCoverageHours={zeroCoverageHours}
                     peakCoverageHour={peakCoverageHour}
                     totalOvertimeHours={totalOvertimeHours}
                     totalReleasedHours={totalReleasedHours}
+                    isAdmin={isAdmin}
+                    gapSlices={gapSlices}
+                    onAssignGap={openGapAssignModal}
                   />
                 </div>
               </div>
@@ -781,18 +904,27 @@ export default function Dashboard() {
       {/* Assign Overtime Modal */}
       {assignModal && (
         <AssignOvertimeModal
-          shift={assignModal.shift}
-          fromAgent={assignModal.agent}
-          freedHours={assignModal.freedHours}
+          source={assignModal}
           agents={agents}
-          selectedDay={selectedDay}
           onAssign={(toAgentId) => {
+            if (assignModal.kind === "shift") {
+              assignOvertimeMutation.mutate({
+                fromShiftId: assignModal.shift.id,
+                toAgentId,
+                hours: assignModal.freedHours,
+                date: assignModal.date,
+                dayOfWeek: assignModal.dayOfWeek,
+              });
+              return;
+            }
+
             assignOvertimeMutation.mutate({
-              fromShiftId: assignModal.shift.id,
               toAgentId,
               hours: assignModal.freedHours,
-              date: selectedDate,
-              dayOfWeek: assignModal.shift.dayOfWeek,
+              date: assignModal.date,
+              dayOfWeek: assignModal.dayOfWeek,
+              coverStartUtc: assignModal.startUtc,
+              coverEndUtc: assignModal.endUtc,
             });
           }}
           onClose={() => setAssignModal(null)}
@@ -802,7 +934,19 @@ export default function Dashboard() {
   );
 }
 
-function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
+function EmptyState({
+  isWeekend,
+  dayLabel,
+  isAdmin,
+  gapSlices,
+  onAssignGap,
+}: {
+  isWeekend: boolean;
+  dayLabel: string;
+  isAdmin: boolean;
+  gapSlices: GapSlice[];
+  onAssignGap: (startUtc: number, endUtc: number) => void;
+}) {
   return (
     <div className="flex flex-col items-center justify-center gap-4 text-center max-w-xs">
       <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center">
@@ -810,7 +954,7 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
       </div>
       <div>
         <p className="text-sm font-medium text-foreground mb-1">
-          {isWeekend ? `${day} — Weekend` : `No shifts on ${day}`}
+          {isWeekend ? `${dayLabel} — Weekend` : `No shifts on ${dayLabel}`}
         </p>
         <p className="text-xs text-muted-foreground">
           {isWeekend
@@ -818,6 +962,19 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
             : "No agents have shifts scheduled for this day. Go to Agents to set up shifts."}
         </p>
       </div>
+      {isAdmin && gapSlices.length > 0 && (
+        <div className="flex flex-wrap justify-center gap-1.5">
+          {gapSlices.slice(0, 8).map((gap) => (
+            <button
+              key={`${gap.startUtc}-${gap.endUtc}`}
+              onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
+              className="text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"
+            >
+              Fill {formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -825,7 +982,7 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
 function UnifiedTimeline({
   scope, agents, allShifts, otRecords, isAdmin, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, selectedDate, focusHour, onSelectDay,
-  toggleVisible, toggleAll, onAssignOvertime,
+  toggleVisible, toggleAll, onAssignOvertime, onAssignGap,
 }: {
   scope: "day" | "multi";
   agents: Agent[];
@@ -844,6 +1001,7 @@ function UnifiedTimeline({
   toggleVisible: (id: number) => void;
   toggleAll: () => void;
   onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
+  onAssignGap: (startUtc: number, endUtc: number, dayOfWeek?: number, date?: string) => void;
 }) {
   const PX_PER_HOUR = 56;
   const LABEL_W     = 120;
@@ -853,8 +1011,9 @@ function UnifiedTimeline({
 
   const PAST_DAYS   = 7;
   const FUTURE_DAYS = 6;
-  const days        = scope === "multi" ? buildDays(PAST_DAYS, FUTURE_DAYS) : null;
-  const todayIndex  = PAST_DAYS;
+  const days        = scope === "multi" ? buildDays(PAST_DAYS, FUTURE_DAYS, parseIsoDate(selectedDate)) : null;
+  const todayIndex  = scope === "multi" ? (days?.findIndex((day) => day.isToday) ?? -1) : -1;
+  const selectedIndex = scope === "multi" ? (days?.findIndex((day) => day.date === selectedDate) ?? -1) : -1;
 
   const TOTAL_HOURS = scope === "multi" ? (days!.length * 24) : 24;
   const CANVAS_W    = TOTAL_HOURS * PX_PER_HOUR;
@@ -880,7 +1039,8 @@ function UnifiedTimeline({
     }
 
     if (scope === "multi") {
-      const nowPx = (todayIndex * 24 + utcHour) * PX_PER_HOUR;
+      const anchorIndex = todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex);
+      const nowPx = (anchorIndex * 24 + utcHour) * PX_PER_HOUR;
       const w     = scrollRef.current.clientWidth;
       scrollRef.current.scrollLeft = Math.max(0, nowPx - w / 2 + LABEL_W);
     } else {
@@ -897,7 +1057,8 @@ function UnifiedTimeline({
   const scrollToNow = () => {
     if (!scrollRef.current) return;
     if (scope === "multi") {
-      const nowPx = (todayIndex * 24 + utcHour) * PX_PER_HOUR;
+      const anchorIndex = todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex);
+      const nowPx = (anchorIndex * 24 + utcHour) * PX_PER_HOUR;
       const w     = scrollRef.current.clientWidth;
       scrollRef.current.scrollTo({ left: Math.max(0, nowPx - w / 2 + LABEL_W), behavior: "smooth" });
     } else {
@@ -906,7 +1067,7 @@ function UnifiedTimeline({
   };
 
   const nowCanvasPx = scope === "multi"
-    ? (todayIndex * 24 + utcHour) * PX_PER_HOUR
+    ? ((todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex)) * 24 + utcHour) * PX_PER_HOUR
     : utcHour * PX_PER_HOUR;
 
   const gridHours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
@@ -1105,11 +1266,11 @@ function UnifiedTimeline({
 
   const renderCoverageBars = (agent: Agent, dayOffset: number, dayOfWeek: number) => {
     if (!visible.has(agent.id)) return null;
-    // Find approved OT records where this agent covers someone else's freed slot
+    // Show pending claims as preview and approved/paid claims as committed coverage.
     const coverageSlots = otRecords.filter(
       r => r.agentId === agent.id
-        && r.origin === "claimed-from-agent"
-        && r.status === "approved"
+        && isCoverageClaim(r)
+        && (r.status === "pending" || r.status === "approved" || r.status === "paid")
         && r.dayOfWeek === dayOfWeek
         && r.coverStartUtc != null
         && r.coverEndUtc != null
@@ -1124,6 +1285,8 @@ function UnifiedTimeline({
       const segs = segmentShift(slot.coverStartUtc!, slot.coverEndUtc!);
       const covAgent = coveredByAgent(slot.coveredByAgentId);
       const isOvernight = segs.length > 1;
+      const isPending = slot.status === "pending";
+      const sourceLabel = covAgent?.name ?? (slot.origin === "claimed-open-gap" ? "open gap" : "agent");
 
       const covSegOffsetX = (seg: { dayOffset: number }) => {
         if (!isOvernight || scope === "day") return rowOffsetX;
@@ -1135,17 +1298,17 @@ function UnifiedTimeline({
       return segs.map((seg, si) => (
         <div
           key={`cov-${slot.id}-${si}`}
-          title={`Covering ${covAgent?.name ?? "agent"}: ${formatUtcHour(slot.coverStartUtc!)}–${formatUtcHour(slot.coverEndUtc!)} UTC`}
+          title={`${isPending ? "Pending preview" : "Covering"} ${sourceLabel}: ${formatUtcHour(slot.coverStartUtc!)}–${formatUtcHour(slot.coverEndUtc!)} UTC`}
           style={{
             position: "absolute",
             left: covSegOffsetX(seg) + seg.start * PX_PER_HOUR,
             width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
             top: 4, height: ROW_H - 8,
             backgroundColor: agent.color,
-            opacity: 0.85,
+            opacity: isPending ? 0.55 : 0.85,
             borderRadius: 3,
-            border: `2px dashed white`,
-            boxShadow: `0 0 6px ${agent.color}80`,
+            border: isPending ? `2px dashed rgba(255,255,255,0.7)` : `2px dashed white`,
+            boxShadow: isPending ? `0 0 3px ${agent.color}50` : `0 0 6px ${agent.color}80`,
           }}
         >
           <span style={{
@@ -1156,7 +1319,7 @@ function UnifiedTimeline({
               fontSize: 8, fontFamily: "monospace", fontWeight: 700,
               whiteSpace: "nowrap", color: "white", mixBlendMode: "difference", opacity: 0.9,
             }}>
-              ↗ {covAgent?.name ?? "?"} {formatUtcHour(slot.coverStartUtc!)}–{formatUtcHour(slot.coverEndUtc!)}
+              {isPending ? "~" : "↗"} {sourceLabel} {formatUtcHour(slot.coverStartUtc!)}–{formatUtcHour(slot.coverEndUtc!)}
             </span>
           </span>
         </div>
@@ -1164,7 +1327,7 @@ function UnifiedTimeline({
     });
   };
 
-  const renderCoverageStrip = (shiftsForDay: Shift[], dayOffsetPx: number) => {
+  const renderCoverageStrip = (shiftsForDay: Shift[], dayOffsetPx: number, dayOfWeek: number) => {
     const covInput = shiftsForDay
       .filter(s => visible.has(s.agentId))
       .map(s => {
@@ -1173,7 +1336,20 @@ function UnifiedTimeline({
           activeStart: ls?.activeStart ?? s.startUtc,
           activeEnd:   ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc),
         };
-      });
+      })
+      .concat(
+        otRecords
+          .filter(
+            (slot) =>
+              visible.has(slot.agentId) &&
+              isCoverageClaim(slot) &&
+              (slot.status === "approved" || slot.status === "paid") &&
+              slot.dayOfWeek === dayOfWeek &&
+              slot.coverStartUtc != null &&
+              slot.coverEndUtc != null
+          )
+          .map((slot) => ({ activeStart: slot.coverStartUtc!, activeEnd: slot.coverEndUtc! }))
+      );
     const cov    = calcCoverageForDay(covInput);
     const maxCov = Math.max(...cov, 1);
     return cov.map((c, h) => (
@@ -1225,7 +1401,7 @@ function UnifiedTimeline({
         <span className="text-[11px] text-muted-foreground shrink-0">
           {scope === "multi"
             ? `${days![0].dateLabel} — ${days![days!.length - 1].dateLabel} · UTC`
-            : `${DAY_FULL[selectedDay]} · UTC`}
+            : `${formatWeekdayLongWithDate(selectedDay, selectedDate)} · UTC`}
         </span>
 
         {/* Agent toggle chips — only in day timeline */}
@@ -1463,24 +1639,61 @@ function UnifiedTimeline({
               left: 0, right: 0, height: COV_H,
             }}>
               {scope === "day"
-                ? renderCoverageStrip(allShifts.filter(s => s.dayOfWeek === selectedDay), 0)
-                : days!.map(day => renderCoverageStrip(allShifts.filter(s => s.dayOfWeek === day.dayOfWeek), day.dayIndex * 24 * PX_PER_HOUR))
+                ? renderCoverageStrip(allShifts.filter(s => s.dayOfWeek === selectedDay), 0, selectedDay)
+                : days!.map(day => renderCoverageStrip(allShifts.filter(s => s.dayOfWeek === day.dayOfWeek), day.dayIndex * 24 * PX_PER_HOUR, day.dayOfWeek))
               }
             </div>
 
+            {scope === "day" && isAdmin && findGapRanges(calcCoverageForDay(
+              allShifts
+                .filter(s => s.dayOfWeek === selectedDay && visible.has(s.agentId))
+                .map(s => {
+                  const ls = leverState[s.id];
+                  return {
+                    activeStart: ls?.activeStart ?? s.startUtc,
+                    activeEnd: ls?.activeEnd ?? normaliseEndUtc(s.startUtc, s.endUtc),
+                  };
+                })
+                .concat(
+                  otRecords
+                    .filter(r => visible.has(r.agentId) && isCoverageClaim(r) && (r.status === "approved" || r.status === "paid") && r.dayOfWeek === selectedDay && r.coverStartUtc != null && r.coverEndUtc != null)
+                    .map((r) => ({ activeStart: r.coverStartUtc!, activeEnd: r.coverEndUtc! }))
+                )
+            )).map((gap) => (
+              <button
+                key={`timeline-gap-${gap.start}-${gap.end}`}
+                onClick={() => onAssignGap(gap.start, gap.end, selectedDay, selectedDate)}
+                style={{
+                  position: "absolute",
+                  left: gap.start * PX_PER_HOUR,
+                  width: Math.max(2, (gap.end - gap.start) * PX_PER_HOUR),
+                  top: RULER_H + agents.length * (ROW_H + 2) + 2,
+                  height: COV_H + 4,
+                  border: "1px dashed rgba(230,57,70,0.8)",
+                  background: "rgba(230,57,70,0.08)",
+                  borderRadius: 3,
+                  zIndex: 12,
+                  cursor: "pointer",
+                }}
+                title={`Assign open gap ${formatUtcHour(gap.start)}-${formatUtcHour(gap.end)} UTC`}
+              />
+            ))}
+
             {/* Now line */}
-            <div style={{
-              position: "absolute", left: nowCanvasPx,
-              top: 0, bottom: 0, width: 1,
-              backgroundColor: "hsl(var(--primary))", opacity: 0.85,
-              zIndex: 15, pointerEvents: "none",
-            }}>
+            {(scope === "day" || todayIndex >= 0) && (
               <div style={{
-                position: "absolute", top: RULER_H - 6, left: -4,
-                width: 9, height: 9, borderRadius: "50%",
-                backgroundColor: "hsl(var(--primary))",
-              }} />
-            </div>
+                position: "absolute", left: nowCanvasPx,
+                top: 0, bottom: 0, width: 1,
+                backgroundColor: "hsl(var(--primary))", opacity: 0.85,
+                zIndex: 15, pointerEvents: "none",
+              }}>
+                <div style={{
+                  position: "absolute", top: RULER_H - 6, left: -4,
+                  width: 9, height: 9, borderRadius: "50%",
+                  backgroundColor: "hsl(var(--primary))",
+                }} />
+              </div>
+            )}
 
           </div>
         </div>
@@ -1500,16 +1713,17 @@ function UnifiedTimeline({
 
 function ClockVisualizer({
   agents, shifts, isAdmin, visible, highlighted, setHighlighted,
-  leverState, utcHour, coverage, maxCoverage, otRecords,
-  tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime,
+  leverState, utcHour, coverage, otRecords,
+  tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime, onAssignGap,
 }: {
   agents: Agent[]; shifts: Shift[]; isAdmin: boolean; visible: Set<number>;
   highlighted: number | null; setHighlighted: (id: number | null) => void;
   leverState: Record<number, LeverState>; utcHour: number;
-  coverage: number[]; maxCoverage: number; otRecords: OvertimeLog[];
+  coverage: number[]; otRecords: OvertimeLog[];
   tooltipInfo: any; setTooltipInfo: (v: any) => void;
   selectedDay: number;
   onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
+  onAssignGap: (startUtc: number, endUtc: number) => void;
 }) {
   const SIZE   = 360;
   const CX = SIZE / 2, CY = SIZE / 2;
@@ -1537,17 +1751,7 @@ function ClockVisualizer({
     return [{ start: NON_HOVER_END, end }];
   };
 
-  // Compute contiguous zero-coverage ranges for dashed arc segments
-  const gapRanges: { start: number; end: number }[] = [];
-  let gapStart: number | null = null;
-  for (let h = 0; h <= 24; h++) {
-    const isGap = h < 24 && coverage[h] === 0;
-    if (isGap && gapStart === null) gapStart = h;
-    if (!isGap && gapStart !== null) {
-      gapRanges.push({ start: gapStart, end: h });
-      gapStart = null;
-    }
-  }
+  const gapRanges = findGapRanges(coverage);
 
   return (
     <div className="relative flex items-center justify-center">
@@ -1595,6 +1799,23 @@ function ClockVisualizer({
           );
         })}
 
+        {Array.from({ length: 24 }, (_, h) => {
+          const isMajor = h % 6 === 0;
+          const labelR  = HEAT_R + (isMajor ? 18 : 14);
+          const p = polarToCartesian(CX, CY, labelR, hourToAngle(h));
+          return (
+            <text key={`outer-${h}`} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
+              fontSize={isMajor ? 7 : 5.5}
+              fill={isMajor ? "rgba(255,215,0,0.95)" : "rgba(255,255,255,0.45)"}
+              fontFamily="Space Mono, monospace"
+              fontWeight={isMajor ? "700" : "500"}
+              style={{ pointerEvents: "none" }}
+            >
+              {h.toString().padStart(2, "0")}
+            </text>
+          );
+        })}
+
         {/* Outer ring: white base full circle */}
         <circle
           cx={CX} cy={CY} r={HEAT_R}
@@ -1619,6 +1840,8 @@ function ClockVisualizer({
               strokeWidth={4}
               strokeLinecap="butt"
               strokeDasharray={`${dash} ${dash}`}
+              style={{ cursor: isAdmin ? "pointer" : "default" }}
+              onClick={() => isAdmin && onAssignGap(gap.start, gap.end)}
             />
           );
         })}
@@ -1781,26 +2004,32 @@ function ClockVisualizer({
                 .filter(
                   (slot) =>
                     slot.agentId === agent.id &&
-                    slot.origin === "claimed-from-agent" &&
-                    slot.status === "approved" &&
+                    isCoverageClaim(slot) &&
+                    (slot.status === "pending" || slot.status === "approved" || slot.status === "paid") &&
                     slot.dayOfWeek === selectedDay &&
                     slot.coverStartUtc != null &&
                     slot.coverEndUtc != null
                 )
                 .flatMap((slot) => {
+                  const isPending = slot.status === "pending";
                   const segs = segmentShift(slot.coverStartUtc!, slot.coverEndUtc!);
                   return segs.map((seg, si) => (
                     <path
                       key={`cov-claim-${slot.id}-${si}`}
                       d={describeArc(CX, CY, r, seg.start, seg.end)}
                       fill="none"
-                      stroke={hexToRgba(agent.color, 0.96)}
+                      stroke={hexToRgba(agent.color, isPending ? 0.65 : 0.96)}
                       strokeWidth={RING_W}
-                      strokeDasharray="6 3"
+                      strokeDasharray={isPending ? "3 4" : "6 3"}
                       strokeLinecap="round"
-                      style={{ filter: `drop-shadow(0 0 4px ${agent.color}) drop-shadow(0 0 8px ${agent.color}80)`, pointerEvents: "none" }}
+                      style={{
+                        filter: isPending
+                          ? `drop-shadow(0 0 2px ${agent.color}) drop-shadow(0 0 5px ${agent.color}60)`
+                          : `drop-shadow(0 0 4px ${agent.color}) drop-shadow(0 0 8px ${agent.color}80)`,
+                        pointerEvents: "none",
+                      }}
                     >
-                      <title>{`Approved claimed coverage: ${formatUtcHour(slot.coverStartUtc!)}-${formatUtcHour(slot.coverEndUtc!)} UTC`}</title>
+                      <title>{`${isPending ? "Pending coverage preview" : "Approved claimed coverage"}: ${formatUtcHour(slot.coverStartUtc!)}-${formatUtcHour(slot.coverEndUtc!)} UTC`}</title>
                     </path>
                   ));
                 })}
@@ -1908,7 +2137,7 @@ function ClockVisualizer({
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,255,255,0.96)" }} />
-          <span className="text-[9px] text-muted-foreground">Claimed coverage</span>
+          <span className="text-[9px] text-muted-foreground">Claim / preview</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-1.5 rounded-full bg-white" style={{ boxShadow: "0 0 5px white, 0 0 8px rgba(255,255,255,0.6)" }} />
@@ -2169,17 +2398,41 @@ function KpiCell({ label, value, warn, accent }: { label: string; value: string;
   );
 }
 
-function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCoverageHour, totalOvertimeHours, totalReleasedHours }: any) {
+function SummaryPanel({
+  agentSummaries,
+  selectedDay,
+  selectedDate,
+  zeroCoverageHours,
+  peakCoverageHour,
+  totalOvertimeHours,
+  totalReleasedHours,
+  isAdmin,
+  gapSlices,
+  onAssignGap,
+}: any) {
   return (
     <div className="border-t border-border p-3 max-h-52 min-h-0 overflow-y-auto overscroll-contain bg-card/30 shrink-0">
       <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-medium">
-        Coverage Report · {DAYS[selectedDay]}
+        Coverage Report · {formatWeekdayWithDate(selectedDay, selectedDate)}
       </p>
       {zeroCoverageHours > 0 && (
         <div className="mb-2 p-2 rounded bg-red-500/10 border border-red-500/20">
           <p className="text-[10px] text-red-400 font-medium">
             ⚠ {zeroCoverageHours} hour{zeroCoverageHours !== 1 ? "s" : ""} with zero coverage
           </p>
+          {isAdmin && gapSlices.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {gapSlices.slice(0, 8).map((gap: GapSlice) => (
+                <button
+                  key={`${gap.startUtc}-${gap.endUtc}`}
+                  onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
+                  className="text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"
+                >
+                  Fill {formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       <div className="space-y-1">
@@ -2213,17 +2466,37 @@ function SummaryPanel({ agentSummaries, selectedDay, zeroCoverageHours, peakCove
    ────────────────────────────────────────────────────────────── */
 
 function AssignOvertimeModal({
-  shift, fromAgent, freedHours, agents, selectedDay, onAssign, onClose,
+  source, agents, onAssign, onClose,
 }: {
-  shift: Shift;
-  fromAgent: Agent;
-  freedHours: number;
+  source:
+    | {
+        kind: "shift";
+        shift: Shift;
+        fromAgent: Agent;
+        dayOfWeek: number;
+        date: string;
+        startUtc: number;
+        endUtc: number;
+        freedHours: number;
+      }
+    | {
+        kind: "gap";
+        dayOfWeek: number;
+        date: string;
+        startUtc: number;
+        endUtc: number;
+        freedHours: number;
+      };
   agents: Agent[];
-  selectedDay: number;
   onAssign: (toAgentId: number) => void;
   onClose: () => void;
 }) {
-  const otherAgents = agents.filter(a => a.id !== fromAgent.id);
+  const otherAgents = source.kind === "shift"
+    ? agents.filter(a => a.id !== source.fromAgent.id)
+    : agents;
+  const sourceLabel = source.kind === "shift"
+    ? `${formatDuration(source.freedHours)} freed from ${source.fromAgent.name}'s ${formatWeekdayWithDate(source.dayOfWeek, source.date)} shift`
+    : `${formatDuration(source.freedHours)} open gap on ${formatWeekdayWithDate(source.dayOfWeek, source.date)} · ${formatUtcHour(source.startUtc)}-${formatUtcHour(source.endUtc)} UTC`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -2236,8 +2509,14 @@ function AssignOvertimeModal({
           <div>
             <p className="text-sm font-semibold">Assign Overtime</p>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              {formatDuration(freedHours)} freed from{" "}
-              <span style={{ color: fromAgent.color }}>{fromAgent.name}</span>'s {DAYS[selectedDay]} shift
+              {source.kind === "shift" ? (
+                <>
+                  {formatDuration(source.freedHours)} freed from{" "}
+                  <span style={{ color: source.fromAgent.color }}>{source.fromAgent.name}</span>'s {formatWeekdayWithDate(source.dayOfWeek, source.date)} shift
+                </>
+              ) : (
+                sourceLabel
+              )}
             </p>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-muted transition-colors">
@@ -2262,7 +2541,7 @@ function AssignOvertimeModal({
                 <span className="text-[10px] text-muted-foreground ml-2">{agent.role}</span>
               </div>
               <span className="text-[10px] text-muted-foreground group-hover:text-primary transition-colors">
-                +{formatDuration(freedHours)}
+                +{formatDuration(source.freedHours)}
               </span>
             </button>
           ))}
