@@ -576,10 +576,20 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Assign freed overtime from one agent to another
-  app.post("/api/overtime/assign", requireAdmin, (req, res) => {
+  app.post("/api/overtime/assign", (req, res) => {
+    const admin = isAdminRequest(req);
+    const sessionAgentId = getAgentSession(req);
+    if (!admin && !sessionAgentId) {
+      return res.status(403).json({ message: "Admin or agent session required" });
+    }
+
     const { fromShiftId, toAgentId, hours, date, dayOfWeek, coverStartUtc, coverEndUtc } = req.body;
     if (!toAgentId || !date) {
       return res.status(400).json({ message: "toAgentId and date required" });
+    }
+
+    if (!admin && sessionAgentId && Number(toAgentId) !== sessionAgentId) {
+      return res.status(403).json({ message: "Agents can only submit requests for themselves" });
     }
 
     const allAgents = storage.getAgents();

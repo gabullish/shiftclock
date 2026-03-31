@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import { toast } from "@/hooks/use-toast";
+import { useAgentSession } from "@/App";
 import {
   clampShiftWindow,
   segmentShift,
@@ -229,6 +230,7 @@ function errorMessageFromUnknown(error: unknown): string {
 
 export default function Dashboard() {
   const isAdmin = useAdminMode();
+  const agentSession = useAgentSession();
   const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
   const selectedDateAnchor = (date: string) => parseIsoDate(date);
 
@@ -290,6 +292,8 @@ export default function Dashboard() {
 
   const todayDateStr = new Date().toISOString().slice(0, 10);
   const isSelectedDateToday = selectedDate === todayDateStr;
+  const canClaimCoverage = isAdmin || Boolean(agentSession);
+  const canEditAgentLane = (agentId: number) => isAdmin || agentSession?.agentId === agentId;
 
   const openOvertimeForRecord = (record: OvertimeLog) => {
     const params = new URLSearchParams();
@@ -298,7 +302,7 @@ export default function Dashboard() {
     params.set("day", String(record.dayOfWeek));
     if (record.coverStartUtc != null) params.set("focusHour", String(record.coverStartUtc));
     params.set("focusAgentId", String(record.agentId));
-    window.location.href = `${window.location.pathname}#/overtime?${params.toString()}`;
+    window.location.href = `${window.location.pathname}?${params.toString()}#/overtime`;
   };
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
@@ -646,10 +650,22 @@ export default function Dashboard() {
   });
 
   const openAssignModal = (shift: Shift, agent: Agent, freedHours: number) => {
-    if (!isAdmin) return;
+    if (!canClaimCoverage) return;
     playSoftClick();
     const normEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
     const activeEnd = leverState[shift.id]?.activeEnd ?? shift.activeEnd ?? normEnd;
+
+    if (!isAdmin && agentSession) {
+      assignOvertimeMutation.mutate({
+        fromShiftId: shift.id,
+        toAgentId: agentSession.agentId,
+        hours: freedHours,
+        date: selectedDate,
+        dayOfWeek: shift.dayOfWeek,
+      });
+      return;
+    }
+
     setAssignModal({
       kind: "shift",
       shift,
@@ -663,8 +679,21 @@ export default function Dashboard() {
   };
 
   const openGapAssignModal = (startUtc: number, endUtc: number, dayOfWeek = selectedDay, date = selectedDate) => {
-    if (!isAdmin || endUtc <= startUtc) return;
+    if (!canClaimCoverage || endUtc <= startUtc) return;
     playSoftClick();
+
+    if (!isAdmin && agentSession) {
+      assignOvertimeMutation.mutate({
+        toAgentId: agentSession.agentId,
+        hours: endUtc - startUtc,
+        date,
+        dayOfWeek,
+        coverStartUtc: startUtc,
+        coverEndUtc: endUtc,
+      });
+      return;
+    }
+
     setAssignModal({
       kind: "gap",
       dayOfWeek,
@@ -813,6 +842,7 @@ export default function Dashboard() {
                 allShifts={allShifts}
                 otRecords={otRecords}
                 isAdmin={isAdmin}
+                agentSessionId={agentSession?.agentId ?? null}
                 visible={visible}
                 highlighted={highlighted}
                 setHighlighted={setHighlighted}
@@ -840,7 +870,7 @@ export default function Dashboard() {
                     <EmptyState
                       isWeekend={isWeekend}
                       dayLabel={selectedDayShortLabel}
-                      isAdmin={isAdmin}
+                      canClaimCoverage={canClaimCoverage}
                       gapSlices={gapSlices}
                       onAssignGap={openGapAssignModal}
                     />
@@ -859,6 +889,7 @@ export default function Dashboard() {
                     tooltipInfo={tooltipInfo}
                     setTooltipInfo={setTooltipInfo}
                     selectedDay={selectedDay}
+                    agentSessionId={agentSession?.agentId ?? null}
                     onAssignOvertime={openAssignModal}
                     onAssignGap={openGapAssignModal}
                     onOpenOvertime={openOvertimeForRecord}
@@ -908,7 +939,7 @@ export default function Dashboard() {
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
                         <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Shift Levers · {selectedDayShortLabel}</p>
-                        {!isAdmin && (
+                        {!isAdmin && !agentSession && (
                           <span className="flex items-center gap-1 text-[9px] text-muted-foreground border border-border rounded px-1 py-0.5">
                             <Lock size={8} /> View-only
                           </span>
@@ -949,7 +980,7 @@ export default function Dashboard() {
                         baseHours={baseHours}
                         overtimeHours={overtimeHours}
                         releasedHours={releasedHours}
-                        isAdmin={isAdmin}
+                        canEdit={canEditAgentLane(agent.id)}
                         utcHour={utcHour}
                         selectedDay={selectedDay}
                         playSoftClick={playSoftClick}
@@ -975,7 +1006,7 @@ export default function Dashboard() {
                     peakCoverageHour={peakCoverageHour}
                     totalOvertimeHours={totalOvertimeHours}
                     totalReleasedHours={totalReleasedHours}
-                    isAdmin={isAdmin}
+                    canClaimCoverage={canClaimCoverage}
                     gapSlices={gapSlices}
                     onAssignGap={openGapAssignModal}
                     pendingClaims={pendingCoverageClaims}
@@ -1025,13 +1056,13 @@ export default function Dashboard() {
 function EmptyState({
   isWeekend,
   dayLabel,
-  isAdmin,
+  canClaimCoverage,
   gapSlices,
   onAssignGap,
 }: {
   isWeekend: boolean;
   dayLabel: string;
-  isAdmin: boolean;
+  canClaimCoverage: boolean;
   gapSlices: GapSlice[];
   onAssignGap: (startUtc: number, endUtc: number) => void;
 }) {
@@ -1050,7 +1081,7 @@ function EmptyState({
             : "No agents have shifts scheduled for this day. Go to Agents to set up shifts."}
         </p>
       </div>
-      {isAdmin && gapSlices.length > 0 && (
+      {canClaimCoverage && gapSlices.length > 0 && (
         <div className="flex flex-wrap justify-center gap-1.5">
           {gapSlices.slice(0, 8).map((gap) => (
             <button
@@ -1058,7 +1089,7 @@ function EmptyState({
               onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
               className="text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"
             >
-              Fill {formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
+              {"Join line "}{formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
             </button>
           ))}
         </div>
@@ -1068,7 +1099,7 @@ function EmptyState({
 }
 
 function UnifiedTimeline({
-  scope, agents, allShifts, otRecords, isAdmin, visible, highlighted, setHighlighted,
+  scope, agents, allShifts, otRecords, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, selectedDate, focusHour, onSelectDay,
   toggleVisible, toggleAll, onAssignOvertime, onAssignGap, onOpenOvertime,
 }: {
@@ -1077,6 +1108,7 @@ function UnifiedTimeline({
   allShifts: Shift[];
   otRecords: OvertimeLog[];
   isAdmin: boolean;
+  agentSessionId: number | null;
   visible: Set<number>;
   highlighted: number | null;
   setHighlighted: (id: number | null) => void;
@@ -1092,6 +1124,7 @@ function UnifiedTimeline({
   onAssignGap: (startUtc: number, endUtc: number, dayOfWeek?: number, date?: string) => void;
   onOpenOvertime: (record: OvertimeLog) => void;
 }) {
+  const canClaimCoverage = isAdmin || agentSessionId != null;
   const PX_PER_HOUR = 56;
   const LABEL_W     = 120;
   const RULER_H     = 50;
@@ -1310,9 +1343,9 @@ function UnifiedTimeline({
             const shrinkSegs = segmentShift(ae, normBaseEnd);
             return shrinkSegs.map((seg, si) => (
               <div key={`shrink-${si}`}
-                onClick={() => isAdmin && onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, resolved.shrinkHours)}
                 onPointerDownCapture={stopDrag}
-                title={isAdmin ? "Click to assign this freed time to another agent" : "Freed segment (manager assigns coverage)"}
+                title={canClaimCoverage ? "Join line for this freed time" : "Freed segment"}
                 style={{
                   position: "absolute",
                   left: segOffsetX(seg) + seg.start * PX_PER_HOUR,
@@ -1320,7 +1353,7 @@ function UnifiedTimeline({
                   top: 8, height: ROW_H - 16, borderRadius: 2,
                   background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
                   border: "1px dashed rgba(255,140,0,0.6)",
-                  cursor: isAdmin ? "pointer" : "default",
+                  cursor: canClaimCoverage ? "pointer" : "default",
                   zIndex: 10,
                 }}
               />
@@ -1736,7 +1769,7 @@ function UnifiedTimeline({
               }
             </div>
 
-            {scope === "day" && isAdmin && findGapRanges(calcCoverageForDay(
+            {scope === "day" && canClaimCoverage && findGapRanges(calcCoverageForDay(
               allShifts
                 .filter(s => s.dayOfWeek === selectedDay && visible.has(s.agentId))
                 .map(s => {
@@ -1767,7 +1800,7 @@ function UnifiedTimeline({
                   zIndex: 12,
                   cursor: "pointer",
                 }}
-                title={`Assign open gap ${formatUtcHour(gap.start)}-${formatUtcHour(gap.end)} UTC`}
+                title={`Join line for gap ${formatUtcHour(gap.start)}-${formatUtcHour(gap.end)} UTC`}
               />
             ))}
 
@@ -1804,11 +1837,11 @@ function UnifiedTimeline({
 }
 
 function ClockVisualizer({
-  agents, shifts, isAdmin, visible, highlighted, setHighlighted,
+  agents, shifts, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage, otRecords,
   tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime, onAssignGap, onOpenOvertime,
 }: {
-  agents: Agent[]; shifts: Shift[]; isAdmin: boolean; visible: Set<number>;
+  agents: Agent[]; shifts: Shift[]; isAdmin: boolean; agentSessionId: number | null; visible: Set<number>;
   highlighted: number | null; setHighlighted: (id: number | null) => void;
   leverState: Record<number, LeverState>; utcHour: number;
   coverage: number[]; otRecords: OvertimeLog[];
@@ -1818,6 +1851,7 @@ function ClockVisualizer({
   onAssignGap: (startUtc: number, endUtc: number) => void;
   onOpenOvertime: (record: OvertimeLog) => void;
 }) {
+  const canClaimCoverage = isAdmin || agentSessionId != null;
   const SIZE   = 360;
   const CX = SIZE / 2, CY = SIZE / 2;
   const BASE_R = 100;
@@ -1933,8 +1967,8 @@ function ClockVisualizer({
               strokeWidth={4}
               strokeLinecap="butt"
               strokeDasharray={`${dash} ${dash}`}
-              style={{ cursor: isAdmin ? "pointer" : "default" }}
-              onClick={() => isAdmin && onAssignGap(gap.start, gap.end)}
+              style={{ cursor: canClaimCoverage ? "pointer" : "default" }}
+              onClick={() => canClaimCoverage && onAssignGap(gap.start, gap.end)}
             />
           );
         })}
@@ -2069,10 +2103,10 @@ function ClockVisualizer({
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
                           fill="none" stroke="rgba(255,140,0,0.85)"
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
-                          style={{ cursor: isAdmin ? "pointer" : "default" }}
-                          onClick={() => isAdmin && onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                          style={{ cursor: canClaimCoverage ? "pointer" : "default" }}
+                          onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, resolved.shrinkHours)}
                         >
-                          <title>{isAdmin ? "Click to assign this freed time to another agent" : "Freed segment (manager assigns coverage)"}</title>
+                          <title>{canClaimCoverage ? "Join line for this freed time" : "Freed segment"}</title>
                         </path>
                       ));
                     })()}
@@ -2251,7 +2285,7 @@ function ClockVisualizer({
 function ShiftLever({
   agent, shift, leverState, onLeverPreview, onLeverCommit,
   highlighted, onHighlight, onUnhighlight,
-  baseHours, overtimeHours, releasedHours, isAdmin, utcHour, selectedDay,
+  baseHours, overtimeHours, releasedHours, canEdit, utcHour, selectedDay,
   playSoftClick, playDragWhoosh,
 }: {
   agent: Agent; shift: Shift | undefined;
@@ -2260,7 +2294,7 @@ function ShiftLever({
   onLeverCommit: (id: number, start: number, end: number) => void;
   highlighted: boolean; onHighlight: () => void; onUnhighlight: () => void;
   baseHours: number; overtimeHours: number; releasedHours: number;
-  isAdmin: boolean; utcHour: number; selectedDay: number;
+  canEdit: boolean; utcHour: number; selectedDay: number;
   playSoftClick: () => void;
   playDragWhoosh: () => void;
 }) {
@@ -2289,12 +2323,12 @@ function ShiftLever({
   };
 
   const adjustEnd = (delta: number) => {
-    if (!isAdmin) return;
+    if (!canEdit) return;
     commitWindow(activeStart, activeEnd + delta);
   };
 
   const adjustStart = (delta: number) => {
-    if (!isAdmin) return;
+    if (!canEdit) return;
     commitWindow(activeStart + delta, activeEnd);
   };
 
@@ -2309,7 +2343,7 @@ function ShiftLever({
   } | null>(null);
 
   const onMouseDown = (e: React.MouseEvent, type: "start" | "end" | "move") => {
-    if (!isAdmin) return;
+    if (!canEdit) return;
     e.preventDefault();
     playDragWhoosh();
     dragging.current = {
@@ -2426,7 +2460,7 @@ function ShiftLever({
             backgroundColor: agent.color,
             opacity: resolved.hasOvertime ? 0.9 : resolved.hasShrink ? 0.55 : 0.75,
             boxShadow: resolved.hasOvertime ? `0 0 6px white, 0 0 10px ${agent.color}` : undefined,
-            cursor: isAdmin ? "grab" : "default",
+            cursor: canEdit ? "grab" : "default",
           }}
           onMouseDown={e => onMouseDown(e, "move")}
         />
@@ -2452,13 +2486,13 @@ function ShiftLever({
             </div>
           );
         })()}
-        {isAdmin && (
+        {canEdit && (
           <div className="absolute top-0 bottom-0 w-2 rounded-l-sm hover:opacity-100 opacity-0 bg-white/30 cursor-col-resize z-10"
             style={{ left: `${actLeft}%` }}
             onMouseDown={e => onMouseDown(e, "start")}
           />
         )}
-        {isAdmin && (
+        {canEdit && (
           <div className="absolute top-0 bottom-0 w-2 rounded-r-sm hover:opacity-100 opacity-0 bg-white/30 cursor-col-resize z-10"
             style={{ left: `calc(${actLeft}% + ${Math.max(1, actWidth)}% - 8px)` }}
             onMouseDown={e => onMouseDown(e, "end")}
@@ -2468,15 +2502,15 @@ function ShiftLever({
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
-          {isAdmin && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
-          {isAdmin && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
         </div>
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{formatDuration(resolved.activeDuration)}</span>
         <div className="flex items-center gap-1">
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
-          {isAdmin && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
-          {isAdmin && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
         </div>
       </div>
     </div>
@@ -2502,7 +2536,7 @@ function SummaryPanel({
   peakCoverageHour,
   totalOvertimeHours,
   totalReleasedHours,
-  isAdmin,
+  canClaimCoverage,
   gapSlices,
   onAssignGap,
   pendingClaims,
@@ -2522,7 +2556,7 @@ function SummaryPanel({
           <p className="text-[10px] text-red-400 font-medium">
             ⚠ {zeroCoverageHours} hour{zeroCoverageHours !== 1 ? "s" : ""} with zero coverage
           </p>
-          {isAdmin && gapSlices.length > 0 && (
+          {canClaimCoverage && gapSlices.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {gapSlices.slice(0, 8).map((gap: GapSlice) => (
                 <button
@@ -2530,7 +2564,7 @@ function SummaryPanel({
                   onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
                   className="text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"
                 >
-                  Fill {formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
+                  {"Join line "}{formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
                 </button>
               ))}
             </div>

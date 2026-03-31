@@ -295,7 +295,7 @@ function OvertimePanel({
       queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
       queryClient.invalidateQueries({ queryKey: ["/api/overtime-claims"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-      toast({ title: "Claim submitted", description: "Waiting for manager approval." });
+      toast({ title: "Joined line", description: "Waiting for manager approval." });
     },
     onError: (err) => {
       toast({
@@ -414,7 +414,9 @@ function OvertimePanel({
   const [focusedOtId, setFocusedOtId] = useState<number | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.split("?")[1] || "");
+    const hashQuery = location.split("?")[1] || "";
+    const searchQuery = window.location.search.startsWith("?") ? window.location.search.slice(1) : "";
+    const params = new URLSearchParams(hashQuery || searchQuery);
     const raw = params.get("otId");
     if (!raw) {
       setFocusedOtId(null);
@@ -435,7 +437,13 @@ function OvertimePanel({
     const d = new Date(`${rec.date}T00:00:00Z`);
     const dow = d.getUTCDay();
     const focusHour = rec.coverStartUtc ?? 0;
-    window.location.href = `${window.location.pathname}?day=${dow}&date=${rec.date}&scope=multi&focusHour=${focusHour}&focusAgentId=${rec.agentId}#/`;
+    const params = new URLSearchParams();
+    params.set("day", String(dow));
+    params.set("date", rec.date);
+    params.set("scope", "multi");
+    params.set("focusHour", String(focusHour));
+    params.set("focusAgentId", String(rec.agentId));
+    window.location.href = `${window.location.pathname}?${params.toString()}#/`;
   };
 
   return (
@@ -572,7 +580,7 @@ function OvertimePanel({
                             onClick={() => claimMutation.mutate(rec.id)}
                             className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 transition-colors"
                           >
-                            Claim
+                            Join line
                           </button>
                         )
                       )}
