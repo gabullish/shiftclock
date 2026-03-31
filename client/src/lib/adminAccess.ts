@@ -1,16 +1,11 @@
 const ADMIN_TOKEN_STORAGE_KEY = "shiftclock-admin-token";
 
-function readAdminTokenFromQuery(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("admin") || "";
-}
-
 export function getStoredAdminToken(): string {
   return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
 }
 
 export function getEffectiveAdminToken(): string {
-  return getStoredAdminToken() || readAdminTokenFromQuery();
+  return getStoredAdminToken();
 }
 
 export function saveAdminToken(token: string): void {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, AgentLog, OvertimeLog } from "@shared/schema";
@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { ScrollText, Clock, CheckCircle, XCircle, DollarSign, ArrowRightLeft, ExternalLink, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useAdminMode } from "@/hooks/use-admin-mode";
-import { Trash2, Download } from "lucide-react";
+import { Trash2, Download, Upload } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 const TABS = ["Activity Log", "Overtime"] as const;
@@ -259,17 +259,71 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
 
   const agentMap = new Map(agents.map((a) => [a.id, a]));
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
 
-    const handleExportOT = () => {
-      const data = JSON.stringify(sorted, null, 2);
-      const blob = new Blob([data], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `overtime-log-${new Date().toISOString().split("T")[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    };
+  const handleExportOT = () => {
+    const data = JSON.stringify(sorted, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `overtime-log-${new Date().toISOString().split("T")[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const clearOvertimeMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", "/api/overtime/all", {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      setConfirmClear(false);
+      toast({ title: "Overtime log cleared" });
+    },
+  });
+
+  const importOvertimeMutation = useMutation({
+    mutationFn: (payload: { records: OvertimeLog[] }) => apiRequest("POST", "/api/overtime/import", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      toast({ title: "Overtime records imported" });
+    },
+    onError: () => {
+      toast({ title: "Import failed", description: "Check the JSON format.", variant: "destructive" });
+    },
+  });
+
+  const handleClear = () => {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      clearTimeout(confirmTimer.current);
+      confirmTimer.current = setTimeout(() => setConfirmClear(false), 3500);
+      return;
+    }
+    clearTimeout(confirmTimer.current);
+    clearOvertimeMutation.mutate();
+  };
+
+  const handleImportOT = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) {
+        throw new Error("records array required");
+      }
+      importOvertimeMutation.mutate({ records: parsed as OvertimeLog[] });
+    } catch {
+      toast({ title: "Import failed", description: "Invalid JSON file.", variant: "destructive" });
+    } finally {
+      if (importFileRef.current) importFileRef.current.value = "";
+    }
+  };
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
@@ -281,19 +335,21 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
     },
   });
 
-  const sorted = [...records].sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-  );
+  const statusPriority: Record<string, number> = { pending: 0, approved: 1, paid: 2, denied: 3 };
+  const sorted = [...records].sort((a, b) => {
+    const pa = statusPriority[a.status ?? "pending"] ?? 99;
+    const pb = statusPriority[b.status ?? "pending"] ?? 99;
+    if (pa !== pb) return pa - pb;
+    return new Date(b.date).getTime() - new Date(a.date).getTime();
+  });
 
   const hasRecords = sorted.length > 0;
 
   const navigateToTimeline = (rec: OvertimeLog) => {
-    // Navigate to Dashboard timeline at the right day-of-week
     const d = new Date(rec.date + "T00:00:00Z");
     const dow = d.getUTCDay();
-    // wouter uses hash-based routing; put query params in the regular URL
-    // and navigate to the hash root
-    window.location.href = `${window.location.pathname}?day=${dow}&date=${rec.date}&scope=day#/`;
+    const focusHour = rec.coverStartUtc ?? 0;
+    window.location.href = `${window.location.pathname}?day=${dow}&date=${rec.date}&scope=multi&focusHour=${focusHour}&focusAgentId=${rec.agentId}#/`;
   };
 
   return (
@@ -310,13 +366,34 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
         <div className="max-w-4xl mx-auto space-y-2">
           {/* Summary bar */}
             {/* Toolbar */}
-            <div className="flex justify-end mb-1">
+            <div className="flex justify-end mb-1 gap-2">
+              <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportOT} />
               <button
                 onClick={handleExportOT}
                 className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
               >
                 <Download size={11} /> Export
               </button>
+              {canManage && (
+                <button
+                  onClick={() => importFileRef.current?.click()}
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Upload size={11} /> Import
+                </button>
+              )}
+              {canManage && (
+                <button
+                  onClick={handleClear}
+                  className={cn(
+                    "flex items-center gap-1 text-[10px] transition-colors",
+                    confirmClear ? "text-destructive font-semibold" : "text-muted-foreground hover:text-destructive"
+                  )}
+                >
+                  <Trash2 size={11} />
+                  {confirmClear ? "Confirm clear?" : "Clear log"}
+                </button>
+              )}
             </div>
           <div className="grid grid-cols-4 gap-2 mb-4">
             {ALL_STATUSES.map((s) => {

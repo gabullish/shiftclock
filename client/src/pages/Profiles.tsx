@@ -12,6 +12,7 @@ import { useSoothingSounds } from "@/hooks/useSoothingSounds";
 import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDays, Download, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
+import { getEffectiveAdminToken } from "@/lib/adminAccess";
 
 const TIMEZONES = [
   "UTC",
@@ -188,7 +189,11 @@ export default function Profiles() {
 
   const handleExportSettings = async () => {
     try {
-      const res = await fetch("/api/export", { headers: { "x-admin-token": localStorage.getItem("adminToken") ?? "" } });
+      const res = await fetch("/api/export", { headers: { "x-admin-token": getEffectiveAdminToken() } });
+      if (!res.ok) {
+        const text = (await res.text()) || `HTTP ${res.status}`;
+        throw new Error(text);
+      }
       const data = await res.json();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -217,13 +222,19 @@ export default function Profiles() {
         ...ag,
         shifts: (parsed.shifts ?? []).filter((s: Shift) => s.agentId === ag.id).map(({ id: _id, agentId: _agentId, ...s }: any) => s),
       }));
-      await fetch("/api/import", {
+      const res = await fetch("/api/import", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-token": localStorage.getItem("adminToken") ?? "" },
+        headers: { "Content-Type": "application/json", "x-admin-token": getEffectiveAdminToken() },
         body: JSON.stringify({ agents: agentsWithShifts }),
       });
+      if (!res.ok) {
+        const text = (await res.text()) || `HTTP ${res.status}`;
+        throw new Error(text);
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
       toast({ title: "Settings restored from backup" });
     } catch {
       toast({ title: "Import failed — check the file format", variant: "destructive" });
