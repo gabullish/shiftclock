@@ -194,6 +194,28 @@ function buildDays(pastDays: number, futureDays: number, anchor = new Date()): D
   return result;
 }
 
+function buildWeekCycleDays(anchorDate: string): DayDesc[] {
+  const anchor = parseIsoDate(anchorDate);
+  const start = new Date(anchor);
+  start.setUTCDate(anchor.getUTCDate() - anchor.getUTCDay());
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  return Array.from({ length: 8 }, (_, dayIndex) => {
+    const d = new Date(start);
+    d.setUTCDate(start.getUTCDate() + dayIndex);
+    const date = d.toISOString().slice(0, 10);
+    const dayOfWeek = d.getUTCDay();
+    return {
+      date,
+      dayOfWeek,
+      label: DAYS[dayOfWeek],
+      dateLabel: formatDayMonth(d),
+      isToday: date === todayStr,
+      dayIndex,
+    };
+  });
+}
+
 function resolveDateForWeekday(dayOfWeek: number, anchor = new Date()): string {
   const d = new Date(anchor);
   d.setUTCDate(d.getUTCDate() + (dayOfWeek - d.getUTCDay()));
@@ -610,6 +632,7 @@ export default function Dashboard() {
   };
 
   const selectedDayShortLabel = formatWeekdayWithDate(selectedDay, selectedDate);
+  const weekCycleDays = buildWeekCycleDays(selectedDate);
 
   return (
     <TooltipProvider>
@@ -624,21 +647,21 @@ export default function Dashboard() {
           {/* Day nav — hidden in multi-day timeline */}
           {!isMulti && (
             <div className="flex items-center gap-1">
-              {DAYS.map((d, i) => {
-                const hasShifts = allShifts.some(s => s.dayOfWeek === i);
-                const dayDate = resolveDateForWeekday(i, selectedDateAnchor(selectedDate));
+              {weekCycleDays.map((day) => {
+                const hasShifts = allShifts.some(s => s.dayOfWeek === day.dayOfWeek);
+                const isSelected = selectedDate === day.date;
                 return (
-                  <button key={d} onClick={() => { playSoftClick(); updateSelectedDay(i); }} data-testid={`day-${d}`}
+                  <button key={day.date} onClick={() => { playSoftClick(); updateSelectedDay(day.dayOfWeek, day.date); }} data-testid={`day-${day.date}`}
                     className={cn(
                       "px-2.5 py-1 rounded text-xs font-medium transition-all relative min-w-[54px]",
-                      selectedDay === i ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                      isSelected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     )}
                   >
                     <span className="flex flex-col leading-tight">
-                      <span>{d}</span>
-                      <span className={cn("text-[10px] font-mono", selectedDay === i ? "text-primary-foreground/80" : "text-muted-foreground")}>{formatDayMonth(dayDate)}</span>
+                      <span>{day.label}</span>
+                      <span className={cn("text-[10px] font-mono", isSelected ? "text-primary-foreground/80" : "text-muted-foreground")}>{day.dateLabel}</span>
                     </span>
-                    {hasShifts && selectedDay !== i && (
+                    {hasShifts && !isSelected && (
                       <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
                     )}
                   </button>
