@@ -4,6 +4,12 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { agents, shifts } from "@shared/schema";
 
+type NormalizedBackup = {
+  agents: Array<Record<string, unknown> & { id?: number; shifts: Array<Record<string, unknown>> }>;
+  overtime: Array<Record<string, unknown>>;
+  logs: Array<Record<string, unknown>>;
+};
+
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN?.trim() || "";
 
 function readAdminHeaderToken(req: Request): string {
@@ -133,6 +139,112 @@ function runMigrations() {
   safeAlter("CREATE INDEX IF NOT EXISTS idx_shifts_agent_day ON shifts(agent_id, day_of_week)");
   safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_agent_date_status ON overtime_log(agent_id, date, status)");
   safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_from_shift_status ON overtime_log(from_shift_id, status)");
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function normalizeImportPayload(payload: unknown): NormalizedBackup {
+  const body = (payload ?? {}) as Record<string, unknown>;
+  const rawAgents = Array.isArray(body.agents) ? body.agents : null;
+  if (!rawAgents) {
+    throw new Error("agents array required");
+  }
+
+  const rawShifts = Array.isArray(body.shifts) ? body.shifts : [];
+  const rawOvertime = Array.isArray(body.overtime) ? body.overtime : [];
+  const rawLogs = Array.isArray(body.logs) ? body.logs : [];
+
+  const shiftsByAgentId = new Map<number, Array<Record<string, unknown>>>();
+  for (const s of rawShifts) {
+    const row = s as Record<string, unknown>;
+    if (typeof row.agentId !== "number") continue;
+    const current = shiftsByAgentId.get(row.agentId) ?? [];
+    current.push(row);
+    shiftsByAgentId.set(row.agentId, current);
+  }
+
+  const normalizedAgents = rawAgents.map((agentItem) => {
+    const row = agentItem as Record<string, unknown>;
+    const nestedShifts = Array.isArray(row.shifts)
+      ? (row.shifts as Array<Record<string, unknown>>)
+      : (typeof row.id === "number" ? (shiftsByAgentId.get(row.id) ?? []) : []);
+
+    const cleanedNestedShifts = nestedShifts
+      .filter((s) => typeof (s as Record<string, unknown>).dayOfWeek === "number")
+      .map((s) => {
+        const shiftRow = s as Record<string, unknown>;
+        return {
+          dayOfWeek: Number(shiftRow.dayOfWeek),
+          startUtc: Number(shiftRow.startUtc),
+          endUtc: Number(shiftRow.endUtc),
+          breakStart: typeof shiftRow.breakStart === "number" ? shiftRow.breakStart : null,
+        };
+      });
+
+    return {
+      id: typeof row.id === "number" ? row.id : undefined,
+      name: typeof row.name === "string" ? row.name : "Unnamed Agent",
+      color: typeof row.color === "string" ? row.color : "#4CAF50",
+      avatarUrl: typeof row.avatarUrl === "string" ? row.avatarUrl : null,
+      timezone: typeof row.timezone === "string" ? row.timezone : "UTC",
+      role: typeof row.role === "string" ? row.role : "Support Agent",
+      offWeekend: typeof row.offWeekend === "number" ? row.offWeekend : 1,
+      offCycleStart: typeof row.offCycleStart === "string" ? row.offCycleStart : null,
+      shifts: cleanedNestedShifts,
+    };
+  });
+
+  const cleanedOvertime = rawOvertime
+    .filter((item) => {
+      const row = item as Record<string, unknown>;
+      return typeof row.agentId === "number" && isIsoDate(row.date);
+    })
+    .map((item) => {
+      const row = item as Record<string, unknown>;
+      return {
+        agentId: row.agentId as number,
+        date: row.date as string,
+        overtimeHours: typeof row.overtimeHours === "number" ? row.overtimeHours : 0,
+        releasedHours: typeof row.releasedHours === "number" ? row.releasedHours : 0,
+        note: typeof row.note === "string" ? row.note : null,
+        status: typeof row.status === "string" ? row.status : "pending",
+        origin: typeof row.origin === "string" ? row.origin : null,
+        coveredByAgentId: typeof row.coveredByAgentId === "number" ? row.coveredByAgentId : null,
+        statusUpdatedAt: typeof row.statusUpdatedAt === "string" ? row.statusUpdatedAt : null,
+        fromShiftId: typeof row.fromShiftId === "number" ? row.fromShiftId : null,
+        dayOfWeek: typeof row.dayOfWeek === "number" ? row.dayOfWeek : null,
+        coverStartUtc: typeof row.coverStartUtc === "number" ? row.coverStartUtc : null,
+        coverEndUtc: typeof row.coverEndUtc === "number" ? row.coverEndUtc : null,
+      };
+    });
+
+  const cleanedLogs = rawLogs
+    .filter((item) => {
+      const row = item as Record<string, unknown>;
+      return typeof row.agentId === "number" && isIsoDate(row.date) && typeof row.type === "string";
+    })
+    .map((item) => {
+      const row = item as Record<string, unknown>;
+      return {
+        agentId: row.agentId as number,
+        date: row.date as string,
+        type: row.type as string,
+        coverPct: typeof row.coverPct === "number" ? row.coverPct : null,
+        coveredByAgentId: typeof row.coveredByAgentId === "number" ? row.coveredByAgentId : null,
+        notes: typeof row.notes === "string" ? row.notes : null,
+        createdAt: typeof row.createdAt === "string" ? row.createdAt : new Date().toISOString(),
+        actionType: typeof row.actionType === "string" ? row.actionType : null,
+        description: typeof row.description === "string" ? row.description : null,
+      };
+    });
+
+  return {
+    agents: normalizedAgents,
+    overtime: cleanedOvertime,
+    logs: cleanedLogs,
+  };
 }
 
 export async function registerRoutes(httpServer: Server, app: Express) {
@@ -278,6 +390,47 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
+  // Clear all overtime records
+  app.delete("/api/overtime/all", requireAdmin, (_req, res) => {
+    storage.clearAllOvertimeLogs();
+    res.json({ ok: true });
+  });
+
+  // Replace overtime records from uploaded JSON
+  app.post("/api/overtime/import", requireAdmin, (req, res) => {
+    const { records } = req.body as { records?: unknown };
+    if (!Array.isArray(records)) {
+      return res.status(400).json({ message: "records array required" });
+    }
+
+    const cleaned = records
+      .filter((row) => {
+        const item = row as Record<string, unknown>;
+        return typeof item.agentId === "number" && isIsoDate(item.date);
+      })
+      .map((row) => {
+        const item = row as Record<string, unknown>;
+        return {
+          agentId: item.agentId as number,
+          date: item.date as string,
+          overtimeHours: typeof item.overtimeHours === "number" ? item.overtimeHours : 0,
+          releasedHours: typeof item.releasedHours === "number" ? item.releasedHours : 0,
+          note: typeof item.note === "string" ? item.note : null,
+          status: typeof item.status === "string" ? item.status : "pending",
+          origin: typeof item.origin === "string" ? item.origin : null,
+          coveredByAgentId: typeof item.coveredByAgentId === "number" ? item.coveredByAgentId : null,
+          statusUpdatedAt: typeof item.statusUpdatedAt === "string" ? item.statusUpdatedAt : null,
+          fromShiftId: typeof item.fromShiftId === "number" ? item.fromShiftId : null,
+          dayOfWeek: typeof item.dayOfWeek === "number" ? item.dayOfWeek : null,
+          coverStartUtc: typeof item.coverStartUtc === "number" ? item.coverStartUtc : null,
+          coverEndUtc: typeof item.coverEndUtc === "number" ? item.coverEndUtc : null,
+        };
+      });
+
+    storage.replaceOvertimeLogs(cleaned as any);
+    res.json({ ok: true, count: cleaned.length });
+  });
+
   // Assign freed overtime from one agent to another
   app.post("/api/overtime/assign", requireAdmin, (req, res) => {
     const { fromShiftId, toAgentId, hours, date, dayOfWeek } = req.body;
@@ -374,12 +527,18 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       res.json({ ...data, exportedAt: new Date().toISOString(), version: 1 });
     });
 
-    app.post("/api/import", requireAdmin, (req, res) => {
-      const { agents } = req.body as { agents?: unknown };
-      if (!Array.isArray(agents)) {
-        return res.status(400).json({ message: "agents array required" });
-      }
-      storage.importAgentsAndShifts({ agents: agents as any });
+  app.post("/api/import", requireAdmin, (req, res) => {
+    try {
+      const normalized = normalizeImportPayload(req.body);
+      storage.importAll({
+        agents: normalized.agents as any,
+        overtime: normalized.overtime as any,
+        logs: normalized.logs as any,
+      });
       res.json({ ok: true });
-    });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid import payload";
+      res.status(400).json({ message });
+    }
+  });
 }

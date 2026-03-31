@@ -180,10 +180,26 @@ export default function Dashboard() {
     return params.get("scope") === "multi" ? "multi" : "day";
   };
 
+  const initFocusHour = (): number | null => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("focusHour");
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const initFocusAgentId = (): number | null => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("focusAgentId");
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
   const [selectedDay,    setSelectedDay]    = useState<number>(initDay);
   const [selectedDate,   setSelectedDate]   = useState<string>(initDate);
   const [visible,        setVisible]        = useState<Set<number>>(new Set());
-  const [highlighted,    setHighlighted]    = useState<number | null>(null);
+  const [highlighted,    setHighlighted]    = useState<number | null>(initFocusAgentId);
   const [leverState,     setLeverState]     = useState<Record<number, LeverState>>({});
   const pendingCommit = useRef<Set<number>>(new Set());
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
@@ -192,6 +208,7 @@ export default function Dashboard() {
     return params.has("day") ? "timeline" : "clock";
   });
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">(initScope);
+  const [focusHour] = useState<number | null>(initFocusHour);
   const [tooltipInfo,    setTooltipInfo]    = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
@@ -607,6 +624,8 @@ export default function Dashboard() {
                 leverState={leverState}
                 utcHour={utcHour}
                 selectedDay={selectedDay}
+                selectedDate={selectedDate}
+                focusHour={focusHour}
                 onSelectDay={(dow, date) => {
                   updateSelectedDay(dow, date);
                   if (isMulti) setTimelineScope("day");
@@ -805,7 +824,7 @@ function EmptyState({ isWeekend, day }: { isWeekend: boolean; day: string }) {
 
 function UnifiedTimeline({
   scope, agents, allShifts, otRecords, isAdmin, visible, highlighted, setHighlighted,
-  leverState, utcHour, selectedDay, onSelectDay,
+  leverState, utcHour, selectedDay, selectedDate, focusHour, onSelectDay,
   toggleVisible, toggleAll, onAssignOvertime,
 }: {
   scope: "day" | "multi";
@@ -819,6 +838,8 @@ function UnifiedTimeline({
   leverState: Record<number, LeverState>;
   utcHour: number;
   selectedDay: number;
+  selectedDate: string;
+  focusHour: number | null;
   onSelectDay: (dow: number, date?: string) => void;
   toggleVisible: (id: number) => void;
   toggleAll: () => void;
@@ -841,9 +862,23 @@ function UnifiedTimeline({
 
   const { ref: scrollRef, onPointerDown, onPointerMove, onPointerUp, isDragging, stopDrag } = useDragScroll();
   const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const hasAppliedDeepLinkFocus = useRef(false);
 
   useEffect(() => {
     if (!scrollRef.current) return;
+    if (hasAppliedDeepLinkFocus.current) return;
+
+    if (scope === "multi" && focusHour != null && selectedDate) {
+      const targetIndex = days?.findIndex((d) => d.date === selectedDate) ?? -1;
+      if (targetIndex >= 0) {
+        const focusPx = (targetIndex * 24 + focusHour) * PX_PER_HOUR;
+        const w = scrollRef.current.clientWidth;
+        scrollRef.current.scrollLeft = Math.max(0, focusPx - w / 2 + LABEL_W);
+        hasAppliedDeepLinkFocus.current = true;
+        return;
+      }
+    }
+
     if (scope === "multi") {
       const nowPx = (todayIndex * 24 + utcHour) * PX_PER_HOUR;
       const w     = scrollRef.current.clientWidth;
@@ -855,8 +890,9 @@ function UnifiedTimeline({
         scrollRef.current.scrollLeft = Math.max(0, nowPx - w * 0.3);
       }
     }
+    hasAppliedDeepLinkFocus.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope]);
+  }, [scope, focusHour, selectedDate]);
 
   const scrollToNow = () => {
     if (!scrollRef.current) return;

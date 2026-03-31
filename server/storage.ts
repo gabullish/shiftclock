@@ -26,8 +26,10 @@ export interface IStorage {
   getOvertimeByAgent(agentId: number): OvertimeLog[];
   createOvertimeLog(agentId: number, date: string, data: Partial<InsertOvertimeLog>): OvertimeLog;
   updateOvertimeLog(id: number, data: Partial<InsertOvertimeLog>): OvertimeLog | undefined;
-    deleteOvertimeLog(id: number): void;
-    bulkDeleteOvertimeLogs(ids: number[]): void;
+  deleteOvertimeLog(id: number): void;
+  bulkDeleteOvertimeLogs(ids: number[]): void;
+  clearAllOvertimeLogs(): void;
+  replaceOvertimeLogs(data: Array<Omit<OvertimeLog, "id">>): void;
 
   // Agent logs
   getAgentLogs(): AgentLog[];
@@ -35,11 +37,15 @@ export interface IStorage {
   createAgentLog(data: InsertAgentLog): AgentLog;
   upsertRecentAgentLog(data: InsertAgentLog, dedupeWindowMs?: number): AgentLog;
   deleteAgentLog(id: number): void;
-    clearAllAgentLogs(): void;
+  clearAllAgentLogs(): void;
 
-    // Backup / restore
-    exportAll(): { agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] };
-    importAgentsAndShifts(data: { agents: Array<Omit<Agent, "id"> & { shifts: Array<Omit<Shift, "id" | "agentId">> }> }): void;
+  // Backup / restore
+  exportAll(): { agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] };
+  importAll(data: {
+    agents: Array<Omit<Agent, "id"> & { shifts: Array<Omit<Shift, "id" | "agentId">> }>;
+    overtime?: Array<Omit<OvertimeLog, "id">>;
+    logs?: Array<Omit<AgentLog, "id">>;
+  }): void;
 }
 
 export const storage: IStorage = {
@@ -131,13 +137,22 @@ export const storage: IStorage = {
   updateOvertimeLog(id, data) {
     return db.update(overtimeLog).set(data).where(eq(overtimeLog.id, id)).returning().get();
   },
-    deleteOvertimeLog(id) {
-      db.delete(overtimeLog).where(eq(overtimeLog.id, id)).run();
-    },
-    bulkDeleteOvertimeLogs(ids) {
-      if (ids.length === 0) return;
-      db.delete(overtimeLog).where(inArray(overtimeLog.id, ids)).run();
-    },
+  deleteOvertimeLog(id) {
+    db.delete(overtimeLog).where(eq(overtimeLog.id, id)).run();
+  },
+  bulkDeleteOvertimeLogs(ids) {
+    if (ids.length === 0) return;
+    db.delete(overtimeLog).where(inArray(overtimeLog.id, ids)).run();
+  },
+  clearAllOvertimeLogs() {
+    db.delete(overtimeLog).run();
+  },
+  replaceOvertimeLogs(data) {
+    db.delete(overtimeLog).run();
+    for (const record of data) {
+      db.insert(overtimeLog).values(record).run();
+    }
+  },
 
   getAgentLogs() {
     return db.select().from(agentLogs).all();
@@ -175,35 +190,74 @@ export const storage: IStorage = {
   deleteAgentLog(id) {
     db.delete(agentLogs).where(eq(agentLogs.id, id)).run();
   },
-    clearAllAgentLogs() {
-      db.delete(agentLogs).run();
-    },
+  clearAllAgentLogs() {
+    db.delete(agentLogs).run();
+  },
 
-    exportAll() {
-      return {
-        agents: db.select().from(agents).all(),
-        shifts: db.select().from(shifts).all(),
-        overtime: db.select().from(overtimeLog).all(),
-        logs: db.select().from(agentLogs).all(),
-      };
-    },
+  exportAll() {
+    return {
+      agents: db.select().from(agents).all(),
+      shifts: db.select().from(shifts).all(),
+      overtime: db.select().from(overtimeLog).all(),
+      logs: db.select().from(agentLogs).all(),
+    };
+  },
 
-    importAgentsAndShifts(data) {
-      const currentAgents = db.select().from(agents).all();
-      for (const a of currentAgents) {
-        db.delete(shifts).where(eq(shifts.agentId, a.id)).run();
-        db.delete(overtimeLog).where(eq(overtimeLog.agentId, a.id)).run();
-        db.delete(agentLogs).where(eq(agentLogs.agentId, a.id)).run();
-        db.delete(agents).where(eq(agents.id, a.id)).run();
+  importAll(data) {
+    const currentAgents = db.select().from(agents).all();
+    for (const a of currentAgents) {
+      db.delete(shifts).where(eq(shifts.agentId, a.id)).run();
+      db.delete(overtimeLog).where(eq(overtimeLog.agentId, a.id)).run();
+      db.delete(agentLogs).where(eq(agentLogs.agentId, a.id)).run();
+      db.delete(agents).where(eq(agents.id, a.id)).run();
+    }
+
+    const oldToNewAgentId = new Map<number, number>();
+
+    for (const agentData of data.agents) {
+      const { shifts: agentShifts, id: oldAgentId, ...agentFields } = agentData as any;
+      const newAgent = db.insert(agents).values(agentFields).returning().get();
+      if (typeof oldAgentId === "number") {
+        oldToNewAgentId.set(oldAgentId, newAgent.id);
       }
-      for (const agentData of data.agents) {
-        const { shifts: agentShifts, ...agentFields } = agentData as any;
-        const newAgent = db.insert(agents).values(agentFields).returning().get();
-        for (const s of (agentShifts ?? [])) {
-          db.insert(shifts)
-            .values({ ...s, agentId: newAgent.id, activeStart: null, activeEnd: null })
-            .run();
-        }
+      for (const s of (agentShifts ?? [])) {
+        db.insert(shifts)
+          .values({ ...s, agentId: newAgent.id, activeStart: null, activeEnd: null })
+          .run();
       }
-    },
+    }
+
+    if (Array.isArray(data.overtime)) {
+      for (const row of data.overtime) {
+        const mappedAgentId = oldToNewAgentId.get(row.agentId);
+        if (!mappedAgentId) continue;
+        const mappedCoveredById = row.coveredByAgentId == null
+          ? null
+          : (oldToNewAgentId.get(row.coveredByAgentId) ?? null);
+
+        db.insert(overtimeLog).values({
+          ...row,
+          agentId: mappedAgentId,
+          coveredByAgentId: mappedCoveredById,
+          fromShiftId: null,
+        }).run();
+      }
+    }
+
+    if (Array.isArray(data.logs)) {
+      for (const row of data.logs) {
+        const mappedAgentId = oldToNewAgentId.get(row.agentId);
+        if (!mappedAgentId) continue;
+        const mappedCoveredById = row.coveredByAgentId == null
+          ? null
+          : (oldToNewAgentId.get(row.coveredByAgentId) ?? null);
+
+        db.insert(agentLogs).values({
+          ...row,
+          agentId: mappedAgentId,
+          coveredByAgentId: mappedCoveredById,
+        }).run();
+      }
+    }
+  },
 };
