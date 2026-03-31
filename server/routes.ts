@@ -259,6 +259,25 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(updated);
   });
 
+  // Delete a single overtime record (undo a demo/test assignment)
+  app.delete("/api/overtime/:id", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const existing = storage.getOvertimeLogs().find(r => r.id === id);
+    if (!existing) return res.status(404).json({ message: "Not found" });
+    storage.deleteOvertimeLog(id);
+    res.json({ ok: true });
+  });
+
+  // Bulk delete overtime records by id list
+  app.delete("/api/overtime", requireAdmin, (req, res) => {
+    const { ids } = req.body as { ids?: unknown };
+    if (!Array.isArray(ids) || ids.some(i => typeof i !== "number")) {
+      return res.status(400).json({ message: "ids must be an array of numbers" });
+    }
+    storage.bulkDeleteOvertimeLogs(ids as number[]);
+    res.json({ ok: true });
+  });
+
   // Assign freed overtime from one agent to another
   app.post("/api/overtime/assign", requireAdmin, (req, res) => {
     const { fromShiftId, toAgentId, hours, date, dayOfWeek } = req.body;
@@ -315,6 +334,12 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getAgentLogs());
   });
 
+    // Clear all agent logs
+    app.delete("/api/agent-logs", requireAdmin, (_req, res) => {
+      storage.clearAllAgentLogs();
+      res.json({ ok: true });
+    });
+
   app.get("/api/agent-logs/:agentId", (req, res) => {
     res.json(storage.getAgentLogsByAgent(Number(req.params.agentId)));
   });
@@ -342,4 +367,19 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     storage.deleteAgentLog(Number(req.params.id));
     res.json({ ok: true });
   });
+
+    // --- Backup / Restore ---
+    app.get("/api/export", requireAdmin, (_req, res) => {
+      const data = storage.exportAll();
+      res.json({ ...data, exportedAt: new Date().toISOString(), version: 1 });
+    });
+
+    app.post("/api/import", requireAdmin, (req, res) => {
+      const { agents } = req.body as { agents?: unknown };
+      if (!Array.isArray(agents)) {
+        return res.status(400).json({ message: "agents array required" });
+      }
+      storage.importAgentsAndShifts({ agents: agents as any });
+      res.json({ ok: true });
+    });
 }
