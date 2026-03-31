@@ -24,7 +24,7 @@ export interface IStorage {
   // Overtime
   getOvertimeLogs(): OvertimeLog[];
   getOvertimeByAgent(agentId: number): OvertimeLog[];
-  upsertOvertimeLog(agentId: number, date: string, data: Partial<InsertOvertimeLog>): OvertimeLog;
+  createOvertimeLog(agentId: number, date: string, data: Partial<InsertOvertimeLog>): OvertimeLog;
   updateOvertimeLog(id: number, data: Partial<InsertOvertimeLog>): OvertimeLog | undefined;
 
   // Agent logs
@@ -118,13 +118,7 @@ export const storage: IStorage = {
   getOvertimeByAgent(agentId) {
     return db.select().from(overtimeLog).where(eq(overtimeLog.agentId, agentId)).all();
   },
-  upsertOvertimeLog(agentId, date, data) {
-    const existing = db.select().from(overtimeLog)
-      .where(and(eq(overtimeLog.agentId, agentId), eq(overtimeLog.date, date)))
-      .get();
-    if (existing) {
-      return db.update(overtimeLog).set(data).where(eq(overtimeLog.id, existing.id)).returning().get()!;
-    }
+  createOvertimeLog(agentId, date, data) {
     return db.insert(overtimeLog).values({ agentId, date, overtimeHours: 0, releasedHours: 0, ...data }).returning().get();
   },
   updateOvertimeLog(id, data) {

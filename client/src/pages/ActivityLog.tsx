@@ -221,7 +221,7 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
     const dow = d.getUTCDay();
     // wouter uses hash-based routing; put query params in the regular URL
     // and navigate to the hash root
-    window.location.href = `${window.location.pathname}?day=${dow}&scope=day#/`;
+    window.location.href = `${window.location.pathname}?day=${dow}&date=${rec.date}&scope=day#/`;
   };
 
   return (
