@@ -4,7 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift, OvertimeLog } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X, ExternalLink } from "lucide-react";
+import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X, ExternalLink, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/useSoothingSounds";
@@ -274,6 +274,7 @@ export default function Dashboard() {
 
   const [selectedDay,    setSelectedDay]    = useState<number>(initDay);
   const [selectedDate,   setSelectedDate]   = useState<string>(initDate);
+  const [weekAnchorDate, setWeekAnchorDate] = useState<string>(initDate);
   const [visible,        setVisible]        = useState<Set<number>>(new Set());
   const [highlighted,    setHighlighted]    = useState<number | null>(initFocusAgentId);
   const [leverState,     setLeverState]     = useState<Record<number, LeverState>>({});
@@ -286,6 +287,9 @@ export default function Dashboard() {
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">(initScope);
   const [focusHour] = useState<number | null>(initFocusHour);
   const [tooltipInfo,    setTooltipInfo]    = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
+
+  const todayDateStr = new Date().toISOString().slice(0, 10);
+  const isSelectedDateToday = selectedDate === todayDateStr;
 
   const openOvertimeForRecord = (record: OvertimeLog) => {
     const params = new URLSearchParams();
@@ -358,6 +362,28 @@ export default function Dashboard() {
   ) => {
     setSelectedDay(dayOfWeek);
     setSelectedDate(date);
+  };
+
+  const shiftDateByDays = (date: string, days: number): string => {
+    const d = parseIsoDate(date);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const goToPreviousWeek = () => {
+    playSoftClick();
+    const prevAnchor = shiftDateByDays(weekAnchorDate, -7);
+    setWeekAnchorDate(prevAnchor);
+    const prevSelected = shiftDateByDays(selectedDate, -7);
+    updateSelectedDay(parseIsoDate(prevSelected).getUTCDay(), prevSelected);
+  };
+
+  const goToNextWeek = () => {
+    playSoftClick();
+    const nextAnchor = shiftDateByDays(weekAnchorDate, 7);
+    setWeekAnchorDate(nextAnchor);
+    const nextSelected = shiftDateByDays(selectedDate, 7);
+    updateSelectedDay(parseIsoDate(nextSelected).getUTCDay(), nextSelected);
   };
 
   const previewLeverChange = (id: number, start: number, end: number) => {
@@ -499,7 +525,7 @@ export default function Dashboard() {
 
   const todayUTCDay  = getUTCDay();
   const onlineAgents = agents.filter(agent => {
-    if (selectedDay !== todayUTCDay) return false;
+    if (!isSelectedDateToday) return false;
     const isOnShift = todayShifts.some(s => {
       if (s.agentId !== agent.id) return false;
       const ls    = leverState[s.id];
@@ -650,7 +676,7 @@ export default function Dashboard() {
   };
 
   const selectedDayShortLabel = formatWeekdayWithDate(selectedDay, selectedDate);
-  const weekCycleDays = buildWeekCycleDays(selectedDate);
+  const weekCycleDays = buildWeekCycleDays(weekAnchorDate);
 
   return (
     <TooltipProvider>
@@ -665,6 +691,14 @@ export default function Dashboard() {
           {/* Day nav — hidden in multi-day timeline */}
           {!isMulti && (
             <div className="flex items-center gap-1">
+              <button
+                onClick={goToPreviousWeek}
+                className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                title="Previous week"
+                data-testid="week-prev"
+              >
+                <ChevronLeft size={14} />
+              </button>
               {weekCycleDays.map((day) => {
                 const hasShifts = allShifts.some(s => s.dayOfWeek === day.dayOfWeek);
                 const isSelected = selectedDate === day.date;
@@ -685,6 +719,14 @@ export default function Dashboard() {
                   </button>
                 );
               })}
+              <button
+                onClick={goToNextWeek}
+                className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                title="Next week"
+                data-testid="week-next"
+              >
+                <ChevronRight size={14} />
+              </button>
             </div>
           )}
 
@@ -739,7 +781,7 @@ export default function Dashboard() {
         </header>
 
         {/* ── Online now bar — clock + day timeline only ── */}
-        {!isMulti && selectedDay === todayUTCDay && (
+        {!isMulti && isSelectedDateToday && (
           <div className="flex items-center gap-3 px-6 py-2 border-b border-border bg-card/20 shrink-0">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
             {onlineAgents.length === 0 ? (
