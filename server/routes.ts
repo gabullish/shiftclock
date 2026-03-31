@@ -1,5 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
+import { createHmac } from "crypto";
 import { storage } from "./storage";
 import { db } from "./db";
 import { agents, shifts } from "@shared/schema";
@@ -11,11 +12,69 @@ type NormalizedBackup = {
 };
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN?.trim() || "";
+const AGENT_PASSWORD = process.env.AGENT_PASSWORD?.trim() || "";
+// Derive agent session secret from admin token so no extra env var is required
+const AGENT_SESSION_SECRET = createHmac("sha256", ADMIN_TOKEN || "shiftclock-agent-secret")
+  .update("agent-session-v1")
+  .digest("hex");
+// Agent sessions are valid for 2 hours server-side; idle timeout is enforced client-side (4 min)
+const AGENT_SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+
+function makeAgentToken(agentId: number): string {
+  const ts = Date.now();
+  const payload = `${agentId}:${ts}`;
+  const mac = createHmac("sha256", AGENT_SESSION_SECRET).update(payload).digest("hex");
+  return Buffer.from(`${payload}:${mac}`).toString("base64url");
+}
+
+function verifyAgentToken(token: string): { agentId: number; ts: number } | null {
+  try {
+    const raw = Buffer.from(token, "base64url").toString("utf8");
+    const parts = raw.split(":");
+    if (parts.length !== 3) return null;
+    const [agentIdStr, tsStr, mac] = parts;
+    const payload = `${agentIdStr}:${tsStr}`;
+    const expected = createHmac("sha256", AGENT_SESSION_SECRET).update(payload).digest("hex");
+    if (mac !== expected) return null;
+    const ts = Number(tsStr);
+    if (Date.now() - ts > AGENT_SESSION_TTL_MS) return null;
+    return { agentId: Number(agentIdStr), ts };
+  } catch {
+    return null;
+  }
+}
+
+function readAgentSessionToken(req: Request): string {
+  const raw = req.headers["x-agent-session"];
+  if (Array.isArray(raw)) return (raw[0] || "").trim();
+  return (raw || "").trim();
+}
+
+/** Extracts verified agentId from request, or null */
+function getAgentSession(req: Request): number | null {
+  const token = readAgentSessionToken(req);
+  if (!token) return null;
+  const result = verifyAgentToken(token);
+  return result ? result.agentId : null;
+}
+
+/** Middleware: requires a valid agent session and attaches agentId to req */
+function requireAgentSession(req: Request & { agentId?: number }, res: Response, next: NextFunction) {
+  const agentId = getAgentSession(req);
+  if (!agentId) return res.status(401).json({ message: "Agent session required" });
+  req.agentId = agentId;
+  next();
+}
 
 function readAdminHeaderToken(req: Request): string {
   const raw = req.headers["x-admin-token"];
   if (Array.isArray(raw)) return (raw[0] || "").trim();
   return (raw || "").trim();
+}
+
+function isAdminRequest(req: Request): boolean {
+  if (!ADMIN_TOKEN) return false;
+  return readAdminHeaderToken(req) === ADMIN_TOKEN;
 }
 
 /** Middleware: reject non-admin requests to mutating endpoints */
@@ -139,6 +198,20 @@ function runMigrations() {
   safeAlter("CREATE INDEX IF NOT EXISTS idx_shifts_agent_day ON shifts(agent_id, day_of_week)");
   safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_agent_date_status ON overtime_log(agent_id, date, status)");
   safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_from_shift_status ON overtime_log(from_shift_id, status)");
+  // Multi-agent competing claims
+  safeAlter(`
+    CREATE TABLE IF NOT EXISTS overtime_claims (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      opportunity_id INTEGER NOT NULL,
+      agent_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claim_order INTEGER NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  safeAlter("CREATE INDEX IF NOT EXISTS idx_claims_opportunity ON overtime_claims(opportunity_id, status)");
+  safeAlter("CREATE INDEX IF NOT EXISTS idx_claims_agent ON overtime_claims(agent_id, status)");
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -251,10 +324,45 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   if (!ADMIN_TOKEN) {
     console.warn("[routes] ADMIN_TOKEN is not configured. Mutating admin routes will return 500.");
   }
+  if (!AGENT_PASSWORD) {
+    console.warn("[routes] AGENT_PASSWORD is not configured. Agent mode will be disabled.");
+  }
   runMigrations();
   await seedDefaultData();
 
-  // --- Agents ---
+  // --- Agent session auth ---
+  app.post("/api/auth/agent-session", (req, res) => {
+    if (!AGENT_PASSWORD) {
+      return res.status(503).json({ message: "Agent mode is not configured on this server." });
+    }
+    const { password, agentId } = req.body as { password?: string; agentId?: number };
+    if (!password || password.trim() !== AGENT_PASSWORD) {
+      return res.status(401).json({ message: "Invalid agent password" });
+    }
+    if (!agentId || typeof agentId !== "number") {
+      return res.status(400).json({ message: "agentId required" });
+    }
+    const agent = storage.getAgent(agentId);
+    if (!agent) return res.status(404).json({ message: "Agent not found" });
+    const token = makeAgentToken(agentId);
+    return res.json({ token, agentId, agentName: agent.name });
+  });
+
+  app.get("/api/auth/agent-session", (req, res) => {
+    const token = readAgentSessionToken(req);
+    if (!token) return res.status(401).json({ message: "No session token" });
+    const result = verifyAgentToken(token);
+    if (!result) return res.status(401).json({ message: "Invalid or expired session" });
+    const agent = storage.getAgent(result.agentId);
+    if (!agent) return res.status(404).json({ message: "Agent not found" });
+    return res.json({ agentId: result.agentId, agentName: agent.name });
+  });
+
+  app.get("/api/auth/agent-password-configured", (_req, res) => {
+    res.json({ configured: Boolean(AGENT_PASSWORD) });
+  });
+
+  // --- Admin verify ---
   app.get("/api/admin/verify", (req, res) => {
     if (!ADMIN_TOKEN) {
       return res.status(500).json({ message: "Server misconfigured: ADMIN_TOKEN is not set" });
@@ -274,8 +382,25 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(agent);
   });
 
-  app.patch("/api/agents/:id", requireAdmin, (req, res) => {
-    const agent = storage.updateAgent(Number(req.params.id), req.body);
+  app.patch("/api/agents/:id", (req, res) => {
+    const targetId = Number(req.params.id);
+    const admin = isAdminRequest(req);
+    const sessionAgentId = getAgentSession(req);
+
+    if (!admin && sessionAgentId !== targetId) {
+      return res.status(403).json({ message: "You can only edit your own profile" });
+    }
+
+    const allowedForAgent = ["name", "color", "timezone", "avatarUrl"] as const;
+    const payload = admin
+      ? req.body
+      : Object.fromEntries(
+          Object.entries(req.body as Record<string, unknown>).filter(([k]) =>
+            (allowedForAgent as readonly string[]).includes(k),
+          ),
+        );
+
+    const agent = storage.updateAgent(targetId, payload);
     if (!agent) return res.status(404).json({ message: "Not found" });
     res.json(agent);
   });
@@ -310,8 +435,27 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(shift);
   });
 
-  app.patch("/api/shifts/:id", requireAdmin, (req, res) => {
-    const shift = storage.updateShift(Number(req.params.id), req.body);
+  app.patch("/api/shifts/:id", (req, res) => {
+    const shiftId = Number(req.params.id);
+    const existing = storage.getShifts().find((s) => s.id === shiftId);
+    if (!existing) return res.status(404).json({ message: "Not found" });
+
+    const admin = isAdminRequest(req);
+    const sessionAgentId = getAgentSession(req);
+    if (!admin && sessionAgentId !== existing.agentId) {
+      return res.status(403).json({ message: "You can only edit your own shift" });
+    }
+
+    const allowedForAgent = ["activeStart", "activeEnd", "breakStart"] as const;
+    const payload = admin
+      ? req.body
+      : Object.fromEntries(
+          Object.entries(req.body as Record<string, unknown>).filter(([k]) =>
+            (allowedForAgent as readonly string[]).includes(k),
+          ),
+        );
+
+    const shift = storage.updateShift(shiftId, payload);
     if (!shift) return res.status(404).json({ message: "Not found" });
     res.json(shift);
   });
@@ -516,6 +660,130 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     });
 
     res.json({ ok: true, overtimeLog: otLog });
+  });
+
+  // --- Overtime Claims (multi-agent competing) ---
+
+  // Get all claims for a specific overtime opportunity
+  app.get("/api/overtime/:id/claims", (_req, res) => {
+    const claims = storage.getClaimsForOpportunity(Number(_req.params.id));
+    res.json(claims);
+  });
+
+  // Agent submits a claim for an overtime opportunity (requires agent session)
+  app.post("/api/overtime/:id/claim", (req: Request & { agentId?: number }, res) => {
+    // Accept either agent session or admin token
+    const adminToken = readAdminHeaderToken(req);
+    const isAdmin = ADMIN_TOKEN && adminToken === ADMIN_TOKEN;
+    const agentId = isAdmin ? (req.body.agentId as number | undefined) : getAgentSession(req);
+
+    if (!agentId) return res.status(401).json({ message: "Agent session or admin token required" });
+
+    const opportunityId = Number(req.params.id);
+    const opportunity = storage.getOvertimeLogs().find(r => r.id === opportunityId);
+    if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
+
+    // Prevent duplicate pending claims from same agent for same opportunity
+    const existing = storage.getClaimsForOpportunity(opportunityId)
+      .find(c => c.agentId === agentId && c.status === "pending");
+    if (existing) return res.status(409).json({ message: "You already have a pending claim for this opportunity" });
+
+    const agent = storage.getAgent(agentId);
+    if (!agent) return res.status(404).json({ message: "Agent not found" });
+
+    const claim = storage.createClaim({
+      opportunityId,
+      agentId,
+      status: "pending",
+      note: typeof req.body.note === "string" ? req.body.note : null,
+      createdAt: new Date().toISOString(),
+    });
+
+    storage.createAgentLog({
+      agentId,
+      date: opportunity.date,
+      type: "shift-claim",
+      coverPct: null,
+      coveredByAgentId: opportunity.coveredByAgentId ?? null,
+      notes: null,
+      createdAt: new Date().toISOString(),
+      actionType: "shift-claimed",
+      description: `${agent.name} submitted a claim for the ${opportunity.date} overtime opportunity.`,
+    });
+
+    res.json(claim);
+  });
+
+  // Agent cancels (undo) their own pending claim
+  app.delete("/api/overtime/:id/claim", (req: Request & { agentId?: number }, res) => {
+    const adminToken = readAdminHeaderToken(req);
+    const isAdmin = ADMIN_TOKEN && adminToken === ADMIN_TOKEN;
+    const agentId = isAdmin ? (req.body.agentId as number | undefined) : getAgentSession(req);
+
+    if (!agentId) return res.status(401).json({ message: "Agent session or admin token required" });
+
+    const opportunityId = Number(req.params.id);
+    const claims = storage.getClaimsForOpportunity(opportunityId);
+    const ownClaim = claims.find(c => c.agentId === agentId && c.status === "pending");
+    if (!ownClaim) return res.status(404).json({ message: "No pending claim found for this agent" });
+
+    const cancelled = storage.cancelClaim(ownClaim.id, agentId);
+
+    const agent = storage.getAgent(agentId);
+    const opportunity = storage.getOvertimeLogs().find(r => r.id === opportunityId);
+    if (agent && opportunity) {
+      storage.createAgentLog({
+        agentId,
+        date: opportunity.date,
+        type: "shift-claim-cancelled",
+        coverPct: null,
+        coveredByAgentId: null,
+        notes: null,
+        createdAt: new Date().toISOString(),
+        actionType: "shift-claimed",
+        description: `${agent.name} cancelled their claim for the ${opportunity.date} overtime opportunity.`,
+      });
+    }
+
+    res.json(cancelled);
+  });
+
+  // Manager approves a specific claim (and rejects all others for same opportunity)
+  app.post("/api/overtime/:id/approve-claim/:claimId", requireAdmin, (req, res) => {
+    const opportunityId = Number(req.params.id);
+    const claimId = Number(req.params.claimId);
+
+    const opportunity = storage.getOvertimeLogs().find(r => r.id === opportunityId);
+    if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
+
+    const claim = storage.getClaimsForOpportunity(opportunityId).find(c => c.id === claimId);
+    if (!claim) return res.status(404).json({ message: "Claim not found" });
+
+    const approved = storage.approveClaimAndRejectOthers(claimId, opportunityId);
+
+    // Approve the opportunity itself, assign ownership to approved agent
+    storage.updateOvertimeLog(opportunityId, {
+      agentId: claim.agentId,
+      status: "approved",
+      statusUpdatedAt: new Date().toISOString(),
+    });
+
+    const agent = storage.getAgent(claim.agentId);
+    if (agent) {
+      storage.upsertRecentAgentLog({
+        agentId: claim.agentId,
+        date: opportunity.date,
+        type: "overtime-status",
+        coverPct: null,
+        coveredByAgentId: null,
+        notes: null,
+        createdAt: new Date().toISOString(),
+        actionType: "overtime-status-changed",
+        description: `Manager approved ${agent.name}'s claim for the ${opportunity.date} overtime opportunity.`,
+      });
+    }
+
+    res.json({ ok: true, approved, opportunityId });
   });
 
   // --- Agent Logs ---
