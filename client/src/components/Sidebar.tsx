@@ -23,9 +23,9 @@ export default function Sidebar({
   const { enabled: dragScrollEnabled, setEnabled: setDragScrollEnabled } = useDragScrollPreference();
 
   return (
-    <aside className="w-16 lg:w-56 flex flex-col border-r border-border bg-sidebar shrink-0 h-screen overflow-hidden">
+    <aside className="w-14 sm:w-16 lg:w-56 flex flex-col border-r border-border bg-sidebar shrink-0 h-screen overflow-hidden">
       {/* Logo */}
-      <div className="h-14 flex items-center px-3 lg:px-5 border-b border-border shrink-0">
+      <div className="h-14 flex items-center px-2.5 sm:px-3 lg:px-5 border-b border-border shrink-0">
         <div className="flex items-center gap-2.5">
           {/* SVG Logo */}
           <svg viewBox="0 0 28 28" width="28" height="28" aria-label="Shiftmaxxing logo" fill="none">
@@ -64,7 +64,7 @@ export default function Sidebar({
       </nav>
 
       {/* Bottom area: agent indicator or UTC clock */}
-      <div className="p-3 border-t border-border space-y-2">
+      <div className="p-2 sm:p-3 border-t border-border space-y-2">
         <button
           onClick={() => setDragScrollEnabled(!dragScrollEnabled)}
           className={cn(
@@ -101,16 +101,16 @@ function AgentIndicator({ session, onSignOff }: { session: AgentSession; onSignO
           <p className="text-[10px] text-blue-400 leading-none font-semibold truncate">AGENT SESSION</p>
           <p className="text-xs font-medium text-foreground truncate mt-0.5">{session.agentName}</p>
         </div>
-        {onSignOff && (
-          <button
-            onClick={onSignOff}
-            title="Sign off"
-            className="shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
-          >
-            <LogOut size={11} />
-          </button>
-        )}
       </div>
+      {onSignOff && (
+        <button
+          onClick={onSignOff}
+          title="Sign off"
+          className="shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+        >
+          <LogOut size={11} />
+        </button>
+      )}
     </div>
   );
 }

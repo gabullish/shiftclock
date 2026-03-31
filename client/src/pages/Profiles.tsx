@@ -246,13 +246,13 @@ export default function Profiles() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="p-6 max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
+      <div className="p-3 sm:p-4 lg:p-6 max-w-5xl mx-auto">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-6">
           <div>
             <h1 className="text-lg font-semibold">Agents</h1>
             <p className="text-xs text-muted-foreground mt-0.5">{agents.length} agents · global team</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {!isAdmin && (
               <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground border border-border rounded-md px-2 py-1">
                 <Lock size={10} />

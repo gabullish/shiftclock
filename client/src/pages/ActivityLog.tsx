@@ -66,7 +66,7 @@ export default function ActivityLog() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <header className="h-14 flex items-center justify-between px-6 border-b border-border shrink-0 bg-card/50 backdrop-blur">
+      <header className="shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 py-2 sm:px-4 lg:px-6 border-b border-border bg-card/50 backdrop-blur">
         <div className="flex items-center gap-3">
           <ScrollText size={16} className="text-primary" />
           <h1 className="text-sm font-semibold">Activity &amp; Overtime</h1>
@@ -149,7 +149,7 @@ function ActivityFeed() {
   const agentMap = new Map(agents.map((a) => [a.id, a]));
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain p-4">
+    <div className="h-full overflow-y-auto overscroll-contain p-3 sm:p-4">
       {sorted.length > 0 && (
         <div className="flex items-center justify-end gap-2 mb-3 max-w-3xl mx-auto">
           <button
@@ -478,7 +478,7 @@ function OvertimePanel({
         </div>
       ) : (
         <div className="max-w-5xl mx-auto space-y-2">
-          <div className="flex justify-end mb-1 gap-2">
+          <div className="flex flex-wrap justify-end mb-1 gap-2">
             <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportOT} />
             <button
               onClick={handleExportOT}
@@ -508,7 +508,7 @@ function OvertimePanel({
             )}
           </div>
 
-          <div className="grid grid-cols-4 gap-2 mb-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
             {ALL_STATUSES.map((s) => {
               const count = sorted.filter((r) => (r.status ?? "pending") === s).length;
               const cfg = STATUS_CONFIG[s];
@@ -521,7 +521,8 @@ function OvertimePanel({
             })}
           </div>
 
-          <div className="rounded-lg border border-border overflow-visible">
+          <div className="rounded-lg border border-border overflow-x-auto">
+            <div className="min-w-[760px]">
             <div className="grid grid-cols-[1fr_95px_72px_1fr_160px] gap-2 px-3 py-2 border-b border-border bg-muted/30 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
               <span>Opportunity</span>
               <span>Date</span>
@@ -659,6 +660,7 @@ function OvertimePanel({
                 </div>
               );
             })}
+            </div>
           </div>
         </div>
       )}
