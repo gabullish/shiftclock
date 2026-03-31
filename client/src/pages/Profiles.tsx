@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift } from "@shared/schema";
@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useSoothingSounds } from "@/hooks/useSoothingSounds";
-import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDays } from "lucide-react";
+import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDays, Download, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 
@@ -97,6 +97,8 @@ export default function Profiles() {
   const { playSoftClick, playSuccess } = useSoothingSounds();
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const prevAgentRef = useRef<{ id: number; data: Partial<AgentFormData> } | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
@@ -111,12 +113,32 @@ export default function Profiles() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<AgentFormData> }) =>
-      apiRequest("PATCH", `/api/agents/${id}`, data),
+    mutationFn: ({ id, data }: { id: number; data: Partial<AgentFormData> }) => {
+      const current = agents.find(a => a.id === id);
+      if (current) {
+        prevAgentRef.current = {
+          id,
+          data: { name: current.name, color: current.color, timezone: current.timezone, role: current.role, avatarUrl: current.avatarUrl || "" },
+        };
+      }
+      return apiRequest("PATCH", `/api/agents/${id}`, data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       setEditingAgent(null);
-      toast({ title: "Agent updated" });
+      const prev = prevAgentRef.current;
+      toast({
+        title: "Agent updated",
+        description: prev ? "Click Undo to revert." : undefined,
+        action: prev ? (
+          <button
+            onClick={() => updateMutation.mutate({ id: prev.id, data: prev.data })}
+            className="text-xs underline underline-offset-2 shrink-0"
+          >
+            Undo
+          </button>
+        ) : undefined,
+      });
     },
   });
 
@@ -164,6 +186,51 @@ export default function Profiles() {
     },
   });
 
+  const handleExportSettings = async () => {
+    try {
+      const res = await fetch("/api/export", { headers: { "x-admin-token": localStorage.getItem("adminToken") ?? "" } });
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `shiftclock-backup-${new Date().toISOString().split("T")[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Settings exported" });
+    } catch {
+      toast({ title: "Export failed", variant: "destructive" });
+    }
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed.agents)) {
+        toast({ title: "Invalid backup file", variant: "destructive" });
+        return;
+      }
+      const agentsWithShifts = parsed.agents.map((ag: Agent) => ({
+        ...ag,
+        shifts: (parsed.shifts ?? []).filter((s: Shift) => s.agentId === ag.id).map(({ id: _id, agentId: _agentId, ...s }: any) => s),
+      }));
+      await fetch("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-token": localStorage.getItem("adminToken") ?? "" },
+        body: JSON.stringify({ agents: agentsWithShifts }),
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      toast({ title: "Settings restored from backup" });
+    } catch {
+      toast({ title: "Import failed — check the file format", variant: "destructive" });
+    }
+    if (importFileRef.current) importFileRef.current.value = "";
+  };
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-6 max-w-5xl mx-auto">
@@ -178,6 +245,25 @@ export default function Profiles() {
                 <Lock size={10} />
                 View-only
               </div>
+            )}
+            {isAdmin && (
+              <>
+                <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
+                <button
+                  onClick={handleExportSettings}
+                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground border border-border rounded-md px-2.5 py-1.5 transition-colors"
+                  title="Export all agents and shifts as a backup JSON"
+                >
+                  <Download size={12} /> Export
+                </button>
+                <button
+                  onClick={() => importFileRef.current?.click()}
+                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground border border-border rounded-md px-2.5 py-1.5 transition-colors"
+                  title="Restore agents and shifts from a backup (replaces current data)"
+                >
+                  <Upload size={12} /> Import
+                </button>
+              </>
             )}
             {isAdmin && (
               <Dialog open={showCreate} onOpenChange={setShowCreate}>

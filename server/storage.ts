@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { agents, shifts, overtimeLog, agentLogs } from "@shared/schema";
 import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog, AgentLog, InsertAgentLog } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Agents
@@ -26,6 +26,8 @@ export interface IStorage {
   getOvertimeByAgent(agentId: number): OvertimeLog[];
   createOvertimeLog(agentId: number, date: string, data: Partial<InsertOvertimeLog>): OvertimeLog;
   updateOvertimeLog(id: number, data: Partial<InsertOvertimeLog>): OvertimeLog | undefined;
+    deleteOvertimeLog(id: number): void;
+    bulkDeleteOvertimeLogs(ids: number[]): void;
 
   // Agent logs
   getAgentLogs(): AgentLog[];
@@ -33,6 +35,11 @@ export interface IStorage {
   createAgentLog(data: InsertAgentLog): AgentLog;
   upsertRecentAgentLog(data: InsertAgentLog, dedupeWindowMs?: number): AgentLog;
   deleteAgentLog(id: number): void;
+    clearAllAgentLogs(): void;
+
+    // Backup / restore
+    exportAll(): { agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] };
+    importAgentsAndShifts(data: { agents: Array<Omit<Agent, "id"> & { shifts: Array<Omit<Shift, "id" | "agentId">> }> }): void;
 }
 
 export const storage: IStorage = {
@@ -124,6 +131,13 @@ export const storage: IStorage = {
   updateOvertimeLog(id, data) {
     return db.update(overtimeLog).set(data).where(eq(overtimeLog.id, id)).returning().get();
   },
+    deleteOvertimeLog(id) {
+      db.delete(overtimeLog).where(eq(overtimeLog.id, id)).run();
+    },
+    bulkDeleteOvertimeLogs(ids) {
+      if (ids.length === 0) return;
+      db.delete(overtimeLog).where(inArray(overtimeLog.id, ids)).run();
+    },
 
   getAgentLogs() {
     return db.select().from(agentLogs).all();
@@ -161,4 +175,35 @@ export const storage: IStorage = {
   deleteAgentLog(id) {
     db.delete(agentLogs).where(eq(agentLogs.id, id)).run();
   },
+    clearAllAgentLogs() {
+      db.delete(agentLogs).run();
+    },
+
+    exportAll() {
+      return {
+        agents: db.select().from(agents).all(),
+        shifts: db.select().from(shifts).all(),
+        overtime: db.select().from(overtimeLog).all(),
+        logs: db.select().from(agentLogs).all(),
+      };
+    },
+
+    importAgentsAndShifts(data) {
+      const currentAgents = db.select().from(agents).all();
+      for (const a of currentAgents) {
+        db.delete(shifts).where(eq(shifts.agentId, a.id)).run();
+        db.delete(overtimeLog).where(eq(overtimeLog.agentId, a.id)).run();
+        db.delete(agentLogs).where(eq(agentLogs.agentId, a.id)).run();
+        db.delete(agents).where(eq(agents.id, a.id)).run();
+      }
+      for (const agentData of data.agents) {
+        const { shifts: agentShifts, ...agentFields } = agentData as any;
+        const newAgent = db.insert(agents).values(agentFields).returning().get();
+        for (const s of (agentShifts ?? [])) {
+          db.insert(shifts)
+            .values({ ...s, agentId: newAgent.id, activeStart: null, activeEnd: null })
+            .run();
+        }
+      }
+    },
 };

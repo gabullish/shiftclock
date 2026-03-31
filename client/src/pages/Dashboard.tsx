@@ -211,6 +211,17 @@ export default function Dashboard() {
     },
   });
 
+    const bulkDeleteOTMutation = useMutation({
+      mutationFn: (ids: number[]) => apiRequest("DELETE", "/api/overtime", { ids }),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      },
+    });
+
+    const [confirmReset, setConfirmReset] = useState(false);
+    const confirmResetTimer = useRef<ReturnType<typeof setTimeout>>();
+
   useEffect(() => {
     if (agents.length > 0 && visible.size === 0)
       setVisible(new Set(agents.map(a => a.id)));
@@ -400,17 +411,32 @@ export default function Dashboard() {
   const hasShiftsToday = todayShifts.length > 0;
   const isWeekend      = selectedDay === 0 || selectedDay === 6;
 
-  const resetLevers = () => {
-    const reset: Record<number, LeverState> = { ...leverState };
-    for (const s of todayShifts) {
-      reset[s.id] = { activeStart: s.startUtc, activeEnd: normaliseEndUtc(s.startUtc, s.endUtc) };
-      updateShiftMutation.mutate({
-        id: s.id,
-        data: { activeStart: s.startUtc, activeEnd: normaliseEndUtc(s.startUtc, s.endUtc) },
-      });
-    }
-    setLeverState(reset);
-  };
+  const handleUndoDay = () => {
+      if (!confirmReset) {
+        setConfirmReset(true);
+        clearTimeout(confirmResetTimer.current);
+        confirmResetTimer.current = setTimeout(() => setConfirmReset(false), 3500);
+        return;
+      }
+      clearTimeout(confirmResetTimer.current);
+      setConfirmReset(false);
+
+      // Delete all pending OT for the selected day
+      const pendingIds = otRecords
+        .filter(r => r.dayOfWeek === selectedDay && r.status === "pending")
+        .map(r => r.id);
+      if (pendingIds.length > 0) bulkDeleteOTMutation.mutate(pendingIds);
+
+      // Restore shifts to base schedule (null = use base startUtc/endUtc)
+      const reset: Record<number, LeverState> = { ...leverState };
+      for (const s of todayShifts) {
+        const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
+        reset[s.id] = { activeStart: s.startUtc, activeEnd: normEnd };
+        updateShiftMutation.mutate({ id: s.id, data: { activeStart: null, activeEnd: null } });
+      }
+      setLeverState(reset);
+      toast({ title: `${DAYS[selectedDay]} reset to base schedule` });
+    };
 
   const isMulti    = viewMode === "timeline" && timelineScope === "multi";
   const isTimeline = viewMode === "timeline";
@@ -666,8 +692,18 @@ export default function Dashboard() {
                         )}
                       </div>
                       {isAdmin && (
-                        <button onClick={resetLevers} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
-                          <RotateCcw size={10} /> Reset
+                        <button
+                          onClick={handleUndoDay}
+                          className={cn(
+                            "text-[10px] flex items-center gap-1 transition-colors select-none",
+                            confirmReset
+                              ? "text-destructive hover:text-destructive font-semibold"
+                              : "text-muted-foreground hover:text-foreground"
+                          )}
+                          title={confirmReset ? "Click again to confirm reset" : "Reset levers and pending OT for this day"}
+                        >
+                          <RotateCcw size={10} />
+                          {confirmReset ? "Confirm reset?" : "Reset day"}
                         </button>
                       )}
                     </div>

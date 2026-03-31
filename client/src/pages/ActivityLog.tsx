@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { ScrollText, Clock, CheckCircle, XCircle, DollarSign, ArrowRightLeft, ExternalLink, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useAdminMode } from "@/hooks/use-admin-mode";
+import { Trash2, Download } from "lucide-react";
+import { toast } from "@/hooks/use-toast";
 
 const TABS = ["Activity Log", "Overtime"] as const;
 type Tab = (typeof TABS)[number];
@@ -62,6 +64,40 @@ function ActivityFeed() {
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
 
   const agentMap = new Map(agents.map((a) => [a.id, a]));
+    const isAdmin = useAdminMode();
+    const [confirmClear, setConfirmClear] = useState(false);
+    const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
+
+    const clearLogMutation = useMutation({
+      mutationFn: () => apiRequest("DELETE", "/api/agent-logs", {}),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+        setConfirmClear(false);
+        toast({ title: "Activity log cleared" });
+      },
+    });
+
+    const handleClear = () => {
+      if (!confirmClear) {
+        setConfirmClear(true);
+        clearTimeout(confirmTimer.current);
+        confirmTimer.current = setTimeout(() => setConfirmClear(false), 3500);
+        return;
+      }
+      clearTimeout(confirmTimer.current);
+      clearLogMutation.mutate();
+    };
+
+    const handleExport = () => {
+      const data = JSON.stringify(sorted, null, 2);
+      const blob = new Blob([data], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `activity-log-${new Date().toISOString().split("T")[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
 
   const sorted = [...logs]
     .filter((l) => l.description)
@@ -69,6 +105,31 @@ function ActivityFeed() {
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain p-4">
+        {/* Toolbar */}
+        {logs.length > 0 && (
+          <div className="flex items-center justify-end gap-2 mb-3 max-w-3xl mx-auto">
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Download size={11} /> Export
+            </button>
+            {isAdmin && (
+              <button
+                onClick={handleClear}
+                className={cn(
+                  "flex items-center gap-1 text-[10px] transition-colors",
+                  confirmClear
+                    ? "text-destructive font-semibold"
+                    : "text-muted-foreground hover:text-destructive"
+                )}
+              >
+                <Trash2 size={11} />
+                {confirmClear ? "Confirm clear?" : "Clear log"}
+              </button>
+            )}
+          </div>
+        )}
       {sorted.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
           <ScrollText size={32} className="text-muted-foreground" />
@@ -199,6 +260,17 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
 
   const agentMap = new Map(agents.map((a) => [a.id, a]));
 
+    const handleExportOT = () => {
+      const data = JSON.stringify(sorted, null, 2);
+      const blob = new Blob([data], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `overtime-log-${new Date().toISOString().split("T")[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       apiRequest("PATCH", `/api/overtime/${id}`, { status }),
@@ -237,6 +309,15 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
       ) : (
         <div className="max-w-4xl mx-auto space-y-2">
           {/* Summary bar */}
+            {/* Toolbar */}
+            <div className="flex justify-end mb-1">
+              <button
+                onClick={handleExportOT}
+                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Download size={11} /> Export
+              </button>
+            </div>
           <div className="grid grid-cols-4 gap-2 mb-4">
             {ALL_STATUSES.map((s) => {
               const count = sorted.filter((r) => (r.status ?? "pending") === s).length;
