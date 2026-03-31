@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { Trash2, Download, Upload } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { formatUtcHour, isCoverageClaim } from "@/lib/shiftUtils";
 
 const TABS = ["Activity Log", "Overtime"] as const;
 type Tab = (typeof TABS)[number];
@@ -453,16 +454,20 @@ function OvertimePanel({ canManage }: { canManage: boolean }) {
                     {rec.overtimeHours > 0 ? `+${rec.overtimeHours.toFixed(1)}h` : `${rec.releasedHours.toFixed(1)}h`}
                   </span>
 
-                  {/* Origin — clickable when claimed-from-agent */}
+                  {/* Origin — clickable for coverage claims */}
                   <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                    {rec.origin === "claimed-from-agent" ? (
+                    {isCoverageClaim(rec) ? (
                       <button
                         onClick={() => navigateToTimeline(rec)}
                         className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
                         title="View on timeline"
                       >
                         <ArrowRightLeft size={10} />
-                        <span>from <span style={{ color: coveredBy?.color }}>{coveredBy?.name ?? "agent"}</span></span>
+                        <span>
+                          {rec.origin === "claimed-open-gap"
+                            ? `open gap ${rec.coverStartUtc != null && rec.coverEndUtc != null ? `${formatUtcHour(rec.coverStartUtc)}-${formatUtcHour(rec.coverEndUtc)}` : ""}`
+                            : <>from <span style={{ color: coveredBy?.color }}>{coveredBy?.name ?? "agent"}</span></>}
+                        </span>
                         <ExternalLink size={9} className="opacity-50" />
                       </button>
                     ) : (
