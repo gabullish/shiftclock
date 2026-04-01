@@ -442,6 +442,11 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     const admin = isAdminRequest(req);
     const sessionAgentId = getAgentSession(req);
+
+    // Check: must be admin OR agent editing their own shift
+    if (!admin && !sessionAgentId) {
+      return res.status(401).json({ message: "Agent session required" });
+    }
     if (!admin && sessionAgentId !== existing.agentId) {
       return res.status(403).json({ message: "You can only edit your own shift" });
     }
