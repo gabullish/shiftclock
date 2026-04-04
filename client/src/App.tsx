@@ -217,6 +217,14 @@ export default function App() {
   const [agentSession, setAgentSession] = useState<AgentSession | null>(() => getAgentSession());
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const { data: agentsForStatus = [] } = useQuery<Agent[]>({
+    queryKey: ["/api/agents"],
+    refetchInterval: 30_000,
+    staleTime: Infinity,
+    enabled: accessMode !== null,
+  });
+  const isOnBreak = agentsForStatus.find(a => a.id === agentSession?.agentId)?.breakActiveAt != null;
+
   // Restore existing agent session on mount
   useEffect(() => {
     const existing = getAgentSession();
@@ -284,6 +292,7 @@ export default function App() {
               <div className="flex h-screen overflow-hidden bg-background">
                 <Sidebar
                   agentSession={agentSession}
+                  isOnBreak={isOnBreak}
                   onAgentSignOff={() => {
                     clearAgentSession();
                     setAgentSession(null);
@@ -306,7 +315,7 @@ export default function App() {
         </AdminProvider>
       </AgentSessionContext.Provider>
     );
-  }, [accessMode, agentSession, onSelectMode]);
+  }, [accessMode, agentSession, onSelectMode, isOnBreak]);
 
   return (
     <QueryClientProvider client={queryClient}>

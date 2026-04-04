@@ -15,9 +15,11 @@ const navItems = [
 export default function Sidebar({
   agentSession,
   onAgentSignOff,
+  isOnBreak,
 }: {
   agentSession?: AgentSession | null;
   onAgentSignOff?: () => void;
+  isOnBreak?: boolean;
 }) {
   const [location] = useLocation();
   const { enabled: dragScrollEnabled, setEnabled: setDragScrollEnabled } = useDragScrollPreference();
@@ -81,7 +83,7 @@ export default function Sidebar({
         </button>
 
         {agentSession ? (
-          <AgentIndicator session={agentSession} onSignOff={onAgentSignOff} />
+          <AgentIndicator session={agentSession} onSignOff={onAgentSignOff} isOnBreak={isOnBreak} />
         ) : (
           <LiveUTCClock />
         )}
@@ -90,15 +92,18 @@ export default function Sidebar({
   );
 }
 
-function AgentIndicator({ session, onSignOff }: { session: AgentSession; onSignOff?: () => void }) {
+function AgentIndicator({ session, onSignOff, isOnBreak }: { session: AgentSession; onSignOff?: () => void; isOnBreak?: boolean }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
       <div className="relative w-2 h-2 shrink-0">
-        <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+        <div className={cn("w-2 h-2 rounded-full animate-pulse", isOnBreak ? "bg-amber-400" : "bg-blue-400")} />
+        {isOnBreak && <span className="absolute -top-1.5 -right-1.5 text-[8px]">☕</span>}
       </div>
       <div className="hidden lg:flex flex-1 items-center justify-between min-w-0 gap-1">
         <div className="min-w-0">
-          <p className="text-[10px] text-blue-400 leading-none font-semibold truncate">AGENT SESSION</p>
+          <p className={cn("text-[10px] leading-none font-semibold truncate", isOnBreak ? "text-amber-400" : "text-blue-400")}>
+            {isOnBreak ? "ON BREAK" : "AGENT SESSION"}
+          </p>
           <p className="text-xs font-medium text-foreground truncate mt-0.5">{session.agentName}</p>
         </div>
       </div>

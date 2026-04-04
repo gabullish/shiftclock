@@ -48,6 +48,10 @@ export interface IStorage {
   approveClaimAndRejectOthers(claimId: number, opportunityId: number): OvertimeClaim | undefined;
   deleteClaimsByOpportunity(opportunityId: number): void;
 
+  // Live break state
+  startLiveBreak(agentId: number): Agent | undefined;
+  endLiveBreak(agentId: number): Agent | undefined;
+
   // Backup / restore
   exportAll(): { agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] };
   importAll(data: {
@@ -256,6 +260,15 @@ export const storage: IStorage = {
   },
   deleteClaimsByOpportunity(opportunityId) {
     db.delete(overtimeClaims).where(eq(overtimeClaims.opportunityId, opportunityId)).run();
+  },
+
+  startLiveBreak(agentId) {
+    return db.update(agents).set({ breakActiveAt: new Date().toISOString() })
+      .where(eq(agents.id, agentId)).returning().get();
+  },
+  endLiveBreak(agentId) {
+    return db.update(agents).set({ breakActiveAt: null })
+      .where(eq(agents.id, agentId)).returning().get();
   },
 
   exportAll() {

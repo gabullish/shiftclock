@@ -212,6 +212,12 @@ function runMigrations() {
   `);
   safeAlter("CREATE INDEX IF NOT EXISTS idx_claims_opportunity ON overtime_claims(opportunity_id, status)");
   safeAlter("CREATE INDEX IF NOT EXISTS idx_claims_agent ON overtime_claims(agent_id, status)");
+  // Live break state
+  safeAlter("ALTER TABLE agents ADD COLUMN break_active_at TEXT");
+}
+
+function normaliseEndUtcServer(startUtc: number, endUtc: number): number {
+  return endUtc <= startUtc ? endUtc + 24 : endUtc;
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -410,6 +416,39 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
+  // --- Live break state ---
+  app.post("/api/agents/:id/break/start", (req, res) => {
+    const id = Number(req.params.id);
+    if (!isAdminRequest(req) && getAgentSession(req) !== id) {
+      return res.status(403).json({ message: "You can only manage your own break" });
+    }
+    const agent = storage.startLiveBreak(id);
+    if (!agent) return res.status(404).json({ message: "Not found" });
+    const date = new Date().toISOString().slice(0, 10);
+    storage.createAgentLog({
+      agentId: id, date, type: "break", coverPct: null, coveredByAgentId: null,
+      notes: null, createdAt: new Date().toISOString(), actionType: "break-started",
+      description: `${agent.name} went on break.`,
+    });
+    res.json(agent);
+  });
+
+  app.post("/api/agents/:id/break/end", (req, res) => {
+    const id = Number(req.params.id);
+    if (!isAdminRequest(req) && getAgentSession(req) !== id) {
+      return res.status(403).json({ message: "You can only manage your own break" });
+    }
+    const agent = storage.endLiveBreak(id);
+    if (!agent) return res.status(404).json({ message: "Not found" });
+    const date = new Date().toISOString().slice(0, 10);
+    storage.createAgentLog({
+      agentId: id, date, type: "break", coverPct: null, coveredByAgentId: null,
+      notes: null, createdAt: new Date().toISOString(), actionType: "break-ended",
+      description: `${agent.name} returned from break.`,
+    });
+    res.json(agent);
+  });
+
   // --- Apply week template ---
   app.post("/api/agents/:id/apply-week", requireAdmin, (req, res) => {
     const agentId = Number(req.params.id);
@@ -435,6 +474,23 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(shift);
   });
 
+  // BUG-03: Reset all lever adjustments + pending OT for a given day
+  app.post("/api/shifts/reset-day", requireAdmin, (req, res) => {
+    const { date, dayOfWeek } = req.body;
+    if (!date || typeof dayOfWeek !== "number") {
+      return res.status(400).json({ message: "date and dayOfWeek required" });
+    }
+    const dayShifts = storage.getShifts().filter(s => s.dayOfWeek === dayOfWeek);
+    for (const s of dayShifts) {
+      storage.updateShift(s.id, { activeStart: null, activeEnd: null, breakStart: null });
+    }
+    const pending = storage.getOvertimeLogs().filter(r => r.date === date && r.status === "pending");
+    for (const r of pending) {
+      storage.deleteOvertimeLog(r.id);
+    }
+    res.json({ ok: true });
+  });
+
   app.patch("/api/shifts/:id", (req, res) => {
     const shiftId = Number(req.params.id);
     const existing = storage.getShifts().find((s) => s.id === shiftId);
@@ -452,15 +508,58 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     }
 
     const allowedForAgent = ["activeStart", "activeEnd", "breakStart"] as const;
-    const payload = admin
-      ? req.body
+    let payload: Record<string, unknown> = admin
+      ? { ...req.body }
       : Object.fromEntries(
           Object.entries(req.body as Record<string, unknown>).filter(([k]) =>
             (allowedForAgent as readonly string[]).includes(k),
           ),
         );
 
-    const shift = storage.updateShift(shiftId, payload);
+    // BUG-01: Auto-clear breakStart if the new effective window crosses it
+    const normEnd = normaliseEndUtcServer(existing.startUtc, existing.endUtc);
+    if (existing.breakStart != null) {
+      const effEnd   = (("activeEnd"   in payload ? payload.activeEnd   : existing.activeEnd)   ?? normEnd) as number;
+      const effStart = (("activeStart" in payload ? payload.activeStart : existing.activeStart) ?? existing.startUtc) as number;
+      const crossedByEnd   = effEnd   <= existing.breakStart;
+      const crossedByStart = effStart >= existing.breakStart + 0.5;
+      if (crossedByEnd || crossedByStart) {
+        payload = { ...payload, breakStart: null };
+      }
+    }
+
+    // BUG-02: Auto-create/update/delete pending OT record when manager extends past template end
+    const dateStr = (admin && typeof req.body.date === "string") ? req.body.date : null;
+    if (admin && dateStr) {
+      const effEnd = (("activeEnd" in payload ? payload.activeEnd : existing.activeEnd) ?? normEnd) as number;
+      const existingOT = storage.getOvertimeLogs().find(r =>
+        r.fromShiftId === existing.id && r.date === dateStr &&
+        r.origin === "manager-extended" && r.status === "pending"
+      );
+      if (effEnd > normEnd) {
+        const otData = {
+          overtimeHours: effEnd - normEnd,
+          coverStartUtc: normEnd,
+          coverEndUtc: effEnd,
+          origin: "manager-extended" as const,
+          fromShiftId: existing.id,
+          dayOfWeek: existing.dayOfWeek,
+          statusUpdatedAt: new Date().toISOString(),
+        };
+        if (existingOT) {
+          storage.updateOvertimeLog(existingOT.id, otData);
+        } else {
+          storage.createOvertimeLog(existing.agentId, dateStr, { ...otData, status: "pending" });
+        }
+      } else if (existingOT) {
+        storage.deleteOvertimeLog(existingOT.id);
+      }
+    }
+
+    // Strip the date field before passing to updateShift (not a shift column)
+    const { date: _date, ...shiftPayload } = payload as Record<string, unknown>;
+
+    const shift = storage.updateShift(shiftId, shiftPayload);
     if (!shift) return res.status(404).json({ message: "Not found" });
     res.json(shift);
   });
@@ -647,6 +746,21 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     const assignedHours = slotEndUtc - slotStartUtc;
 
+    // Safeguard: agent cannot claim coverage that overlaps their own active shift hours
+    if (!admin && sessionAgentId) {
+      const claimingShifts = storage.getShifts().filter(
+        s => s.agentId === toAgentId && s.dayOfWeek === resolvedDayOfWeek
+      );
+      for (const s of claimingShifts) {
+        const sNormEnd = normaliseEndUtcServer(s.startUtc, s.endUtc);
+        const effStart = s.activeStart ?? s.startUtc;
+        const effEnd   = s.activeEnd   ?? sNormEnd;
+        if (effStart < slotEndUtc && effEnd > slotStartUtc) {
+          return res.status(409).json({ message: "Cannot claim coverage during your own active shift hours" });
+        }
+      }
+    }
+
     const sameCoverageOpportunity = storage
       .getOvertimeLogs()
       .find((record) => {
@@ -762,6 +876,21 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
     if (opportunity.status !== "pending") {
       return res.status(409).json({ message: "This line is no longer open" });
+    }
+
+    // Safeguard: agent cannot claim coverage that overlaps their own active shift hours
+    if (!isAdmin && opportunity.coverStartUtc != null && opportunity.coverEndUtc != null && opportunity.dayOfWeek != null) {
+      const claimingShifts = storage.getShifts().filter(
+        s => s.agentId === agentId && s.dayOfWeek === opportunity.dayOfWeek
+      );
+      for (const s of claimingShifts) {
+        const sNormEnd = normaliseEndUtcServer(s.startUtc, s.endUtc);
+        const effStart = s.activeStart ?? s.startUtc;
+        const effEnd   = s.activeEnd   ?? sNormEnd;
+        if (effStart < opportunity.coverEndUtc && effEnd > opportunity.coverStartUtc) {
+          return res.status(409).json({ message: "Cannot claim coverage during your own active shift hours" });
+        }
+      }
     }
 
     // Prevent duplicate pending claims from same agent for same opportunity
