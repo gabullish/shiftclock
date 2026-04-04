@@ -470,15 +470,29 @@ function ApplyWeekRow({
   const seed = seedFromShifts(agentShifts);
   const [startH, setStartH] = useState<number>(seed.start);
   const [endH, setEndH]     = useState<number>(seed.end);
+  const [confirmApply, setConfirmApply] = useState(false);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const overnight = endH <= startH;
   const dur       = overnight ? 24 - startH + endH : endH - startH;
+
+  const handleApplyClick = () => {
+    if (!confirmApply) {
+      setConfirmApply(true);
+      confirmTimer.current = setTimeout(() => setConfirmApply(false), 4000);
+      return;
+    }
+    clearTimeout(confirmTimer.current);
+    setConfirmApply(false);
+    playSuccess();
+    onApply(startH, endH);
+  };
 
   return (
     <div className="flex items-center gap-1">
       <select
         value={startH}
-        onChange={e => setStartH(parseFloat(e.target.value))}
+        onChange={e => { setStartH(parseFloat(e.target.value)); setConfirmApply(false); clearTimeout(confirmTimer.current); }}
         className="w-14 text-[9px] bg-muted border border-border rounded px-1 py-0.5 font-mono"
         title="Start UTC"
       >
@@ -489,7 +503,7 @@ function ApplyWeekRow({
       <span className="text-[9px] text-muted-foreground">–</span>
       <select
         value={endH}
-        onChange={e => setEndH(parseFloat(e.target.value))}
+        onChange={e => { setEndH(parseFloat(e.target.value)); setConfirmApply(false); clearTimeout(confirmTimer.current); }}
         className="w-14 text-[9px] bg-muted border border-border rounded px-1 py-0.5 font-mono"
         title="End UTC"
       >
@@ -501,12 +515,18 @@ function ApplyWeekRow({
         <span className="text-[9px] text-amber-400 font-mono" title={`${dur}h overnight`}>+1 {dur}h</span>
       )}
       <button
-        onClick={() => { playSuccess(); onApply(startH, endH); }}
+        onClick={handleApplyClick}
         disabled={loading || dur <= 0}
-        className="text-[9px] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
+        title={confirmApply ? "Click again to confirm — this overwrites all weekday shifts" : "Apply week template to all working days"}
+        className={cn(
+          "text-[9px] px-2 py-1 rounded hover:opacity-90 disabled:opacity-50 flex items-center gap-1 transition-colors",
+          confirmApply
+            ? "bg-destructive text-destructive-foreground"
+            : "bg-primary text-primary-foreground"
+        )}
       >
         <CalendarDays size={9} />
-        Apply week
+        {confirmApply ? "Confirm?" : "Apply week"}
       </button>
     </div>
   );

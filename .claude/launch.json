@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ShiftClock Dev Server",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "C:\\Users\\gabri\\OneDrive\\Área de Trabalho\\Shiftmaxxing\\shiftclock\\dev.bat"],
+      "port": 5000
+    }
+  ]
+}

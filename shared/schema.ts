@@ -15,6 +15,7 @@ export const agents = sqliteTable("agents", {
   offWeekend: integer("off_weekend").notNull().default(1),
   // ISO date string of the Monday when the toggle was last changed
   offCycleStart: text("off_cycle_start"),
+  breakActiveAt: text("break_active_at"),
 });
 
 export const insertAgentSchema = createInsertSchema(agents).omit({ id: true });

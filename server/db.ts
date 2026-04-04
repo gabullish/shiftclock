@@ -21,7 +21,8 @@ sqlite.exec(`
     timezone TEXT NOT NULL DEFAULT 'UTC',
     role TEXT NOT NULL DEFAULT 'Agent',
     off_weekend INTEGER NOT NULL DEFAULT 1,
-    off_cycle_start TEXT
+    off_cycle_start TEXT,
+    break_active_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS shifts (

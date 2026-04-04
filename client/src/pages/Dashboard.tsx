@@ -228,10 +228,47 @@ function errorMessageFromUnknown(error: unknown): string {
   return "Unexpected error";
 }
 
+function AgentBreakControl({
+  isOnBreak,
+  startedAt,
+  onBreakStart,
+  onBreakEnd,
+}: {
+  isOnBreak: boolean;
+  startedAt: number | null;
+  onBreakStart: () => void;
+  onBreakEnd: () => void;
+}) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!startedAt) { setElapsed(0); return; }
+    const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 60000));
+    tick();
+    const t = setInterval(tick, 10_000);
+    return () => clearInterval(t);
+  }, [startedAt]);
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={isOnBreak ? onBreakEnd : onBreakStart}
+        className={cn(
+          "w-full text-[10px] py-1.5 rounded border transition-colors flex items-center justify-center gap-1",
+          isOnBreak
+            ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+            : "border-border text-muted-foreground hover:text-foreground"
+        )}
+      >
+        {isOnBreak ? `☕ ${elapsed}m · I'm back` : "☕ Take break"}
+      </button>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const isAdmin = useAdminMode();
   const agentSession = useAgentSession();
-  const { playSoftClick, playDragWhoosh, playSuccess } = useSoothingSounds();
+  const { playSoftClick, playDragWhoosh, playSuccess, playBreakStart } = useSoothingSounds();
   const selectedDateAnchor = (date: string) => parseIsoDate(date);
 
   const initDate = () => {
@@ -305,12 +342,12 @@ export default function Dashboard() {
     window.location.href = `${window.location.pathname}?${params.toString()}#/overtime`;
   };
 
-  const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
+  const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"], refetchInterval: 30_000, staleTime: Infinity });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
   const { data: otRecords = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
 
   const updateShiftMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<Shift> }) =>
+    mutationFn: ({ id, data }: { id: number; data: Partial<Shift> & { date?: string } }) =>
       apiRequest("PATCH", `/api/shifts/${id}`, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
     onError: (error) => {
@@ -320,6 +357,25 @@ export default function Dashboard() {
         variant: "destructive",
       });
     },
+  });
+
+  const resetDayMutation = useMutation({
+    mutationFn: ({ date, dayOfWeek }: { date: string; dayOfWeek: number }) =>
+      apiRequest("POST", "/api/shifts/reset-day", { date, dayOfWeek }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+    },
+  });
+
+  const breakStartMutation = useMutation({
+    mutationFn: (agentId: number) => apiRequest("POST", `/api/agents/${agentId}/break/start`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agents"] }),
+  });
+
+  const breakEndMutation = useMutation({
+    mutationFn: (agentId: number) => apiRequest("POST", `/api/agents/${agentId}/break/end`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agents"] }),
   });
 
     const bulkDeleteOTMutation = useMutation({
@@ -336,6 +392,29 @@ export default function Dashboard() {
   useEffect(() => {
     if (agents.length > 0 && visible.size === 0)
       setVisible(new Set(agents.map(a => a.id)));
+  }, [agents]);
+
+  const prevBreakRef = useRef<Map<number, string | null>>(new Map());
+  useEffect(() => {
+    if (!agents.length) return;
+    const prev = prevBreakRef.current;
+    if (prev.size === 0) {
+      prevBreakRef.current = new Map(agents.map(a => [a.id, a.breakActiveAt ?? null]));
+      return;
+    }
+    const ownId = agentSession?.agentId ?? null;
+    const onBreak: Agent[] = [], back: Agent[] = [];
+    for (const a of agents) {
+      const p = prev.get(a.id) ?? null, c = a.breakActiveAt ?? null;
+      if (p === null && c !== null && a.id !== ownId) onBreak.push(a);
+      if (p !== null && c === null && a.id !== ownId) back.push(a);
+    }
+    onBreak.forEach((a, i) =>
+      setTimeout(() => { toast({ title: `☕ ${a.name} is on break`, duration: 4000 }); playBreakStart(); }, i * 300)
+    );
+    if (back.length === 1) toast({ title: `✓ ${back[0].name} is back`, duration: 3000 });
+    else if (back.length > 1) toast({ title: `✓ ${back.map(a => a.name).join(", ")} are back`, duration: 3000 });
+    prevBreakRef.current = new Map(agents.map(a => [a.id, a.breakActiveAt ?? null]));
   }, [agents]);
 
   useEffect(() => {
@@ -412,7 +491,7 @@ export default function Dashboard() {
     playSuccess();
     updateShiftMutation.mutate({
       id: shift.id,
-      data: { activeStart: next.activeStart, activeEnd: next.activeEnd },
+      data: { activeStart: next.activeStart, activeEnd: next.activeEnd, date: selectedDate },
     }, {
       onSettled: () => { pendingCommit.current.delete(shift.id); },
     });
@@ -553,6 +632,8 @@ export default function Dashboard() {
     });
   });
 
+  const agentsOnBreak = agents.filter(a => a.breakActiveAt != null && visible.has(a.id));
+
   const hasShiftsToday = todayShifts.length > 0;
   const isWeekend      = selectedDay === 0 || selectedDay === 6;
 
@@ -566,20 +647,15 @@ export default function Dashboard() {
       clearTimeout(confirmResetTimer.current);
       setConfirmReset(false);
 
-      // Delete all pending OT for the selected day
-      const pendingIds = otRecords
-        .filter(r => r.dayOfWeek === selectedDay && r.status === "pending")
-        .map(r => r.id);
-      if (pendingIds.length > 0) bulkDeleteOTMutation.mutate(pendingIds);
-
-      // Restore shifts to base schedule (null = use base startUtc/endUtc)
+      // Optimistically reset lever state for visual immediacy
       const reset: Record<number, LeverState> = { ...leverState };
       for (const s of todayShifts) {
         const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
         reset[s.id] = { activeStart: s.startUtc, activeEnd: normEnd };
-        updateShiftMutation.mutate({ id: s.id, data: { activeStart: null, activeEnd: null } });
       }
       setLeverState(reset);
+
+      resetDayMutation.mutate({ date: selectedDate, dayOfWeek: selectedDay });
       toast({ title: `${selectedDayShortLabel} reset to base schedule` });
     };
 
@@ -861,6 +937,11 @@ export default function Dashboard() {
                     {agent.name}
                   </div>
                 ))}
+                {agentsOnBreak.length > 0 && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                    ☕ {agentsOnBreak.length} on break
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -938,7 +1019,9 @@ export default function Dashboard() {
                       className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
                       {visible.size === agents.length ? "Hide all" : "Show all"}
                     </button>
-                    {agents.map(agent => (
+                    {agents.map(agent => {
+                      const isOnBreak = Boolean(agent.breakActiveAt) && visible.has(agent.id);
+                      return (
                       <button key={agent.id}
                         onClick={() => toggleVisible(agent.id)}
                         onMouseEnter={() => setHighlighted(agent.id)}
@@ -946,7 +1029,7 @@ export default function Dashboard() {
                         data-testid={`toggle-agent-${agent.id}`}
                         className={cn(
                           "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
-                          visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
+                          visible.has(agent.id) ? (isOnBreak ? "opacity-60" : "opacity-100") : "opacity-40 grayscale"
                         )}
                         style={{
                           borderColor: agent.color + "60",
@@ -955,9 +1038,10 @@ export default function Dashboard() {
                           boxShadow: highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
                         }}
                       >
-                        {agent.name}
+                        {agent.name}{isOnBreak ? " ☕" : ""}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -997,6 +1081,20 @@ export default function Dashboard() {
                         </button>
                       )}
                     </div>
+
+                    {agentSession && (() => {
+                      const own = agents.find(a => a.id === agentSession.agentId);
+                      const isOnBreak = Boolean(own?.breakActiveAt);
+                      const startedAt = own?.breakActiveAt ? new Date(own.breakActiveAt).getTime() : null;
+                      return (
+                        <AgentBreakControl
+                          isOnBreak={isOnBreak}
+                          startedAt={startedAt}
+                          onBreakStart={() => breakStartMutation.mutate(agentSession.agentId)}
+                          onBreakEnd={() => breakEndMutation.mutate(agentSession.agentId)}
+                        />
+                      );
+                    })()}
 
                     {agentSummaries.filter(s => s.shifts.length > 0).map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
                       <ShiftLever
