@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift } from "@shared/schema";
@@ -189,6 +189,34 @@ export default function Profiles() {
     },
   });
 
+  // Track per-agent dirty state from ApplyWeekRow children
+  const [dirtyAgentSettings, setDirtyAgentSettings] = useState<
+    Record<number, { startH: number; endH: number }>
+  >({});
+
+  const handleAgentDirtyChange = (agentId: number, isDirty: boolean, startH: number, endH: number) => {
+    setDirtyAgentSettings(prev => {
+      if (!isDirty) {
+        const next = { ...prev };
+        delete next[agentId];
+        return next;
+      }
+      if (prev[agentId]?.startH === startH && prev[agentId]?.endH === endH) return prev;
+      return { ...prev, [agentId]: { startH, endH } };
+    });
+  };
+
+  const dirtyCount = Object.keys(dirtyAgentSettings).length;
+
+  const handleApplyAll = () => {
+    const entries = Object.entries(dirtyAgentSettings);
+    if (entries.length === 0) return;
+    for (const [agentIdStr, settings] of entries) {
+      applyWeekMutation.mutate({ id: Number(agentIdStr), startUtc: settings.startH, endUtc: settings.endH });
+    }
+    toast({ title: `Applying templates for ${entries.length} agent${entries.length > 1 ? "s" : ""}…` });
+  };
+
   const handleExportSettings = async () => {
     try {
       const res = await fetch("/api/export", { headers: { "x-admin-token": getEffectiveAdminToken() } });
@@ -276,6 +304,17 @@ export default function Profiles() {
                 >
                   <Upload size={12} /> Import
                 </button>
+                {dirtyCount > 0 && (
+                  <button
+                    onClick={handleApplyAll}
+                    disabled={applyWeekMutation.isPending}
+                    title={`Apply pending template changes for ${dirtyCount} agent${dirtyCount > 1 ? "s" : ""}`}
+                    className="flex items-center gap-1.5 text-[11px] border rounded-md px-2.5 py-1.5 transition-all animate-pulse disabled:opacity-50 border-amber-400/60 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 ring-1 ring-amber-400/30"
+                  >
+                    <CalendarDays size={12} />
+                    Apply All ({dirtyCount})
+                  </button>
+                )}
               </>
             )}
             {isAdmin && (
@@ -410,6 +449,7 @@ export default function Profiles() {
                       onApply={(startUtc, endUtc) => applyWeekMutation.mutate({ id: agent.id, startUtc, endUtc })}
                       loading={applyWeekMutation.isPending}
                       playSuccess={playSuccess}
+                      onDirtyChange={handleAgentDirtyChange}
                     />
                   </div>
                 )}
@@ -458,7 +498,7 @@ function getLocalTime(tz: string) {
 }
 
 function ApplyWeekRow({
-  agentId, agentShifts, offWeekend, onApply, loading, playSuccess,
+  agentId, agentShifts, offWeekend, onApply, loading, playSuccess, onDirtyChange,
 }: {
   agentId: number;
   agentShifts: Shift[];
@@ -466,24 +506,36 @@ function ApplyWeekRow({
   onApply: (startUtc: number, endUtc: number) => void;
   loading: boolean;
   playSuccess: () => void;
+  onDirtyChange?: (agentId: number, isDirty: boolean, startH: number, endH: number) => void;
 }) {
   const seed = seedFromShifts(agentShifts);
   const [startH, setStartH] = useState<number>(seed.start);
   const [endH, setEndH]     = useState<number>(seed.end);
-  const [confirmApply, setConfirmApply] = useState(false);
-  const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const overnight = endH <= startH;
-  const dur       = overnight ? 24 - startH + endH : endH - startH;
+  // Sync local state when shifts change externally (e.g. after import or another client applies)
+  const prevSeedRef = useRef({ start: seed.start, end: seed.end });
+  useEffect(() => {
+    const newSeed = seedFromShifts(agentShifts);
+    if (newSeed.start !== prevSeedRef.current.start || newSeed.end !== prevSeedRef.current.end) {
+      prevSeedRef.current = newSeed;
+      setStartH(newSeed.start);
+      setEndH(newSeed.end);
+    }
+  }, [agentShifts]);
+
+  const overnight  = endH <= startH;
+  const dur        = overnight ? 24 - startH + endH : endH - startH;
+  const serverSeed = seedFromShifts(agentShifts);
+  const isDirty    = startH !== serverSeed.start || endH !== serverSeed.end;
+
+  // Notify parent whenever dirty state changes
+  useEffect(() => {
+    onDirtyChange?.(agentId, isDirty, startH, endH);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDirty, startH, endH, agentId]);
 
   const handleApplyClick = () => {
-    if (!confirmApply) {
-      setConfirmApply(true);
-      confirmTimer.current = setTimeout(() => setConfirmApply(false), 4000);
-      return;
-    }
-    clearTimeout(confirmTimer.current);
-    setConfirmApply(false);
+    if (dur <= 0) return;
     playSuccess();
     onApply(startH, endH);
   };
@@ -492,8 +544,11 @@ function ApplyWeekRow({
     <div className="flex items-center gap-1">
       <select
         value={startH}
-        onChange={e => { setStartH(parseFloat(e.target.value)); setConfirmApply(false); clearTimeout(confirmTimer.current); }}
-        className="w-14 text-[9px] bg-muted border border-border rounded px-1 py-0.5 font-mono"
+        onChange={e => setStartH(parseFloat(e.target.value))}
+        className={cn(
+          "w-14 text-[9px] bg-muted rounded px-1 py-0.5 font-mono border transition-colors",
+          isDirty ? "border-amber-400/60" : "border-border"
+        )}
         title="Start UTC"
       >
         {HALF_HOUR_OPTIONS.map(h => (
@@ -503,8 +558,11 @@ function ApplyWeekRow({
       <span className="text-[9px] text-muted-foreground">–</span>
       <select
         value={endH}
-        onChange={e => { setEndH(parseFloat(e.target.value)); setConfirmApply(false); clearTimeout(confirmTimer.current); }}
-        className="w-14 text-[9px] bg-muted border border-border rounded px-1 py-0.5 font-mono"
+        onChange={e => setEndH(parseFloat(e.target.value))}
+        className={cn(
+          "w-14 text-[9px] bg-muted rounded px-1 py-0.5 font-mono border transition-colors",
+          isDirty ? "border-amber-400/60" : "border-border"
+        )}
         title="End UTC"
       >
         {HALF_HOUR_OPTIONS.map(h => (
@@ -517,16 +575,17 @@ function ApplyWeekRow({
       <button
         onClick={handleApplyClick}
         disabled={loading || dur <= 0}
-        title={confirmApply ? "Click again to confirm — this overwrites all weekday shifts" : "Apply week template to all working days"}
+        title="Apply week template to all working days"
         className={cn(
-          "text-[9px] px-2 py-1 rounded hover:opacity-90 disabled:opacity-50 flex items-center gap-1 transition-colors",
-          confirmApply
-            ? "bg-destructive text-destructive-foreground"
-            : "bg-primary text-primary-foreground"
+          "text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-all duration-200",
+          "disabled:opacity-50 hover:opacity-90",
+          isDirty
+            ? "bg-amber-500/20 text-amber-300 border border-amber-400/60 ring-1 ring-amber-400/40 animate-pulse"
+            : "bg-primary text-primary-foreground border border-transparent"
         )}
       >
         <CalendarDays size={9} />
-        {confirmApply ? "Confirm?" : "Apply week"}
+        {isDirty ? "Apply ●" : "Apply week"}
       </button>
     </div>
   );
