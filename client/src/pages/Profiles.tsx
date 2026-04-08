@@ -174,16 +174,28 @@ export default function Profiles() {
       const offCycleStart = monday.toISOString().split("T")[0];
       return apiRequest("PATCH", `/api/agents/${id}`, { offWeekend, offCycleStart });
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
+      // Mark this agent's Apply button dirty — the shift assignments need to be
+      // redistributed to the new working-day pattern
+      setOffTogglePending(prev => new Set([...prev, variables.id]));
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
-      toast({ title: "Days off updated" });
+      toast({ title: "Days off updated — click Apply to reassign shifts" });
     },
   });
+
+  // Tracks agents whose off-day pattern was toggled but Apply hasn't been clicked yet
+  const [offTogglePending, setOffTogglePending] = useState<Set<number>>(new Set());
 
   const applyWeekMutation = useMutation({
     mutationFn: ({ id, startUtc, endUtc }: { id: number; startUtc: number; endUtc: number }) =>
       apiRequest("POST", `/api/agents/${id}/apply-week`, { startUtc, endUtc }),
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
+      // Clear the off-toggle pending flag for this agent
+      setOffTogglePending(prev => {
+        const next = new Set(prev);
+        next.delete(variables.id);
+        return next;
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
       toast({ title: "Week template applied" });
     },
@@ -206,15 +218,25 @@ export default function Profiles() {
     });
   };
 
-  const dirtyCount = Object.keys(dirtyAgentSettings).length;
+  // Merge off-toggle-pending agents into the dirty count for "Apply All"
+  const allDirtyIds = new Set([
+    ...Object.keys(dirtyAgentSettings).map(Number),
+    ...offTogglePending,
+  ]);
+  const dirtyCount = allDirtyIds.size;
 
   const handleApplyAll = () => {
-    const entries = Object.entries(dirtyAgentSettings);
-    if (entries.length === 0) return;
-    for (const [agentIdStr, settings] of entries) {
-      applyWeekMutation.mutate({ id: Number(agentIdStr), startUtc: settings.startH, endUtc: settings.endH });
+    if (allDirtyIds.size === 0) return;
+    for (const agentId of allDirtyIds) {
+      const localSettings = dirtyAgentSettings[agentId];
+      const agentShifts = allShifts.filter(s => s.agentId === agentId);
+      // Prefer local dirty values; fall back to current shift seed (covers off-toggle-only case)
+      const { start, end } = localSettings
+        ? { start: localSettings.startH, end: localSettings.endH }
+        : seedFromShifts(agentShifts);
+      applyWeekMutation.mutate({ id: agentId, startUtc: start, endUtc: end });
     }
-    toast({ title: `Applying templates for ${entries.length} agent${entries.length > 1 ? "s" : ""}…` });
+    toast({ title: `Applying templates for ${allDirtyIds.size} agent${allDirtyIds.size > 1 ? "s" : ""}…` });
   };
 
   const handleExportSettings = async () => {
@@ -450,6 +472,7 @@ export default function Profiles() {
                       loading={applyWeekMutation.isPending}
                       playSuccess={playSuccess}
                       onDirtyChange={handleAgentDirtyChange}
+                      forceDirty={offTogglePending.has(agent.id)}
                     />
                   </div>
                 )}
@@ -498,7 +521,7 @@ function getLocalTime(tz: string) {
 }
 
 function ApplyWeekRow({
-  agentId, agentShifts, offWeekend, onApply, loading, playSuccess, onDirtyChange,
+  agentId, agentShifts, offWeekend, onApply, loading, playSuccess, onDirtyChange, forceDirty,
 }: {
   agentId: number;
   agentShifts: Shift[];
@@ -507,6 +530,7 @@ function ApplyWeekRow({
   loading: boolean;
   playSuccess: () => void;
   onDirtyChange?: (agentId: number, isDirty: boolean, startH: number, endH: number) => void;
+  forceDirty?: boolean;
 }) {
   const seed = seedFromShifts(agentShifts);
   const [startH, setStartH] = useState<number>(seed.start);
@@ -526,7 +550,7 @@ function ApplyWeekRow({
   const overnight  = endH <= startH;
   const dur        = overnight ? 24 - startH + endH : endH - startH;
   const serverSeed = seedFromShifts(agentShifts);
-  const isDirty    = startH !== serverSeed.start || endH !== serverSeed.end;
+  const isDirty    = forceDirty || startH !== serverSeed.start || endH !== serverSeed.end;
 
   // Notify parent whenever dirty state changes
   useEffect(() => {
