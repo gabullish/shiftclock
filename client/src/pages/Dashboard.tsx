@@ -286,13 +286,13 @@ export default function Dashboard() {
       const d = parseInt(dayParam, 10);
       if (d >= 0 && d <= 6) return d;
     }
-    const d = getUTCDay();
-    return (d === 0 || d === 6) ? 1 : d;
+    return getUTCDay();
   };
 
   const initScope = (): "day" | "multi" => {
     const params = new URLSearchParams(window.location.search);
-    return params.get("scope") === "multi" ? "multi" : "day";
+    if (params.get("scope") === "multi") return "multi";
+    return (localStorage.getItem("shiftclock:timelineScope") as "day" | "multi") ?? "day";
   };
 
   const initFocusHour = (): number | null => {
@@ -321,7 +321,8 @@ export default function Dashboard() {
   const [utcHour,        setUtcHour]        = useState(getUTCHour());
   const [viewMode,       setViewMode]       = useState<"clock" | "timeline">(() => {
     const params = new URLSearchParams(window.location.search);
-    return params.has("day") ? "timeline" : "clock";
+    if (params.has("day")) return "timeline";
+    return (localStorage.getItem("shiftclock:viewMode") as "clock" | "timeline") ?? "clock";
   });
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">(initScope);
   const [focusHour] = useState<number | null>(initFocusHour);
@@ -330,6 +331,21 @@ export default function Dashboard() {
   const todayDateStr = new Date().toISOString().slice(0, 10);
   const isSelectedDateToday = selectedDate === todayDateStr;
   const canClaimCoverage = isAdmin || Boolean(agentSession);
+
+  // Persist view mode so the sidebar can restore it on next mount
+  useEffect(() => { localStorage.setItem("shiftclock:viewMode", viewMode); }, [viewMode]);
+  useEffect(() => { localStorage.setItem("shiftclock:timelineScope", timelineScope); }, [timelineScope]);
+
+  // Listen for view-change events dispatched by the sidebar
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { mode, scope } = (e as CustomEvent<{ mode: "clock" | "timeline"; scope?: "day" | "multi" }>).detail;
+      setViewMode(mode);
+      if (scope) setTimelineScope(scope);
+    };
+    window.addEventListener("shiftclock:viewchange", handler);
+    return () => window.removeEventListener("shiftclock:viewchange", handler);
+  }, []);
   const canEditAgentLane = (agentId: number) => isAdmin || agentSession?.agentId === agentId;
 
   const openOvertimeForRecord = (record: OvertimeLog) => {
@@ -733,20 +749,35 @@ export default function Dashboard() {
     },
   });
 
-  const openAssignModal = (shift: Shift, agent: Agent, freedHours: number) => {
+  const openAssignModal = (shift: Shift, agent: Agent, freedHours: number, segStart?: number, segEnd?: number, segDayOffset?: number) => {
     if (!canClaimCoverage) return;
     if (assignOvertimeMutation.isPending) return;
     playSoftClick();
     const normEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
     const activeEnd = leverState[shift.id]?.activeEnd ?? shift.activeEnd ?? normEnd;
 
+    // Use explicit segment coords when provided (e.g. start-shrink freed time)
+    const slotStart = segStart ?? activeEnd;
+    const slotEnd   = segEnd   ?? activeEnd + freedHours;
+
+    // Overnight freed segments that cross midnight belong to the next calendar day
+    const dayOff = segDayOffset ?? 0;
+    const claimDayOfWeek = dayOff > 0 ? (shift.dayOfWeek + dayOff) % 7 : shift.dayOfWeek;
+    const claimDate = dayOff > 0 ? (() => {
+      const d = new Date(selectedDate + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() + dayOff);
+      return d.toISOString().slice(0, 10);
+    })() : selectedDate;
+
     if (!isAdmin && agentSession) {
       assignOvertimeMutation.mutate({
         fromShiftId: shift.id,
         toAgentId: agentSession.agentId,
         hours: freedHours,
-        date: selectedDate,
-        dayOfWeek: shift.dayOfWeek,
+        date: claimDate,
+        dayOfWeek: claimDayOfWeek,
+        coverStartUtc: slotStart,
+        coverEndUtc: slotEnd,
       });
       return;
     }
@@ -755,10 +786,10 @@ export default function Dashboard() {
       kind: "shift",
       shift,
       fromAgent: agent,
-      dayOfWeek: shift.dayOfWeek,
-      date: selectedDate,
-      startUtc: activeEnd,
-      endUtc: activeEnd + freedHours,
+      dayOfWeek: claimDayOfWeek,
+      date: claimDate,
+      startUtc: slotStart,
+      endUtc: slotEnd,
       freedHours,
     });
   };
@@ -820,7 +851,7 @@ export default function Dashboard() {
       <div className="flex flex-col h-full overflow-hidden">
         {/* ── Header ── */}
         <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur px-3 py-2 sm:px-4 lg:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 md:grid md:grid-cols-[auto_1fr_auto]">
             <div className="flex items-center gap-2 sm:gap-3">
             <h1 className="text-sm font-semibold">Coverage Command</h1>
             <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
@@ -828,7 +859,7 @@ export default function Dashboard() {
 
           {/* Day nav — hidden in multi-day timeline */}
             {!isMulti && (
-              <div className="order-3 w-full md:order-none md:w-auto">
+              <div className="order-3 w-full md:order-none md:w-auto md:flex md:justify-center">
                 <div className="flex items-center gap-1 overflow-x-auto pb-1 md:pb-0">
               <button
                 onClick={goToPreviousWeek}
@@ -871,53 +902,10 @@ export default function Dashboard() {
           )}
 
             {isMulti && (
-              <span className="order-3 w-full text-[11px] text-muted-foreground font-mono md:order-none md:w-auto">14-day view · scroll to navigate · click day label → Day view</span>
+              <span className="order-3 w-full text-[11px] text-muted-foreground font-mono md:order-none md:w-auto md:text-center">14-day view · scroll to navigate · click day label → Day view</span>
             )}
-
-            <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
-            <button
-              onClick={() => { playSoftClick(); setViewMode("clock"); }}
-              className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
-                viewMode === "clock" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-              data-testid="view-clock"
-            >
-              <Clock size={13} /> Clock
-            </button>
-            <button
-              onClick={() => { playSoftClick(); setViewMode("timeline"); }}
-              className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
-                viewMode === "timeline" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
-              data-testid="view-timeline"
-            >
-              <AlignLeft size={13} /> Timeline
-            </button>
-
-            {viewMode === "timeline" && (
-              <>
-                <span className="mx-1 h-4 w-px bg-border" />
-                <button
-                  onClick={() => { playSoftClick(); setTimelineScope("day"); }}
-                  className={cn(
-                    "px-2.5 py-1 rounded text-[11px] font-medium transition-all",
-                    timelineScope === "day" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                  )}
-                  data-testid="timeline-scope-day"
-                >
-                  Day
-                </button>
-                <button
-                  onClick={() => { playSoftClick(); setTimelineScope("multi"); }}
-                  className={cn(
-                    "flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition-all",
-                    timelineScope === "multi" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                  )}
-                  data-testid="timeline-scope-14day"
-                >
-                  <CalendarRange size={11} /> 14D
-                </button>
-              </>
-            )}
-            </div>
+            {/* right spacer keeps day picker centred in 3-col grid */}
+            <div className="hidden md:block" />
           </div>
         </header>
 
@@ -981,8 +969,8 @@ export default function Dashboard() {
             </div>
           ) : (
             /* ── Clock mode: centred layout + right panel ── */
-            <div className="flex-1 flex flex-col xl:flex-row overflow-hidden min-h-0">
-              <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 overflow-hidden min-w-0 relative min-h-[320px]">
+            <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+              <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 overflow-hidden min-w-0 relative min-h-[220px]">
                 {!hasShiftsToday ? (
                     <EmptyState
                       isWeekend={isWeekend}
@@ -1047,7 +1035,7 @@ export default function Dashboard() {
               </div>
 
               {/* Right panel */}
-              <div className="w-full xl:w-80 2xl:w-96 flex flex-col border-t xl:border-t-0 xl:border-l border-border overflow-hidden shrink-0 min-h-0 max-h-[48vh] xl:max-h-none">
+              <div className="w-full md:w-64 lg:w-72 xl:w-80 flex flex-col border-t md:border-t-0 md:border-l border-border overflow-y-auto shrink-0 md:min-h-0 max-h-[45vh] md:max-h-none">
                 <div className="grid grid-cols-3 border-b border-border shrink-0">
                   <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
                   <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
@@ -1172,6 +1160,8 @@ export default function Dashboard() {
                 hours: assignModal.freedHours,
                 date: assignModal.date,
                 dayOfWeek: assignModal.dayOfWeek,
+                coverStartUtc: assignModal.startUtc,
+                coverEndUtc: assignModal.endUtc,
               });
               return;
             }
@@ -1259,7 +1249,7 @@ function UnifiedTimeline({
   onSelectDay: (dow: number, date?: string) => void;
   toggleVisible: (id: number) => void;
   toggleAll: () => void;
-  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
+  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number, segStart?: number, segEnd?: number, segDayOffset?: number) => void;
   onAssignGap: (startUtc: number, endUtc: number, dayOfWeek?: number, date?: string) => void;
   onOpenOvertime: (record: OvertimeLog) => void;
 }) {
@@ -1463,7 +1453,10 @@ function UnifiedTimeline({
           })()}
 
           {isVis && resolved.hasOvertime && (() => {
-            const otSegs = segmentShift(normBaseEnd, ae);
+            const otSegs = [
+              ...(as_ < shift.startUtc ? segmentShift(as_, shift.startUtc) : []),
+              ...(ae > normBaseEnd     ? segmentShift(normBaseEnd, ae)      : []),
+            ];
             return otSegs.map((seg, si) => (
               <div key={`ot-${si}`}
                 style={{
@@ -1479,10 +1472,13 @@ function UnifiedTimeline({
           })()}
 
           {isVis && resolved.hasShrink && !activeClaimForShift && (() => {
-            const shrinkSegs = segmentShift(ae, normBaseEnd);
+            const shrinkSegs = [
+              ...(as_ > shift.startUtc ? segmentShift(shift.startUtc, as_) : []),
+              ...(ae < normBaseEnd     ? segmentShift(ae, normBaseEnd)      : []),
+            ];
             return shrinkSegs.map((seg, si) => (
               <div key={`shrink-${si}`}
-                onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, seg.end - seg.start, seg.start, seg.end, seg.dayOffset)}
                 onPointerDownCapture={stopDrag}
                 title={canClaimCoverage ? "Join line for this freed time" : "Freed segment"}
                 style={{
@@ -1986,7 +1982,7 @@ function ClockVisualizer({
   coverage: number[]; otRecords: OvertimeLog[];
   tooltipInfo: any; setTooltipInfo: (v: any) => void;
   selectedDay: number;
-  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number) => void;
+  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number, segStart?: number, segEnd?: number, segDayOffset?: number) => void;
   onAssignGap: (startUtc: number, endUtc: number) => void;
   onOpenOvertime: (record: OvertimeLog) => void;
 }) {
@@ -2225,7 +2221,10 @@ function ClockVisualizer({
                       );
                     })}
                     {isVis && resolved.hasOvertime && (() => {
-                      const otSegs = segmentShift(normBaseEnd, ae);
+                      const otSegs = [
+                        ...(as_ < shift.startUtc ? segmentShift(as_, shift.startUtc) : []),
+                        ...(ae > normBaseEnd     ? segmentShift(normBaseEnd, ae)      : []),
+                      ];
                       return otSegs.map((seg, si) => (
                         <path key={`ot-${si}`}
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
@@ -2236,14 +2235,17 @@ function ClockVisualizer({
                       ));
                     })()}
                     {isVis && resolved.hasShrink && !activeClaimForShift && (() => {
-                      const shrinkSegs = segmentShift(ae, normBaseEnd);
+                      const shrinkSegs = [
+                        ...(as_ > shift.startUtc ? segmentShift(shift.startUtc, as_) : []),
+                        ...(ae < normBaseEnd     ? segmentShift(ae, normBaseEnd)      : []),
+                      ];
                       return shrinkSegs.map((seg, si) => (
                         <path key={`shrink-${si}`}
                           d={describeArc(CX, CY, r, seg.start, seg.end)}
                           fill="none" stroke="rgba(255,140,0,0.85)"
                           strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
                           style={{ cursor: canClaimCoverage ? "pointer" : "default" }}
-                          onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, resolved.shrinkHours)}
+                          onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, seg.end - seg.start, seg.start, seg.end, seg.dayOffset)}
                         >
                           <title>{canClaimCoverage ? "Join line for this freed time" : "Freed segment"}</title>
                         </path>
@@ -2611,11 +2613,20 @@ function ShiftLever({
         <div className="absolute h-full rounded-sm opacity-20"
           style={{ left: `${baseLeft}%`, width: `${baseWidth}%`, backgroundColor: agent.color }}
         />
-        {resolved.hasShrink && (
+        {activeStart > startUtc && (
+          <div className="absolute h-3 top-1 rounded-sm"
+            style={{
+              left: `${(startUtc / barMax) * 100}%`,
+              width: `${((activeStart - startUtc) / barMax) * 100}%`,
+              background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.6) 0px,rgba(255,140,0,0.6) 3px,transparent 3px,transparent 6px)",
+            }}
+          />
+        )}
+        {activeEnd < normEnd && (
           <div className="absolute h-3 top-1 rounded-sm"
             style={{
               left: `${(activeEnd / barMax) * 100}%`,
-              width: `${(resolved.shrinkHours / barMax) * 100}%`,
+              width: `${((normEnd - activeEnd) / barMax) * 100}%`,
               background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.6) 0px,rgba(255,140,0,0.6) 3px,transparent 3px,transparent 6px)",
             }}
           />
@@ -2631,7 +2642,17 @@ function ShiftLever({
           }}
           onMouseDown={e => onMouseDown(e, "move")}
         />
-        {resolved.hasOvertime && (
+        {activeStart < startUtc && (
+          <div className="absolute h-full rounded-sm"
+            style={{
+              left: `${(activeStart / barMax) * 100}%`,
+              width: `${((startUtc - activeStart) / barMax) * 100}%`,
+              backgroundColor: agent.color,
+              boxShadow: `0 0 6px white, 0 0 10px ${agent.color}`,
+            }}
+          />
+        )}
+        {activeEnd > normEnd && (
           <div className="absolute h-full rounded-sm"
             style={{
               left: `${(normEnd / barMax) * 100}%`,

@@ -619,12 +619,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(updated);
   });
 
-  // Delete a single overtime record (undo a demo/test assignment)
-  app.delete("/api/overtime/:id", requireAdmin, (req, res) => {
-    const id = Number(req.params.id);
-    const existing = storage.getOvertimeLogs().find(r => r.id === id);
-    if (!existing) return res.status(404).json({ message: "Not found" });
-    storage.deleteOvertimeLog(id);
+  // Clear all overtime records — must be registered before /:id to avoid "all" being treated as an id
+  app.delete("/api/overtime/all", requireAdmin, (_req, res) => {
+    storage.clearAllOvertimeLogs();
     res.json({ ok: true });
   });
 
@@ -638,9 +635,12 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // Clear all overtime records
-  app.delete("/api/overtime/all", requireAdmin, (_req, res) => {
-    storage.clearAllOvertimeLogs();
+  // Delete a single overtime record (undo a demo/test assignment)
+  app.delete("/api/overtime/:id", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const existing = storage.getOvertimeLogs().find(r => r.id === id);
+    if (!existing) return res.status(404).json({ message: "Not found" });
+    storage.deleteOvertimeLog(id);
     res.json({ ok: true });
   });
 
@@ -725,8 +725,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       sourceAgentId = fromShift.agentId;
       sourceAgentName = fromAgent.name;
       resolvedDayOfWeek = resolvedDayOfWeek ?? fromShift.dayOfWeek;
-      slotStartUtc = curActiveEnd;
-      slotEndUtc = curActiveEnd + hours;
+      // Use explicit cover times if provided (e.g. start-shrink freed segment)
+      if (typeof coverStartUtc === "number" && typeof coverEndUtc === "number" && coverEndUtc > coverStartUtc) {
+        slotStartUtc = coverStartUtc;
+        slotEndUtc = coverEndUtc;
+      } else {
+        slotStartUtc = curActiveEnd;
+        slotEndUtc = curActiveEnd + hours;
+      }
       origin = "claimed-from-agent";
     } else {
       if (typeof coverStartUtc !== "number" || typeof coverEndUtc !== "number") {

@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Clock, Users, LayoutDashboard, Hand, ScrollText, LogOut } from "lucide-react";
+import { AlignLeft, CalendarRange, CircleDot, Clock, Users, LayoutDashboard, Hand, ScrollText, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDragScrollPreference } from "@/hooks/use-drag-scroll";
 import type { AgentSession } from "@/lib/agentAccess";
@@ -10,6 +10,12 @@ const navItems = [
   { href: "/activity", label: "Activity", icon: ScrollText },
   { href: "/overtime", label: "Overtime", icon: Clock },
   { href: "/profiles", label: "Agents", icon: Users },
+];
+
+const VIEW_ITEMS = [
+  { mode: "clock" as const, scope: undefined, label: "Clock", icon: CircleDot },
+  { mode: "timeline" as const, scope: "day" as const, label: "1 Day", icon: AlignLeft },
+  { mode: "timeline" as const, scope: "multi" as const, label: "14 Days", icon: CalendarRange },
 ];
 
 export default function Sidebar({
@@ -23,6 +29,29 @@ export default function Sidebar({
 }) {
   const [location] = useLocation();
   const { enabled: dragScrollEnabled, setEnabled: setDragScrollEnabled } = useDragScrollPreference();
+
+  const [viewMode, setViewMode] = useState<"clock" | "timeline">(
+    () => (localStorage.getItem("shiftclock:viewMode") as "clock" | "timeline") ?? "clock"
+  );
+  const [timelineScope, setTimelineScope] = useState<"day" | "multi">(
+    () => (localStorage.getItem("shiftclock:timelineScope") as "day" | "multi") ?? "day"
+  );
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { mode, scope } = (e as CustomEvent<{ mode: "clock" | "timeline"; scope?: "day" | "multi" }>).detail;
+      setViewMode(mode);
+      if (scope) setTimelineScope(scope);
+    };
+    window.addEventListener("shiftclock:viewchange", handler);
+    return () => window.removeEventListener("shiftclock:viewchange", handler);
+  }, []);
+
+  const switchView = (mode: "clock" | "timeline", scope?: "day" | "multi") => {
+    localStorage.setItem("shiftclock:viewMode", mode);
+    if (scope) localStorage.setItem("shiftclock:timelineScope", scope);
+    window.dispatchEvent(new CustomEvent("shiftclock:viewchange", { detail: { mode, scope } }));
+  };
 
   return (
     <aside className="w-14 sm:w-16 lg:w-56 flex flex-col border-r border-border bg-sidebar shrink-0 h-screen overflow-hidden">
@@ -48,20 +77,43 @@ export default function Sidebar({
       {/* Nav */}
       <nav className="flex-1 flex flex-col gap-1 p-2 lg:p-3 pt-3">
         {navItems.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            className={cn(
-              "flex items-center gap-3 px-2.5 py-2 rounded-md text-sm font-medium transition-all duration-150 hover-elevate cursor-pointer",
-              location === href
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
+          <React.Fragment key={href}>
+            <Link
+              href={href}
+              className={cn(
+                "flex items-center gap-3 px-2.5 py-2 rounded-md text-sm font-medium transition-all duration-150 hover-elevate cursor-pointer",
+                location === href
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              )}
+              data-testid={`nav-${label.toLowerCase()}`}
+            >
+              <Icon size={16} className="shrink-0" />
+              <span className="hidden lg:block">{label}</span>
+            </Link>
+            {href === "/" && location === "/" && (
+              <div className="flex flex-col gap-0.5 ml-1 lg:ml-2 pl-1 lg:pl-2 border-l border-border/50">
+                {VIEW_ITEMS.map(({ mode, scope, label: vLabel, icon: VIcon }) => {
+                  const isActive = mode === viewMode && (scope == null || scope === timelineScope);
+                  return (
+                    <button
+                      key={vLabel}
+                      onClick={() => switchView(mode, scope)}
+                      className={cn(
+                        "flex items-center gap-3 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-150 w-full text-left",
+                        isActive
+                          ? "bg-primary/15 text-primary"
+                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                      )}
+                    >
+                      <VIcon size={13} className="shrink-0" />
+                      <span className="hidden lg:block">{vLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
             )}
-            data-testid={`nav-${label.toLowerCase()}`}
-          >
-            <Icon size={16} className="shrink-0" />
-            <span className="hidden lg:block">{label}</span>
-          </Link>
+          </React.Fragment>
         ))}
       </nav>
 

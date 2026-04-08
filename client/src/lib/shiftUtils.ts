@@ -100,7 +100,8 @@ function snapHalfHour(hour: number): number {
 }
 
 export function clampShiftWindow(startUtc: number, endUtc: number): { activeStart: number; activeEnd: number } {
-  const activeStart = snapHalfHour(Math.max(0, Math.min(24, startUtc)));
+  // No upper cap on activeStart (overnight shifts legitimately cross midnight past hour 24)
+  const activeStart = snapHalfHour(Math.max(0, startUtc));
   const maxEnd = Math.min(48, activeStart + MAX_SHIFT_SPAN_HOURS);
   const activeEnd = snapHalfHour(
     Math.max(activeStart + MIN_SHIFT_DURATION_HOURS, Math.min(maxEnd, endUtc))
@@ -133,16 +134,22 @@ export function shiftHasOverride(
 export function segmentShift(startUtc: number, rawEndUtc: number): ShiftSegment[] {
   const endUtc = normaliseEndUtc(startUtc, rawEndUtc);
 
+  // Zero or negative duration — nothing to render
+  if (endUtc <= startUtc) return [];
+
   if (endUtc <= 24) {
     // Same-day shift
     return [{ dayOffset: 0, start: startUtc, end: endUtc, isOverflow: false }];
   }
 
-  // Overnight: split at midnight
-  return [
-    { dayOffset: 0, start: startUtc, end: 24, isOverflow: false },
-    { dayOffset: 1, start: 0,        end: endUtc - 24, isOverflow: true },
-  ];
+  // Overnight: split at midnight.
+  // If startUtc >= 24 the entire range falls on the next calendar day.
+  const segs: ShiftSegment[] = [];
+  if (startUtc < 24) {
+    segs.push({ dayOffset: 0, start: startUtc, end: 24, isOverflow: false });
+  }
+  segs.push({ dayOffset: 1, start: Math.max(0, startUtc - 24), end: endUtc - 24, isOverflow: true });
+  return segs;
 }
 
 // ─── Resolve active shift ─────────────────────────────────────────────────────
