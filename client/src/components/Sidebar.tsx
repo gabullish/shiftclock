@@ -148,7 +148,10 @@ function AgentIndicator({ session, onSignOff, isOnBreak }: { session: AgentSessi
   return (
     <div className="flex items-center gap-2 min-w-0">
       <div className="relative w-2 h-2 shrink-0">
-        <div className={cn("w-2 h-2 rounded-full animate-pulse", isOnBreak ? "bg-amber-400" : "bg-blue-400")} />
+        {isOnBreak && (
+          <div className="absolute inset-0 rounded-full bg-amber-400/40 animate-ping" />
+        )}
+        <div className={cn("relative w-2 h-2 rounded-full animate-pulse", isOnBreak ? "bg-amber-400" : "bg-blue-400")} />
         {isOnBreak && <span className="absolute -top-1.5 -right-1.5 text-[8px]">☕</span>}
       </div>
       <div className="hidden lg:flex flex-1 items-center justify-between min-w-0 gap-1">

@@ -839,10 +839,10 @@ export default function Dashboard() {
       agentId: agent.id,
       date: selectedDate,
       type: "break",
-      actionType: "break-updated",
+      actionType: nextBreak == null ? "break-removed" : "break-scheduled",
       description: nextBreak == null
         ? `${agent.name} removed their break on ${formatWeekdayWithDate(selectedDay, selectedDate)}.`
-        : `${agent.name} set break at ${formatUtcHour(nextBreak)} UTC on ${formatWeekdayWithDate(selectedDay, selectedDate)}.`,
+        : `${agent.name} scheduled their break for ${formatUtcHour(nextBreak)} on ${formatWeekdayWithDate(selectedDay, selectedDate)}.`,
     });
   };
 
@@ -917,14 +917,31 @@ export default function Dashboard() {
               <span className="text-[11px] text-muted-foreground">No agents currently on shift</span>
             ) : (
               <div className="flex items-center gap-1.5 flex-wrap">
-                {onlineAgents.map(agent => (
+                {onlineAgents.map(agent => {
+                  const agentOnBreak = Boolean(agent.breakActiveAt);
+                  const breakElapsed = agentOnBreak && agent.breakActiveAt
+                    ? Math.floor((Date.now() - Date.parse(agent.breakActiveAt)) / 60000)
+                    : null;
+                  return (
                   <div key={agent.id}
-                    className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium"
-                    style={{ backgroundColor: agent.color + "20", border: `1px solid ${agent.color}40`, color: agent.color }}>
-                    <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: agent.color }} />
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all duration-300",
+                      agentOnBreak && "ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.25)]"
+                    )}
+                    style={{
+                      backgroundColor: agentOnBreak ? "rgba(251,191,36,0.12)" : agent.color + "20",
+                      border: `1px solid ${agentOnBreak ? "rgba(251,191,36,0.4)" : agent.color + "40"}`,
+                      color: agentOnBreak ? "rgb(252,211,77)" : agent.color,
+                    }}>
+                    <span className="w-1.5 h-1.5 rounded-full animate-pulse"
+                      style={{ backgroundColor: agentOnBreak ? "rgb(251,191,36)" : agent.color }} />
                     {agent.name}
+                    {agentOnBreak && breakElapsed !== null && (
+                      <span className="opacity-80">☕ {breakElapsed}m</span>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
                 {agentsOnBreak.length > 0 && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400">
                     ☕ {agentsOnBreak.length} on break
@@ -1017,13 +1034,19 @@ export default function Dashboard() {
                         data-testid={`toggle-agent-${agent.id}`}
                         className={cn(
                           "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
-                          visible.has(agent.id) ? (isOnBreak ? "opacity-60" : "opacity-100") : "opacity-40 grayscale"
+                          visible.has(agent.id)
+                            ? isOnBreak
+                              ? "ring-1 ring-amber-400/70 animate-pulse"
+                              : "opacity-100"
+                            : "opacity-40 grayscale"
                         )}
                         style={{
-                          borderColor: agent.color + "60",
+                          borderColor: isOnBreak ? "rgba(251,191,36,0.5)" : agent.color + "60",
                           backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
-                          color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
-                          boxShadow: highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
+                          color: isOnBreak ? "rgb(252,211,77)" : visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
+                          boxShadow: isOnBreak
+                            ? "0 0 14px rgba(251,191,36,0.35)"
+                            : highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
                         }}
                       >
                         {agent.name}{isOnBreak ? " ☕" : ""}
@@ -2599,12 +2622,26 @@ function ShiftLever({
               -{formatDuration(resolved.shrinkHours)} free
             </span>
           )}
-          {shift.breakStart != null && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded-sm font-medium bg-muted text-muted-foreground"
-              title={`Break at ${formatUtcHour(shift.breakStart)} UTC`}>
-              ☕ {formatUtcHour(shift.breakStart)}
-            </span>
-          )}
+          {shift.breakStart != null && (() => {
+            const isOnBreak = Boolean(agent.breakActiveAt);
+            const isBreakSoon = !isOnBreak
+              && utcHour >= shift.breakStart - 0.25
+              && utcHour < shift.breakStart + 0.5;
+            return (
+              <span
+                className={cn(
+                  "text-[9px] px-1.5 py-0.5 rounded-sm font-medium transition-all duration-300",
+                  isOnBreak
+                    ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-400/50"
+                    : isBreakSoon
+                      ? "bg-amber-500/15 text-amber-400 animate-pulse"
+                      : "bg-muted text-muted-foreground"
+                )}
+                title={`Break at ${formatUtcHour(shift.breakStart)} UTC`}>
+                ☕ {formatUtcHour(shift.breakStart)}{isBreakSoon ? " soon" : ""}
+              </span>
+            );
+          })()}
         </div>
       </div>
 

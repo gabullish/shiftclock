@@ -424,12 +424,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     }
     const agent = storage.startLiveBreak(id);
     if (!agent) return res.status(404).json({ message: "Not found" });
-    const date = new Date().toISOString().slice(0, 10);
-    storage.createAgentLog({
-      agentId: id, date, type: "break", coverPct: null, coveredByAgentId: null,
-      notes: null, createdAt: new Date().toISOString(), actionType: "break-started",
-      description: `${agent.name} went on break.`,
-    });
+    // No log on start — the live toast + audio handles teammate communication.
+    // The completed break entry (logged on /break/end) keeps the log clean.
     res.json(agent);
   });
 
@@ -438,13 +434,32 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!isAdminRequest(req) && getAgentSession(req) !== id) {
       return res.status(403).json({ message: "You can only manage your own break" });
     }
+    // Capture start time before clearing it
+    const breakStartedAt = storage.getAgents().find(a => a.id === id)?.breakActiveAt ?? null;
     const agent = storage.endLiveBreak(id);
     if (!agent) return res.status(404).json({ message: "Not found" });
     const date = new Date().toISOString().slice(0, 10);
+
+    // Build a rich completion log with actual duration and time range
+    const fmtUtcHHMM = (ts: number) => {
+      const d = new Date(ts);
+      return `${d.getUTCHours().toString().padStart(2, "0")}:${d.getUTCMinutes().toString().padStart(2, "0")}`;
+    };
+    const startedMs = breakStartedAt ? Date.parse(breakStartedAt) : null;
+    const endedMs   = Date.now();
+    const durationMins = startedMs ? Math.round((endedMs - startedMs) / 60000) : null;
+    const timeRange = startedMs && durationMins != null
+      ? `  (${fmtUtcHHMM(startedMs)} – ${fmtUtcHHMM(endedMs)} UTC)`
+      : "";
+    const description = durationMins != null
+      ? `${agent.name} was on break · ${durationMins} min${timeRange}`
+      : `${agent.name} returned from break.`;
+
     storage.createAgentLog({
       agentId: id, date, type: "break", coverPct: null, coveredByAgentId: null,
-      notes: null, createdAt: new Date().toISOString(), actionType: "break-ended",
-      description: `${agent.name} returned from break.`,
+      notes: null, createdAt: new Date().toISOString(),
+      actionType: "break-completed",
+      description,
     });
     res.json(agent);
   });
