@@ -480,6 +480,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!date || typeof dayOfWeek !== "number") {
       return res.status(400).json({ message: "date and dayOfWeek required" });
     }
+    if (dayOfWeek < 0 || dayOfWeek > 6) {
+      return res.status(400).json({ message: "dayOfWeek must be 0–6" });
+    }
     const dayShifts = storage.getShifts().filter(s => s.dayOfWeek === dayOfWeek);
     for (const s of dayShifts) {
       storage.updateShift(s.id, { activeStart: null, activeEnd: null, breakStart: null });
@@ -691,6 +694,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!toAgentId || !date) {
       return res.status(400).json({ message: "toAgentId and date required" });
     }
+    if (typeof dayOfWeek === "number" && (dayOfWeek < 0 || dayOfWeek > 6)) {
+      return res.status(400).json({ message: "dayOfWeek must be 0–6" });
+    }
 
     if (!admin && sessionAgentId && Number(toAgentId) !== sessionAgentId) {
       return res.status(403).json({ message: "Agents can only submit requests for themselves" });
@@ -884,17 +890,34 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(409).json({ message: "This line is no longer open" });
     }
 
-    // Safeguard: agent cannot claim coverage that overlaps their own active shift hours
+    // Safeguard: agent cannot claim coverage that overlaps their own active shift hours.
+    // Handles overnight slots where coverEndUtc > 24 by also checking the next calendar day.
     if (!isAdmin && opportunity.coverStartUtc != null && opportunity.coverEndUtc != null && opportunity.dayOfWeek != null) {
-      const claimingShifts = storage.getShifts().filter(
-        s => s.agentId === agentId && s.dayOfWeek === opportunity.dayOfWeek
-      );
+      const coverStart = opportunity.coverStartUtc;
+      const coverEnd   = opportunity.coverEndUtc;
+      const dow        = opportunity.dayOfWeek;
+      const overlaps   = (aStart: number, aEnd: number, sStart: number, sEnd: number) =>
+        aStart < sEnd && aEnd > sStart;
+
+      const claimingShifts = storage.getShifts().filter(s => s.agentId === agentId);
       for (const s of claimingShifts) {
         const sNormEnd = normaliseEndUtcServer(s.startUtc, s.endUtc);
         const effStart = s.activeStart ?? s.startUtc;
         const effEnd   = s.activeEnd   ?? sNormEnd;
-        if (effStart < opportunity.coverEndUtc && effEnd > opportunity.coverStartUtc) {
-          return res.status(409).json({ message: "Cannot claim coverage during your own active shift hours" });
+
+        // Same-day portion of the slot (clamp to 0–24)
+        if (s.dayOfWeek === dow) {
+          const slotStart = Math.min(coverStart, 24);
+          const slotEnd   = Math.min(coverEnd, 24);
+          if (slotStart < slotEnd && overlaps(effStart, effEnd, slotStart, slotEnd)) {
+            return res.status(409).json({ message: "Cannot claim coverage during your own active shift hours" });
+          }
+        }
+        // Next-day overflow when slot crosses midnight
+        if (coverEnd > 24 && s.dayOfWeek === (dow + 1) % 7) {
+          if (overlaps(effStart, effEnd, 0, coverEnd - 24)) {
+            return res.status(409).json({ message: "Cannot claim coverage during your own active shift hours" });
+          }
         }
       }
     }

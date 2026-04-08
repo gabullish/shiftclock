@@ -359,8 +359,8 @@ export default function Dashboard() {
   };
 
   const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"], refetchInterval: 30_000, staleTime: Infinity });
-  const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
-  const { data: otRecords = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"] });
+  const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"], refetchInterval: 15_000 });
+  const { data: otRecords = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"], refetchInterval: 15_000 });
 
   const updateShiftMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Shift> & { date?: string } }) =>
