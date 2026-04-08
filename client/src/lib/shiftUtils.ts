@@ -16,8 +16,8 @@ export function isCoverageClaim(record: Pick<OvertimeLog, "origin">): boolean {
 
 /** A contiguous segment of a shift within a single calendar day. */
 export interface ShiftSegment {
-  /** Day offset from the shift's base day. 0 = same day, 1 = next day. */
-  dayOffset: 0 | 1;
+  /** Day offset from the shift's base day. -1 = previous day (lever pulled back), 0 = same/labeled day, 1 = next day. */
+  dayOffset: -1 | 0 | 1;
   /** Start hour within that day, 0–24. */
   start: number;
   /** End hour within that day, 0–24. */
@@ -63,6 +63,7 @@ export interface ShiftProgress {
 
 export const MIN_SHIFT_DURATION_HOURS = 0.5;
 export const MAX_SHIFT_SPAN_HOURS = 24;
+export const MAX_LEVER_DRIFT_HOURS = 8;
 
 // ─── Core duration ────────────────────────────────────────────────────────────
 
@@ -100,8 +101,8 @@ function snapHalfHour(hour: number): number {
 }
 
 export function clampShiftWindow(startUtc: number, endUtc: number): { activeStart: number; activeEnd: number } {
-  // No upper cap on activeStart (overnight shifts legitimately cross midnight past hour 24)
-  const activeStart = snapHalfHour(Math.max(0, startUtc));
+  // Allow up to MAX_LEVER_DRIFT_HOURS before midnight (negative activeStart = previous day extension)
+  const activeStart = snapHalfHour(Math.max(-MAX_LEVER_DRIFT_HOURS, startUtc));
   const maxEnd = Math.min(48, activeStart + MAX_SHIFT_SPAN_HOURS);
   const activeEnd = snapHalfHour(
     Math.max(activeStart + MIN_SHIFT_DURATION_HOURS, Math.min(maxEnd, endUtc))
@@ -136,6 +137,19 @@ export function segmentShift(startUtc: number, rawEndUtc: number): ShiftSegment[
 
   // Zero or negative duration — nothing to render
   if (endUtc <= startUtc) return [];
+
+  // Negative startUtc: lever pulled back into the previous calendar day.
+  // Split at midnight (0) so each segment has valid 0–24 coordinates.
+  if (startUtc < 0) {
+    const segs: ShiftSegment[] = [];
+    // Pre-midnight portion on the previous day (e.g. startUtc=-2 → 22:00-24:00)
+    segs.push({ dayOffset: -1, start: 24 + startUtc, end: 24, isOverflow: false });
+    // Remainder starting at midnight — recurse with startUtc=0
+    if (endUtc > 0) {
+      segs.push(...segmentShift(0, endUtc));
+    }
+    return segs;
+  }
 
   if (endUtc <= 24) {
     // Same-day shift

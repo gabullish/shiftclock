@@ -519,6 +519,21 @@ export async function registerRoutes(httpServer: Server, app: Express) {
           ),
         );
 
+    // Bounds validation: reject lever values outside safe range
+    if ("activeStart" in payload || "activeEnd" in payload) {
+      const effStart = ("activeStart" in payload ? payload.activeStart : existing.activeStart ?? existing.startUtc) as number;
+      const effEnd   = ("activeEnd"   in payload ? payload.activeEnd   : existing.activeEnd   ?? normaliseEndUtcServer(existing.startUtc, existing.endUtc)) as number;
+      if (typeof effStart !== "number" || effStart < -8 || effStart >= 48) {
+        return res.status(400).json({ message: "activeStart out of range [-8, 48)" });
+      }
+      if (typeof effEnd !== "number" || effEnd <= 0 || effEnd > 48) {
+        return res.status(400).json({ message: "activeEnd out of range (0, 48]" });
+      }
+      if (effEnd < effStart + 0.5) {
+        return res.status(400).json({ message: "activeEnd must be at least 0.5h after activeStart" });
+      }
+    }
+
     // BUG-01: Auto-clear breakStart if the new effective window crosses it
     const normEnd = normaliseEndUtcServer(existing.startUtc, existing.endUtc);
     if (existing.breakStart != null) {

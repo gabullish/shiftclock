@@ -25,6 +25,8 @@ import {
   getActiveClaimForShift,
   isCoverageClaim,
   shiftHasOverride,
+  MAX_LEVER_DRIFT_HOURS,
+  MIN_SHIFT_DURATION_HOURS,
 } from "@/lib/shiftUtils";
 
 // Reusable drag-scroll hook with PointerCapture
@@ -446,10 +448,8 @@ export default function Dashboard() {
       const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
       // Only overwrite local lever state if this shift is NOT mid-drag/pending
       if (!pendingCommit.current.has(s.id)) {
-        next[s.id] = {
-          activeStart: s.activeStart ?? s.startUtc,
-          activeEnd: s.activeEnd ?? normEnd,
-        };
+        const clamped = clampShiftWindow(s.activeStart ?? s.startUtc, s.activeEnd ?? normEnd);
+        next[s.id] = { activeStart: clamped.activeStart, activeEnd: clamped.activeEnd };
       }
     }
     setLeverState(prev => ({ ...prev, ...next }));
@@ -762,8 +762,8 @@ export default function Dashboard() {
 
     // Overnight freed segments that cross midnight belong to the next calendar day
     const dayOff = segDayOffset ?? 0;
-    const claimDayOfWeek = dayOff > 0 ? (shift.dayOfWeek + dayOff) % 7 : shift.dayOfWeek;
-    const claimDate = dayOff > 0 ? (() => {
+    const claimDayOfWeek = dayOff !== 0 ? ((shift.dayOfWeek + dayOff + 7) % 7) : shift.dayOfWeek;
+    const claimDate = dayOff !== 0 ? (() => {
       const d = new Date(selectedDate + "T00:00:00Z");
       d.setUTCDate(d.getUTCDate() + dayOff);
       return d.toISOString().slice(0, 10);
@@ -1348,6 +1348,8 @@ function UnifiedTimeline({
       // No suppression: the pre-midnight segment always belongs to this shift,
       // even if the previous day is an off-day (e.g. Mon shift starts Sun 23:00)
       const segOffsetX = (seg: { dayOffset: number }) => {
+        // dayOffset:-1 = lever pulled back into previous calendar day (negative activeStart)
+        if (seg.dayOffset === -1) return scope === "day" ? rowOffsetX : rowOffsetX - 24 * PX_PER_HOUR;
         if (!isOvernight || scope === "day") return rowOffsetX;
         return seg.dayOffset === 0
           ? rowOffsetX - 24 * PX_PER_HOUR   // previous day column
@@ -2460,7 +2462,12 @@ function ShiftLever({
   const actWidth  = (resolved.activeDuration / barMax) * 100;
 
   const commitWindow = (start: number, end: number) => {
-    const next = clampShiftWindow(start, end);
+    // Max-drift guard: activeStart can't go more than MAX_LEVER_DRIFT_HOURS before base startUtc
+    const driftMin = startUtc - MAX_LEVER_DRIFT_HOURS;
+    const guardedStart = Math.max(driftMin, start);
+    // Also ensure there's room for min duration
+    const guardedEnd = Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, end);
+    const next = clampShiftWindow(guardedStart, guardedEnd);
     onLeverPreview(shift.id, next.activeStart, next.activeEnd);
     onLeverCommit(shift.id, next.activeStart, next.activeEnd);
   };
@@ -2609,7 +2616,13 @@ function ShiftLever({
         </div>
       )}
 
-      <div ref={barRef} className="relative h-5 bg-muted rounded-sm overflow-visible mb-2 select-none">
+      {activeStart < 0 && (
+        <div className="mb-1 flex items-center gap-1 text-xs text-amber-400">
+          <ChevronLeft className="h-3 w-3" />
+          <span>+{formatDuration(-activeStart)} prev day</span>
+        </div>
+      )}
+      <div ref={barRef} className="relative h-5 bg-muted rounded-sm overflow-hidden mb-2 select-none">
         <div className="absolute h-full rounded-sm opacity-20"
           style={{ left: `${baseLeft}%`, width: `${baseWidth}%`, backgroundColor: agent.color }}
         />
