@@ -9,3 +9,11 @@ data.db
 *.db-wal
 .env
 .env.local
+
+# Internal dev notes
+EXPLORATION.md
+FINDINGS.md
+profile.json
+
+# Claude Code config
+.claude/
