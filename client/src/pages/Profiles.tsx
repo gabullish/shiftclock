@@ -225,6 +225,36 @@ export default function Profiles() {
   ]);
   const dirtyCount = allDirtyIds.size;
 
+  // ── Navigate-away guard ──────────────────────────────────────────────────────
+  // 1. Warn on browser refresh / tab close
+  useEffect(() => {
+    if (dirtyCount === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirtyCount]);
+
+  // 2. Warn on in-app navigation (sidebar / any nav link)
+  useEffect(() => {
+    if (dirtyCount === 0) return;
+    const handler = (e: MouseEvent) => {
+      const navEl = (e.target as Element).closest('[data-testid*="nav-"]');
+      if (!navEl) return;
+      const confirmed = window.confirm(
+        `You have ${dirtyCount} unapplied schedule change${dirtyCount > 1 ? "s" : ""}.\nLeave without applying?`
+      );
+      if (!confirmed) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener("click", handler, true); // capture phase
+    return () => document.removeEventListener("click", handler, true);
+  }, [dirtyCount]);
+
   const handleApplyAll = () => {
     if (allDirtyIds.size === 0) return;
     for (const agentId of allDirtyIds) {
@@ -609,7 +639,7 @@ function ApplyWeekRow({
         )}
       >
         <CalendarDays size={9} />
-        {isDirty ? "Apply ●" : "Apply week"}
+        Apply week
       </button>
     </div>
   );
