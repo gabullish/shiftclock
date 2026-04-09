@@ -27,6 +27,8 @@ import {
   shiftHasOverride,
   MAX_LEVER_DRIFT_HOURS,
   MIN_SHIFT_DURATION_HOURS,
+  MAX_OT_EXTENSION_HOURS,
+  WAIVE_PROMPT_THRESHOLD_HOURS,
 } from "@/lib/shiftUtils";
 
 // Reusable drag-scroll hook with PointerCapture
@@ -581,6 +583,8 @@ export default function Dashboard() {
         record.coverEndUtc != null
     );
     let baseHours = 0, activeHours = 0, overtimeHours = 0, releasedHours = 0;
+    let coveredOutHours = 0;
+    let coveredByAgentId: number | null = null;
     for (const s of agentTodayShifts) {
       const ls = leverState[s.id];
       const resolved = resolveShift(
@@ -593,10 +597,15 @@ export default function Dashboard() {
       overtimeHours += resolved.overtimeHours;
       releasedHours += resolved.shrinkHours;
 
-      // Also include pending claim hours as "released"
-      const activeClaimForShift = getActiveClaimForShift(s, otRecords, selectedDay);
-      if (activeClaimForShift) {
-        releasedHours += (activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!);
+      // Track outgoing coverage claims separately — do NOT add to releasedHours
+      // (shrinkHours already accounts for the freed hours; claiming just marks them covered)
+      const outgoingClaim = getActiveClaimForShift(s, otRecords, selectedDay);
+      if (outgoingClaim && outgoingClaim.coverStartUtc != null && outgoingClaim.coverEndUtc != null) {
+        const claimedHrs = outgoingClaim.coverEndUtc - outgoingClaim.coverStartUtc;
+        coveredOutHours += claimedHrs;
+        if (outgoingClaim.status === "approved" || outgoingClaim.status === "paid") {
+          coveredByAgentId = outgoingClaim.agentId;
+        }
       }
     }
     for (const claim of approvedClaims) {
@@ -604,7 +613,7 @@ export default function Dashboard() {
       activeHours += claimHours;
       overtimeHours += claimHours;
     }
-    return { agent, baseHours, activeHours, overtimeHours, releasedHours, shifts: agentTodayShifts };
+    return { agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentTodayShifts };
   });
 
   const zeroCoverageHours  = coverage.filter(c => c === 0).length;
@@ -612,7 +621,8 @@ export default function Dashboard() {
   const gapSlices          = expandGapRangesToSlices(gapRanges);
   const peakCoverageHour   = coverage.indexOf(Math.max(...coverage));
   const totalOvertimeHours = agentSummaries.reduce((a, s) => a + s.overtimeHours, 0);
-  const totalReleasedHours = agentSummaries.reduce((a, s) => a + s.releasedHours, 0);
+  // Only count hours that haven't been claimed yet as "up for grabs"
+  const totalReleasedHours = agentSummaries.reduce((a, s) => a + Math.max(0, s.releasedHours - s.coveredOutHours), 0);
   const pendingCoverageClaims = otRecords.filter(
     (record) =>
       isCoverageClaim(record) &&
@@ -649,6 +659,16 @@ export default function Dashboard() {
   });
 
   const agentsOnBreak = agents.filter(a => a.breakActiveAt != null && visible.has(a.id));
+  // Agents whose break is within the next 30 min (but not yet started)
+  const agentsBreakSoon = isSelectedDateToday ? onlineAgents.filter(agent => {
+    if (agent.breakActiveAt) return false;
+    return todayShifts.some(s =>
+      s.agentId === agent.id &&
+      s.breakStart != null &&
+      utcHour >= s.breakStart - 0.5 &&
+      utcHour < s.breakStart + 0.5
+    );
+  }) : [];
 
   const hasShiftsToday = todayShifts.length > 0;
   const isWeekend      = selectedDay === 0 || selectedDay === 6;
@@ -670,6 +690,17 @@ export default function Dashboard() {
         reset[s.id] = { activeStart: s.startUtc, activeEnd: normEnd };
       }
       setLeverState(reset);
+
+      // Warn if approved/paid OT records exist for this date — they won't be cleared
+      const approvedOnDay = otRecords.filter(
+        r => r.date === selectedDate && (r.status === "approved" || r.status === "paid")
+      );
+      if (approvedOnDay.length > 0) {
+        toast({
+          title: `Heads up: ${approvedOnDay.length} approved OT record${approvedOnDay.length > 1 ? "s" : ""} will remain`,
+          description: "Reset clears lever positions and pending OT only. Approved/paid records stay.",
+        });
+      }
 
       resetDayMutation.mutate({ date: selectedDate, dayOfWeek: selectedDay });
       toast({ title: `${selectedDayShortLabel} reset to base schedule` });
@@ -916,7 +947,7 @@ export default function Dashboard() {
             {onlineAgents.length === 0 ? (
               <span className="text-[11px] text-muted-foreground">No agents currently on shift</span>
             ) : (
-              <div className="flex items-center gap-1.5 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap flex-1">
                 {onlineAgents.map(agent => {
                   const agentOnBreak = Boolean(agent.breakActiveAt);
                   const breakElapsed = agentOnBreak && agent.breakActiveAt
@@ -942,11 +973,26 @@ export default function Dashboard() {
                   </div>
                   );
                 })}
-                {agentsOnBreak.length > 0 && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400">
-                    ☕ {agentsOnBreak.length} on break
-                  </span>
-                )}
+              </div>
+            )}
+            {/* Break-soon callout — right side of the strip */}
+            {agentsBreakSoon.length > 0 && (
+              <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                <span className="text-[9px] text-amber-400/70 uppercase tracking-wider font-medium">Break soon</span>
+                {agentsBreakSoon.map(agent => {
+                  const bShift = todayShifts.find(s => s.agentId === agent.id && s.breakStart != null);
+                  const minsUntil = bShift?.breakStart != null
+                    ? Math.max(0, Math.round((bShift.breakStart - utcHour) * 60))
+                    : null;
+                  return (
+                    <div key={agent.id}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-400 animate-pulse">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: agent.color }} />
+                      {agent.name}
+                      {minsUntil !== null && <span className="opacity-70">in {minsUntil}m</span>}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1174,7 +1220,12 @@ export default function Dashboard() {
       {assignModal && (
         <AssignOvertimeModal
           source={assignModal}
-          agents={agents}
+          agents={agents.filter(a => {
+            // Never show the source agent for shift-kind modals
+            if (assignModal.kind === "shift" && a.id === assignModal.fromAgent.id) return false;
+            // Only show agents who are scheduled on the same day of week
+            return allShifts.some(s => s.agentId === a.id && s.dayOfWeek === assignModal.dayOfWeek);
+          })}
           onAssign={(toAgentId) => {
             if (assignModal.kind === "shift") {
               assignOvertimeMutation.mutate({
@@ -2484,20 +2535,41 @@ function ShiftLever({
   const actLeft   = (activeStart / barMax) * 100;
   const actWidth  = (resolved.activeDuration / barMax) * 100;
 
+  // OT cap and drift floor flags for inline labels
+  const otCap        = normEnd + MAX_OT_EXTENSION_HOURS;
+  const hitOTCap     = activeEnd >= otCap;
+  const hitDriftFloor = activeStart <= startUtc - MAX_LEVER_DRIFT_HOURS;
+
+  const [showWaivePrompt, setShowWaivePrompt] = useState(false);
+
+  const baseDuration   = normEnd - startUtc;
+  const maxTotalActive = baseDuration + MAX_OT_EXTENSION_HOURS; // combined cap (e.g. 8h shift → 10h max)
+
+  const applyGuards = (start: number, end: number) => {
+    // Individual guards
+    const guardedStart = Math.max(startUtc - MAX_LEVER_DRIFT_HOURS, start);
+    const guardedEnd   = Math.min(otCap, Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, end));
+    // Combined duration cap — prevents stacking both ends to their max simultaneously
+    const durationCappedEnd = Math.min(guardedEnd, guardedStart + maxTotalActive);
+    const finalEnd = Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, durationCappedEnd);
+    return clampShiftWindow(guardedStart, finalEnd);
+  };
+
   const commitWindow = (start: number, end: number) => {
-    // Max-drift guard: activeStart can't go more than MAX_LEVER_DRIFT_HOURS before base startUtc
-    const driftMin = startUtc - MAX_LEVER_DRIFT_HOURS;
-    const guardedStart = Math.max(driftMin, start);
-    // Also ensure there's room for min duration
-    const guardedEnd = Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, end);
-    const next = clampShiftWindow(guardedStart, guardedEnd);
+    const next = applyGuards(start, end);
     onLeverPreview(shift.id, next.activeStart, next.activeEnd);
     onLeverCommit(shift.id, next.activeStart, next.activeEnd);
   };
 
   const adjustEnd = (delta: number) => {
     if (!canEdit) return;
-    commitWindow(activeStart, activeEnd + delta);
+    const proposed = activeEnd + delta;
+    if (proposed - activeStart < WAIVE_PROMPT_THRESHOLD_HOURS) {
+      setShowWaivePrompt(true); // intercept — show waive prompt instead of committing
+      return;
+    }
+    setShowWaivePrompt(false);
+    commitWindow(activeStart, proposed);
   };
 
   const adjustStart = (delta: number) => {
@@ -2559,18 +2631,20 @@ function ShiftLever({
       const delta = ((ev.clientX - dragging.current.startX) / rect.width) * barMax;
       const { type: t, startVal, startEnd } = dragging.current;
       if (t === "start") {
-        const next = clampShiftWindow(startVal + delta, startEnd);
+        const next = applyGuards(startVal + delta, startEnd);
         dragging.current.currentStart = next.activeStart;
         dragging.current.currentEnd = next.activeEnd;
         onLeverPreview(shift.id, next.activeStart, next.activeEnd);
       } else if (t === "end") {
-        const next = clampShiftWindow(startVal, startEnd + delta);
+        // Enforce 1h minimum via drag (waive prompt is for button clicks only)
+        const dragFloorEnd = startVal + WAIVE_PROMPT_THRESHOLD_HOURS;
+        const next = applyGuards(startVal, Math.max(dragFloorEnd, startEnd + delta));
         dragging.current.currentStart = next.activeStart;
         dragging.current.currentEnd = next.activeEnd;
         onLeverPreview(shift.id, next.activeStart, next.activeEnd);
       } else {
         const dur = startEnd - startVal;
-        const next = clampShiftWindow(startVal + delta, startVal + delta + dur);
+        const next = applyGuards(startVal + delta, startVal + delta + dur);
         dragging.current.currentStart = next.activeStart;
         dragging.current.currentEnd = next.activeEnd;
         onLeverPreview(shift.id, next.activeStart, next.activeEnd);
@@ -2624,9 +2698,17 @@ function ShiftLever({
           )}
           {shift.breakStart != null && (() => {
             const isOnBreak = Boolean(agent.breakActiveAt);
+            const breakElapsed = isOnBreak && agent.breakActiveAt
+              ? Math.floor((Date.now() - Date.parse(agent.breakActiveAt)) / 60000)
+              : null;
             const isBreakSoon = !isOnBreak
               && utcHour >= shift.breakStart - 0.25
               && utcHour < shift.breakStart + 0.5;
+            const label = isOnBreak
+              ? `☕ on break${breakElapsed !== null ? ` ${breakElapsed}m` : ""}`
+              : isBreakSoon
+                ? `☕ ${formatUtcHour(shift.breakStart)} soon`
+                : `☕ ${formatUtcHour(shift.breakStart)}`;
             return (
               <span
                 className={cn(
@@ -2638,7 +2720,7 @@ function ShiftLever({
                       : "bg-muted text-muted-foreground"
                 )}
                 title={`Break at ${formatUtcHour(shift.breakStart)} UTC`}>
-                ☕ {formatUtcHour(shift.breakStart)}{isBreakSoon ? " soon" : ""}
+                {label}
               </span>
             );
           })()}
@@ -2743,14 +2825,64 @@ function ShiftLever({
           {canEdit && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
           {canEdit && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
+          {hitDriftFloor && (
+            <span className="text-[9px] text-amber-400/80" title="Maximum 8h before shift start">max -8h</span>
+          )}
         </div>
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{formatDuration(resolved.activeDuration)}</span>
         <div className="flex items-center gap-1">
+          {hitOTCap && (
+            <span className="text-[9px] text-amber-400/80" title="Maximum 2h past scheduled end">max +2h</span>
+          )}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
           {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
           {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
         </div>
       </div>
+
+      {showWaivePrompt && (
+        <div className="mt-1.5 p-2 rounded-md bg-amber-500/10 border border-amber-400/30 text-[10px]">
+          <p className="text-amber-300 mb-0.5 leading-tight font-medium">Almost no shift left</p>
+          <p className="text-muted-foreground mb-1.5 leading-tight">
+            Waive = release hours for others to claim. Keep 30m = stay with minimal coverage.
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => {
+                // Waive: collapse to minimum AND signal freed hours are claimable
+                commitWindow(activeStart, activeStart + MIN_SHIFT_DURATION_HOURS);
+                setShowWaivePrompt(false);
+                toast({
+                  title: `${agent.name}'s shift waived`,
+                  description: "Freed hours are now up for grabs in the coverage view.",
+                  duration: 5000,
+                });
+              }}
+              className="px-2 py-0.5 rounded bg-amber-500/25 text-amber-200 hover:bg-amber-500/40 transition-colors"
+              title="Release hours — others can claim them"
+            >
+              Waive shift
+            </button>
+            <button
+              onClick={() => {
+                // Keep 30m: collapse to minimum silently (agent stays, no freed hours)
+                commitWindow(activeStart, activeStart + MIN_SHIFT_DURATION_HOURS);
+                setShowWaivePrompt(false);
+              }}
+              className="px-2 py-0.5 rounded bg-muted text-muted-foreground hover:bg-accent transition-colors"
+              title="Stay for minimum 30m coverage"
+            >
+              Keep 30m
+            </button>
+            <button
+              onClick={() => setShowWaivePrompt(false)}
+              className="px-2 py-0.5 rounded bg-muted text-muted-foreground hover:bg-accent transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {canEdit && (
         <div className="mt-1.5 flex items-center gap-1 text-[9px]">
@@ -2878,8 +3010,12 @@ function SummaryPanel({
       )}
 
       <div className="space-y-1">
-        {agentSummaries.map(({ agent, baseHours, activeHours, overtimeHours, releasedHours }: any) => {
+        {agentSummaries.map(({ agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentShifts }: any) => {
           if (baseHours === 0) return null;
+          const uncoveredHours = Math.max(0, releasedHours - (coveredOutHours ?? 0));
+          const coveredName = coveredByAgentId != null ? agentMap.get(coveredByAgentId)?.name : null;
+          // Find scheduled break across this agent's shifts
+          const breakShift = (agentShifts ?? []).find((s: any) => s.breakStart != null);
           return (
             <div key={agent.id} className="flex items-start gap-2 text-[10px]">
               <div className="w-1.5 h-1.5 rounded-full mt-1 shrink-0" style={{ backgroundColor: agent.color }} />
@@ -2887,18 +3023,39 @@ function SummaryPanel({
                 <span className="font-medium text-foreground">{agent.name}</span>
                 <span className="text-muted-foreground ml-1">{formatDuration(activeHours)}</span>
                 {overtimeHours > 0 && <span className="ml-1" style={{ color: agent.color }}>+{formatDuration(overtimeHours)} OT</span>}
-                {releasedHours > 0 && <span className="ml-1 text-orange-400">{formatDuration(releasedHours)} up for grabs</span>}
+                {/* Coverage release labels — distinguish between open and claimed */}
+                {releasedHours > 0 && coveredName && uncoveredHours <= 0 && (
+                  <span className="ml-1 text-emerald-400">{formatDuration(releasedHours)} → {coveredName}</span>
+                )}
+                {releasedHours > 0 && coveredName && uncoveredHours > 0 && (
+                  <>
+                    <span className="ml-1 text-emerald-400">{formatDuration(coveredOutHours)} → {coveredName}</span>
+                    <span className="ml-1 text-orange-400">{formatDuration(uncoveredHours)} open</span>
+                  </>
+                )}
+                {releasedHours > 0 && !coveredName && uncoveredHours > 0 && (
+                  <span className="ml-1 text-orange-400">{formatDuration(uncoveredHours)} up for grabs</span>
+                )}
+                {/* Break info — always shown for retroactive readability */}
+                {breakShift && (
+                  <span className="ml-1 text-muted-foreground/60">· ☕ {formatUtcHour(breakShift.breakStart)}</span>
+                )}
               </div>
             </div>
           );
         })}
       </div>
-      {(totalOvertimeHours > 0 || totalReleasedHours > 0) && (
-        <div className="mt-2 pt-2 border-t border-border">
-          {totalOvertimeHours > 0 && <p className="text-[10px] text-primary">Total overtime: +{formatDuration(totalOvertimeHours)}</p>}
-          {totalReleasedHours > 0 && <p className="text-[10px] text-orange-400">Total up for grabs: {formatDuration(totalReleasedHours)}</p>}
-        </div>
-      )}
+      {(() => {
+        const totalCovered = agentSummaries.reduce((a: number, s: any) => a + (s.coveredOutHours ?? 0), 0);
+        if (totalOvertimeHours === 0 && totalReleasedHours === 0 && totalCovered === 0) return null;
+        return (
+          <div className="mt-2 pt-2 border-t border-border">
+            {totalOvertimeHours > 0 && <p className="text-[10px] text-primary">Total overtime: +{formatDuration(totalOvertimeHours)}</p>}
+            {totalCovered > 0 && <p className="text-[10px] text-emerald-400">Coverage filled: {formatDuration(totalCovered)}</p>}
+            {totalReleasedHours > 0 && <p className="text-[10px] text-orange-400">Still up for grabs: {formatDuration(totalReleasedHours)}</p>}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2933,9 +3090,7 @@ function AssignOvertimeModal({
   onAssign: (toAgentId: number) => void;
   onClose: () => void;
 }) {
-  const otherAgents = source.kind === "shift"
-    ? agents.filter(a => a.id !== source.fromAgent.id)
-    : agents;
+  const otherAgents = agents; // filtering is applied by the caller
   const sourceLabel = source.kind === "shift"
     ? `${formatDuration(source.freedHours)} freed from ${source.fromAgent.name}'s ${formatWeekdayWithDate(source.dayOfWeek, source.date)} shift`
     : `${formatDuration(source.freedHours)} open gap on ${formatWeekdayWithDate(source.dayOfWeek, source.date)} · ${formatUtcHour(source.startUtc)}-${formatUtcHour(source.endUtc)} UTC`;
@@ -2971,7 +3126,11 @@ function AssignOvertimeModal({
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider px-2 pb-1.5">
             Select an agent to receive this overtime
           </p>
-          {otherAgents.map((agent) => (
+          {otherAgents.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground px-3 py-4 text-center">
+              No agents are scheduled on this day.
+            </p>
+          ) : otherAgents.map((agent) => (
             <button
               key={agent.id}
               onClick={() => onAssign(agent.id)}

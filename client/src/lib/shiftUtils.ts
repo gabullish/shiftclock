@@ -64,6 +64,8 @@ export interface ShiftProgress {
 export const MIN_SHIFT_DURATION_HOURS = 0.5;
 export const MAX_SHIFT_SPAN_HOURS = 24;
 export const MAX_LEVER_DRIFT_HOURS = 8;
+export const MAX_OT_EXTENSION_HOURS = 2;      // max hours past base endUtc
+export const WAIVE_PROMPT_THRESHOLD_HOURS = 1; // show waive prompt when active window < 1h
 
 // ─── Core duration ────────────────────────────────────────────────────────────
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -48,12 +49,9 @@ export default function ActivityLog() {
   const availableTabs = isAdmin ? TABS : (["Overtime"] as const);
   const [tab, setTab] = useState<Tab>(isAdmin && !isOvertimeRoute ? "Activity Log" : "Overtime");
 
+  // Keep tab in sync with the URL whenever the route changes
   useEffect(() => {
-    if (!isAdmin || isOvertimeRoute) {
-      setTab("Overtime");
-      return;
-    }
-    setTab((prev) => (prev === "Overtime" || prev === "Activity Log" ? prev : "Activity Log"));
+    setTab(isAdmin && !isOvertimeRoute ? "Activity Log" : "Overtime");
   }, [isAdmin, isOvertimeRoute]);
 
   if (!isAdmin && !isAgent) {
@@ -670,24 +668,52 @@ function OvertimePanel({
 
 function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [dropPos, setDropPos] = useState<{ top: number; right: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
   const status = current as keyof typeof STATUS_CONFIG;
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
   const StatusIcon = cfg.icon;
 
+  const handleOpen = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setDropPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    }
+    setOpen(v => !v);
+  };
+
+  // Close on outside click — must check both the trigger wrapper AND the portal dropdown
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      const inTrigger = ref.current?.contains(target);
+      const inDrop = dropRef.current?.contains(target);
+      if (!inTrigger && !inDrop) setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
+  // Close on scroll or resize (position would go stale)
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        ref={btnRef}
+        onClick={handleOpen}
         className={cn(
           "flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-all hover:scale-105 cursor-pointer",
           cfg.bg,
@@ -698,8 +724,12 @@ function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: 
         {cfg.label}
         <ChevronDown size={9} className="ml-0.5 opacity-60" />
       </button>
-      {open && (
-        <div className="absolute z-50 top-full mt-1 right-0 bg-card border border-border rounded-lg shadow-xl py-1 min-w-[120px]">
+      {open && dropPos && createPortal(
+        <div
+          ref={dropRef}
+          style={{ top: dropPos.top, right: dropPos.right }}
+          className="fixed z-[9999] bg-card border border-border rounded-lg shadow-xl py-1 min-w-[120px]"
+        >
           {ALL_STATUSES.map((s) => {
             const c = STATUS_CONFIG[s];
             const Icon = c.icon;
@@ -722,7 +752,8 @@ function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: 
               </button>
             );
           })}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

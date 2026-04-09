@@ -547,6 +547,20 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       if (effEnd < effStart + 0.5) {
         return res.status(400).json({ message: "activeEnd must be at least 0.5h after activeStart" });
       }
+      // OT cap: activeEnd cannot exceed base scheduled end + 2h
+      const normBaseEnd = normaliseEndUtcServer(existing.startUtc, existing.endUtc);
+      if (effEnd > normBaseEnd + 2) {
+        return res.status(400).json({
+          message: `Cannot extend more than 2h past scheduled end (max ${normBaseEnd + 2})`,
+        });
+      }
+      // Combined duration cap: total active window ≤ baseDuration + 2h
+      const baseDuration = normBaseEnd - existing.startUtc;
+      if (effEnd - effStart > baseDuration + 2) {
+        return res.status(400).json({
+          message: `Total active window cannot exceed base duration + 2h (max ${baseDuration + 2}h)`,
+        });
+      }
     }
 
     // BUG-01: Auto-clear breakStart if the new effective window crosses it
