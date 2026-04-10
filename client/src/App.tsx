@@ -116,7 +116,7 @@ function AccessGate({ onSelectMode }: { onSelectMode: (mode: AccessMode, session
   }
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-background px-4">
+    <div className="h-dvh w-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm border border-border rounded-xl bg-card p-5 space-y-4">
         <div>
           <h1 className="text-base font-semibold">ShiftClock Access</h1>
@@ -180,7 +180,7 @@ function AgentSelectorPopup({
   };
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-background px-4">
+    <div className="h-dvh w-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm border border-border rounded-xl bg-card p-5 space-y-4">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-xs">← Back</button>
@@ -287,7 +287,7 @@ export default function App() {
         <AdminProvider>
           <Router hook={useHashLocation}>
             <DragScrollProvider>
-              <div className="flex h-screen overflow-hidden bg-background">
+              <div className="flex h-dvh overflow-hidden bg-background">
                 <Sidebar
                   agentSession={agentSession}
                   isOnBreak={isOnBreak}

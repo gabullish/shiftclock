@@ -54,7 +54,7 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="w-14 sm:w-16 lg:w-56 flex flex-col border-r border-border bg-sidebar shrink-0 h-screen overflow-hidden">
+    <aside className="w-14 sm:w-16 lg:w-56 flex flex-col border-r border-border bg-sidebar shrink-0 h-dvh overflow-hidden">
       {/* Logo */}
       <div className="h-14 flex items-center px-2.5 sm:px-3 lg:px-5 border-b border-border shrink-0">
         <div className="flex items-center gap-2.5">
@@ -81,7 +81,7 @@ export default function Sidebar({
             <Link
               href={href}
               className={cn(
-                "flex items-center gap-3 px-2.5 py-2 rounded-md text-sm font-medium transition-all duration-150 hover-elevate cursor-pointer",
+                "flex items-center gap-3 px-2.5 py-2.5 min-h-[44px] rounded-md text-sm font-medium transition-all duration-150 hover-elevate cursor-pointer",
                 location === href
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -100,7 +100,7 @@ export default function Sidebar({
                       key={vLabel}
                       onClick={() => switchView(mode, scope)}
                       className={cn(
-                        "flex items-center gap-3 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-150 w-full text-left",
+                        "flex items-center gap-3 px-2 py-2 min-h-[36px] rounded-md text-xs font-medium transition-all duration-150 w-full text-left",
                         isActive
                           ? "bg-primary/15 text-primary"
                           : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -122,7 +122,7 @@ export default function Sidebar({
         <button
           onClick={() => setDragScrollEnabled(!dragScrollEnabled)}
           className={cn(
-            "w-full flex items-center gap-2 rounded-md border px-2 py-1.5 text-[10px] transition-colors",
+            "w-full flex items-center gap-2 rounded-md border px-2 py-2 min-h-[36px] text-xs transition-colors",
             dragScrollEnabled
               ? "border-primary/40 bg-primary/10 text-primary"
               : "border-border text-muted-foreground hover:text-foreground"

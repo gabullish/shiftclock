@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift, OvertimeLog } from "@shared/schema";
@@ -257,7 +257,7 @@ function AgentBreakControl({
       <button
         onClick={isOnBreak ? onBreakEnd : onBreakStart}
         className={cn(
-          "w-full text-[10px] py-1.5 rounded border transition-colors flex items-center justify-center gap-1",
+          "w-full text-xs py-2 min-h-[36px] rounded border transition-colors flex items-center justify-center gap-1",
           isOnBreak
             ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
             : "border-border text-muted-foreground hover:text-foreground"
@@ -943,7 +943,7 @@ export default function Dashboard() {
         {/* ── Online now bar — clock + day timeline only ── */}
         {!isMulti && isSelectedDateToday && (
           <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4 lg:px-6 border-b border-border bg-card/20 shrink-0">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
+            <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium shrink-0">Online now</span>
             {onlineAgents.length === 0 ? (
               <span className="text-[11px] text-muted-foreground">No agents currently on shift</span>
             ) : (
@@ -978,7 +978,7 @@ export default function Dashboard() {
             {/* Break-soon callout — right side of the strip */}
             {agentsBreakSoon.length > 0 && (
               <div className="flex items-center gap-1.5 ml-auto shrink-0">
-                <span className="text-[9px] text-amber-400/70 uppercase tracking-wider font-medium">Break soon</span>
+                <span className="text-[10px] text-amber-400/70 uppercase tracking-wider font-medium">Break soon</span>
                 {agentsBreakSoon.map(agent => {
                   const bShift = todayShifts.find(s => s.agentId === agent.id && s.breakStart != null);
                   const minsUntil = bShift?.breakStart != null
@@ -1033,7 +1033,7 @@ export default function Dashboard() {
           ) : (
             /* ── Clock mode: centred layout + right panel ── */
             <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
-              <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 overflow-hidden min-w-0 relative min-h-[220px]">
+              <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 overflow-hidden min-w-0 relative min-h-[220px] md:min-h-0">
                 {!hasShiftsToday ? (
                     <EmptyState
                       isWeekend={isWeekend}
@@ -1065,9 +1065,10 @@ export default function Dashboard() {
                 )}
 
                 {hasShiftsToday && (
-                  <div className="flex flex-wrap gap-1.5 justify-center mt-3 max-w-2xl">
+                  <div className="flex flex-wrap gap-1.5 justify-center mt-3 max-w-2xl" style={{ pointerEvents: "none" }}>
                     <button onClick={toggleAll}
-                      className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
+                      className="text-xs px-2.5 py-1 min-h-[30px] rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all flex items-center"
+                      style={{ pointerEvents: "auto" }}>
                       {visible.size === agents.length ? "Hide all" : "Show all"}
                     </button>
                     {agents.map(agent => {
@@ -1079,7 +1080,7 @@ export default function Dashboard() {
                         onMouseLeave={() => setHighlighted(null)}
                         data-testid={`toggle-agent-${agent.id}`}
                         className={cn(
-                          "text-[10px] px-2.5 py-1 rounded-full border font-medium transition-all duration-150",
+                          "text-xs px-2.5 py-1.5 min-h-[30px] flex items-center rounded-full border font-medium transition-all duration-150",
                           visible.has(agent.id)
                             ? isOnBreak
                               ? "ring-1 ring-amber-400/70 animate-pulse"
@@ -1087,6 +1088,7 @@ export default function Dashboard() {
                             : "opacity-40 grayscale"
                         )}
                         style={{
+                          pointerEvents: "auto",
                           borderColor: isOnBreak ? "rgba(251,191,36,0.5)" : agent.color + "60",
                           backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
                           color: isOnBreak ? "rgb(252,211,77)" : visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
@@ -1104,7 +1106,7 @@ export default function Dashboard() {
               </div>
 
               {/* Right panel */}
-              <div className="w-full md:w-64 lg:w-72 xl:w-80 flex flex-col border-t md:border-t-0 md:border-l border-border overflow-y-auto shrink-0 md:min-h-0 max-h-[45vh] md:max-h-none">
+              <div className="w-full md:w-64 lg:w-72 xl:w-80 flex flex-col border-t md:border-t-0 md:border-l border-border overflow-y-auto shrink-0 md:min-h-0 max-h-[42vh] md:max-h-none">
                 <div className="grid grid-cols-3 border-b border-border shrink-0">
                   <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
                   <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
@@ -1328,8 +1330,8 @@ function UnifiedTimeline({
   onOpenOvertime: (record: OvertimeLog) => void;
 }) {
   const canClaimCoverage = isAdmin || agentSessionId != null;
-  const PX_PER_HOUR = 56;
-  const LABEL_W     = 120;
+  const PX_PER_HOUR = window.innerWidth < 768 ? 36 : window.innerWidth < 1024 ? 46 : 56;
+  const LABEL_W     = window.innerWidth < 768 ? 80 : 120;
   const RULER_H     = 50;
   const COV_H       = 14;
   const ROW_H       = agents.length > 12 ? 28 : agents.length > 8 ? 32 : 38;
@@ -1704,11 +1706,12 @@ function UnifiedTimeline({
   };
 
   const renderDayRuler = (offsetPx: number) => {
-    return gridHours.map(h => {
-      const x        = offsetPx + h * PX_PER_HOUR;
-      const isMajor  = h % 6 === 0;
-      return (
-        <div key={`ruler-${offsetPx}-${h}`} style={{ position: "absolute", left: x, top: 0, bottom: 0 }}>
+    const items: JSX.Element[] = [];
+    for (let h = 0; h <= 24; h++) {
+      const x       = offsetPx + h * PX_PER_HOUR;
+      const isMajor = h % 6 === 0;
+      items.push(
+        <div key={`hr-${offsetPx}-${h}`} style={{ position: "absolute", left: x, top: 0, bottom: 0 }}>
           <div style={{
             position: "absolute",
             top: isMajor ? 0 : RULER_H - 10,
@@ -1727,7 +1730,25 @@ function UnifiedTimeline({
           )}
         </div>
       );
-    });
+      if (h < 24) {
+        for (let m = 1; m <= 11; m++) {
+          const mx        = x + m * (PX_PER_HOUR / 12);
+          const isHalf    = m === 6;
+          const isQuarter = m === 3 || m === 9;
+          const top   = isHalf ? RULER_H - 9 : isQuarter ? RULER_H - 6 : RULER_H - 3;
+          const color = isHalf ? "rgba(255,255,255,0.35)" : isQuarter ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.12)";
+          items.push(
+            <div key={`min-${offsetPx}-${h}-${m}`} style={{
+              position: "absolute",
+              left: mx,
+              top, bottom: 0, width: 1,
+              backgroundColor: color,
+            }} />
+          );
+        }
+      }
+    }
+    return items;
   };
 
   return (
@@ -1826,23 +1847,47 @@ function UnifiedTimeline({
               ) : (
                 <>
                   {Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
-                    if (h % 2 !== 0) return null;
-                    const x        = h * PX_PER_HOUR;
-                    const localH   = h % 24;
-                    const isMid    = localH === 0;
+                    const x      = h * PX_PER_HOUR;
+                    const localH = h % 24;
+                    const isMid  = localH === 0;
+                    const isEven = h % 2 === 0;
                     return (
-                      <div key={h} style={{ position: "absolute", left: x, top: 0, bottom: 0 }}>
-                        <div style={{
-                          position: "absolute",
-                          top: isMid ? 0 : RULER_H - 8, bottom: 0, width: 1,
-                          backgroundColor: isMid ? "hsl(var(--border))" : "hsl(var(--border) / 0.4)",
-                        }} />
-                        {!isMid && (
-                          <span style={{ position: "absolute", bottom: 2, left: 2, fontSize: 8, fontFamily: "monospace", color: "hsl(var(--muted-foreground))", whiteSpace: "nowrap" }}>
-                            {localH.toString().padStart(2, "0")}
-                          </span>
+                      <Fragment key={`mh-${h}`}>
+                        {/* Hour tick */}
+                        <div style={{ position: "absolute", left: x, top: 0, bottom: 0 }}>
+                          <div style={{
+                            position: "absolute",
+                            top: isMid ? 0 : isEven ? RULER_H - 8 : RULER_H - 5,
+                            bottom: 0, width: 1,
+                            backgroundColor: isMid ? "hsl(var(--border))" : isEven ? "hsl(var(--border) / 0.4)" : "hsl(var(--border) / 0.2)",
+                          }} />
+                          {isEven && !isMid && (
+                            <span style={{ position: "absolute", bottom: 2, left: 2, fontSize: 8, fontFamily: "monospace", color: "hsl(var(--muted-foreground))", whiteSpace: "nowrap" }}>
+                              {localH.toString().padStart(2, "0")}
+                            </span>
+                          )}
+                        </div>
+                        {/* 30-min and 15-min sub-ticks */}
+                        {h < TOTAL_HOURS && (
+                          <>
+                            <div style={{
+                              position: "absolute", left: x + PX_PER_HOUR / 2,
+                              top: RULER_H - 5, bottom: 0, width: 1,
+                              backgroundColor: "rgba(255,255,255,0.28)",
+                            }} />
+                            <div style={{
+                              position: "absolute", left: x + PX_PER_HOUR / 4,
+                              top: RULER_H - 3, bottom: 0, width: 1,
+                              backgroundColor: "rgba(255,255,255,0.15)",
+                            }} />
+                            <div style={{
+                              position: "absolute", left: x + PX_PER_HOUR * 3 / 4,
+                              top: RULER_H - 3, bottom: 0, width: 1,
+                              backgroundColor: "rgba(255,255,255,0.15)",
+                            }} />
+                          </>
                         )}
-                      </div>
+                      </Fragment>
                     );
                   })}
                   {days!.map(day => {
@@ -2076,8 +2121,8 @@ function ClockVisualizer({
   const now         = new Date();
   const secAngle    = (now.getUTCSeconds() / 60) * 360 - 90;
 
-  const NON_HOVER_START = 9;
-  const NON_HOVER_END   = 15;
+  const NON_HOVER_START = 11;
+  const NON_HOVER_END   = 13;
 
   const interactiveParts = (start: number, end: number) => {
     if (end <= NON_HOVER_START || start >= NON_HOVER_END) return [{ start, end }];
@@ -2092,16 +2137,31 @@ function ClockVisualizer({
   const gapRanges = findGapRanges(coverage);
 
   return (
-    <div className="relative flex items-center justify-center">
+    <div className="relative flex items-center justify-center w-full">
       <svg
         ref={svgRef}
         viewBox={`0 0 ${SIZE} ${SIZE}`}
-        width={SIZE} height={SIZE}
         className="overflow-visible"
-        style={{ filter: "drop-shadow(0 0 30px rgba(0,0,0,0.8))" }}
+        style={{ width: `min(${SIZE}px, 100%)`, height: "auto", filter: "drop-shadow(0 0 30px rgba(0,0,0,0.8))" }}
         onMouseLeave={() => { setHighlighted(null); setTooltipInfo(null); }}
       >
-        <circle cx={CX} cy={CY} r={HEAT_R + 18} fill="none" stroke="hsl(224 14% 16%)" strokeWidth="1" opacity="0.6" />
+        <circle cx={CX} cy={CY} r={HEAT_R + 4} fill="none" stroke="hsl(224 14% 16%)" strokeWidth="1" opacity="0.6" />
+
+        {/* ── Outer ring tick marks — 288 ticks (every 5 min), radiating outside boundary ring ── */}
+        {Array.from({ length: 288 }, (_, i) => {
+          const angle    = hourToAngle(i / 12);
+          const isMajor  = i % 72 === 0;   // 6h: 00, 06, 12, 18
+          const isHour   = i % 12 === 0;   // every 1h
+          const isHalf   = i % 6 === 0;    // every 30min
+          const innerR   = HEAT_R + 5;
+          const outerR   = isMajor ? HEAT_R + 22 : isHour ? HEAT_R + 16 : isHalf ? HEAT_R + 12 : HEAT_R + 9;
+          const color    = isMajor ? "hsl(51 100% 50%)" : isHour ? "rgba(255,255,255,0.60)" : isHalf ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.18)";
+          const sw       = isMajor ? 1.5 : isHour ? 1.0 : isHalf ? 0.75 : 0.6;
+          const p1 = polarToCartesian(CX, CY, innerR, angle);
+          const p2 = polarToCartesian(CX, CY, outerR, angle);
+          return <line key={`otick-${i}`} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={color} strokeWidth={sw} />;
+        })}
+
         <circle cx={CX} cy={CY} r={BASE_R - 8} fill="hsl(224 18% 11%)" stroke="hsl(224 14% 22%)" strokeWidth="1.5" />
 
         {Array.from({ length: 48 }, (_, i) => {
@@ -2139,14 +2199,14 @@ function ClockVisualizer({
 
         {Array.from({ length: 24 }, (_, h) => {
           const isMajor = h % 6 === 0;
-          const labelR  = HEAT_R + (isMajor ? 18 : 14);
+          const labelR  = HEAT_R + (isMajor ? 30 : 27);
           const p = polarToCartesian(CX, CY, labelR, hourToAngle(h));
           return (
             <text key={`outer-${h}`} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-              fontSize={isMajor ? 7 : 5.5}
-              fill={isMajor ? "rgba(255,215,0,0.95)" : "rgba(255,255,255,0.45)"}
+              fontSize={isMajor ? 8.5 : 6.5}
+              fill={isMajor ? "rgba(255,255,255,0.90)" : "rgba(255,255,255,0.45)"}
               fontFamily="Space Mono, monospace"
-              fontWeight={isMajor ? "700" : "500"}
+              fontWeight={isMajor ? "700" : "400"}
               style={{ pointerEvents: "none" }}
             >
               {h.toString().padStart(2, "0")}
@@ -2822,8 +2882,8 @@ function ShiftLever({
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
-          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
-          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
           {hitDriftFloor && (
             <span className="text-[9px] text-amber-400/80" title="Maximum 8h before shift start">max -8h</span>
@@ -2835,8 +2895,8 @@ function ShiftLever({
             <span className="text-[9px] text-amber-400/80" title="Maximum 2h past scheduled end">max +2h</span>
           )}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
-          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
-          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[9px] px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
         </div>
       </div>
 

@@ -595,12 +595,12 @@ function ApplyWeekRow({
   };
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       <select
         value={startH}
         onChange={e => setStartH(parseFloat(e.target.value))}
         className={cn(
-          "w-14 text-[9px] bg-muted rounded px-1 py-0.5 font-mono border transition-colors",
+          "w-16 text-xs bg-muted rounded px-1 py-1 font-mono border transition-colors min-h-[28px]",
           isDirty ? "border-amber-400/60" : "border-border"
         )}
         title="Start UTC"
@@ -609,12 +609,12 @@ function ApplyWeekRow({
           <option key={h} value={h}>{formatHour(h)}</option>
         ))}
       </select>
-      <span className="text-[9px] text-muted-foreground">–</span>
+      <span className="text-[10px] text-muted-foreground">–</span>
       <select
         value={endH}
         onChange={e => setEndH(parseFloat(e.target.value))}
         className={cn(
-          "w-14 text-[9px] bg-muted rounded px-1 py-0.5 font-mono border transition-colors",
+          "w-16 text-xs bg-muted rounded px-1 py-1 font-mono border transition-colors min-h-[28px]",
           isDirty ? "border-amber-400/60" : "border-border"
         )}
         title="End UTC"
@@ -624,14 +624,14 @@ function ApplyWeekRow({
         ))}
       </select>
       {overnight && (
-        <span className="text-[9px] text-amber-400 font-mono" title={`${dur}h overnight`}>+1 {dur}h</span>
+        <span className="text-[10px] text-amber-400 font-mono" title={`${dur}h overnight`}>+1 {dur}h</span>
       )}
       <button
         onClick={handleApplyClick}
         disabled={loading || dur <= 0}
         title="Apply week template to all working days"
         className={cn(
-          "text-[9px] px-2 py-1 rounded flex items-center gap-1 transition-all duration-200",
+          "text-xs px-2 py-1 min-h-[28px] rounded flex items-center gap-1 transition-all duration-200",
           "disabled:opacity-50 hover:opacity-90",
           isDirty
             ? "bg-amber-500/20 text-amber-300 border border-amber-400/60 ring-1 ring-amber-400/40 animate-pulse"

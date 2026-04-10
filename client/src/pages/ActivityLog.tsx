@@ -728,7 +728,7 @@ function StatusDropdown({ current, onSelect }: { current: string; onSelect: (s: 
         <div
           ref={dropRef}
           style={{ top: dropPos.top, right: dropPos.right }}
-          className="fixed z-[9999] bg-card border border-border rounded-lg shadow-xl py-1 min-w-[120px]"
+          className="fixed z-50 bg-card border border-border rounded-lg shadow-xl py-1 min-w-[120px]"
         >
           {ALL_STATUSES.map((s) => {
             const c = STATUS_CONFIG[s];
