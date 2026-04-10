@@ -4,6 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift, InsertShift } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useSoothingSounds } from "@/hooks/use-soothing-sounds";
 import { Plus, Pencil, Trash2, Clock, CalendarDays, Download, Upload, Lock } from "lucide-react";
@@ -50,8 +51,11 @@ export default function Profiles() {
   const { playSoftClick, playSuccess } = useSoothingSounds();
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showFullImportWarning, setShowFullImportWarning] = useState(false);
+  const [pendingFullImportData, setPendingFullImportData] = useState<any>(null);
   const prevAgentRef = useRef<{ id: number; data: Partial<AgentFormData> } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  const fullImportFileRef = useRef<HTMLInputElement>(null);
 
   const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"] });
@@ -264,9 +268,68 @@ export default function Profiles() {
     if (importFileRef.current) importFileRef.current.value = "";
   };
 
+  const handleFullImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed.agents)) {
+        toast({ title: "Invalid import file", variant: "destructive" });
+        return;
+      }
+      if (parsed.importMode === "full") {
+        setPendingFullImportData(parsed);
+        setShowFullImportWarning(true);
+      } else {
+        toast({ title: "Not a full import file — use regular Import instead", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Import failed — check the file format", variant: "destructive" });
+    }
+    if (fullImportFileRef.current) fullImportFileRef.current.value = "";
+  };
+
+  const performFullImport = async () => {
+    if (!pendingFullImportData) return;
+    setShowFullImportWarning(false);
+    try {
+      const res = await fetch("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-token": getEffectiveAdminToken() },
+        body: JSON.stringify({ ...pendingFullImportData, importMode: "full" }),
+      });
+      if (!res.ok) {
+        const text = (await res.text()) || `HTTP ${res.status}`;
+        throw new Error(text);
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      toast({ title: "Full import completed — all data replaced" });
+      setPendingFullImportData(null);
+    } catch (error) {
+      toast({ title: "Full import failed", variant: "destructive" });
+    }
+  };
+
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="p-3 sm:p-4 lg:p-6 max-w-5xl mx-auto">
+    <>
+      {/* Floating apply button for pending changes */}
+      {dirtyCount > 0 && isAdmin && (
+        <button
+          onClick={handleApplyAll}
+          disabled={applyWeekMutation.isPending}
+          className="fixed bottom-6 right-6 flex items-center gap-1.5 px-3 py-2 bg-yellow-400 hover:bg-yellow-300 text-yellow-950 font-semibold rounded-md shadow-lg transition-all duration-200 disabled:opacity-50 z-40 animate-pulse text-sm"
+          title={`Apply pending template changes for ${dirtyCount} agent${dirtyCount > 1 ? "s" : ""}`}
+        >
+          <CalendarDays size={14} />
+          Apply All ({dirtyCount})
+        </button>
+      )}
+      <div className="h-full overflow-y-auto">
+        <div className="p-3 sm:p-4 lg:p-6 max-w-5xl mx-auto">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-6">
           <div>
             <h1 className="text-lg font-semibold">Agents</h1>
@@ -282,6 +345,7 @@ export default function Profiles() {
             {isAdmin && (
               <>
                 <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
+                <input ref={fullImportFileRef} type="file" accept=".json" className="hidden" onChange={handleFullImportFile} />
                 <button
                   onClick={handleExportSettings}
                   className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground border border-border rounded-md px-2.5 py-1.5 transition-colors"
@@ -295,6 +359,13 @@ export default function Profiles() {
                   title="Restore agents and shifts from a backup (replaces current data)"
                 >
                   <Upload size={12} /> Import
+                </button>
+                <button
+                  onClick={() => fullImportFileRef.current?.click()}
+                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground border border-amber-300/40 rounded-md px-2.5 py-1.5 transition-colors"
+                  title="Full import with retroactive shifts (beta)"
+                >
+                  <Upload size={12} /> Full Import (beta)
                 </button>
                 {dirtyCount > 0 && (
                   <button
@@ -473,6 +544,27 @@ export default function Profiles() {
           })}
         </div>
       </div>
-    </div>
+      </div>
+
+      <AlertDialog open={showFullImportWarning} onOpenChange={setShowFullImportWarning}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace All Data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete all existing agents, shifts, overtime logs, and activity history, then replace everything with the imported data.
+              <br />
+              <br />
+              <strong>This action cannot be undone.</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex gap-2 justify-end">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={performFullImport} className="bg-destructive hover:bg-destructive/90">
+              Replace Everything
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

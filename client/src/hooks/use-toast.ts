@@ -7,12 +7,15 @@ import type {
 
 const TOAST_LIMIT = 3
 const TOAST_REMOVE_DELAY = 1000000
+const DEFAULT_TOAST_DURATION = 1000
 
 type ToasterToast = ToastProps & {
   id: string
   title?: React.ReactNode
   description?: React.ReactNode
   action?: ToastActionElement
+  duration?: number
+  count?: number
 }
 
 const actionTypes = {
@@ -139,8 +142,34 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, "id">
 
-function toast({ ...props }: Toast) {
+function toast({ duration = DEFAULT_TOAST_DURATION, ...props }: Toast) {
   const id = genId()
+  const titleStr = typeof props.title === 'string' ? props.title : ''
+
+  // Check for duplicate message in recent toasts
+  const existingToast = memoryState.toasts.find(
+    t => typeof t.title === 'string' && t.title === titleStr && t.count !== undefined
+  )
+
+  if (existingToast && existingToast.id) {
+    // Update existing toast with incremented count
+    const newCount = (existingToast.count || 1) + 1
+    const update = (props: ToasterToast) =>
+      dispatch({
+        type: "UPDATE_TOAST",
+        toast: { ...props, id: existingToast.id },
+      })
+    update({
+      ...existingToast,
+      count: newCount,
+      title: `${titleStr} ×${newCount}`,
+    })
+    return {
+      id: existingToast.id,
+      dismiss: () => dispatch({ type: "DISMISS_TOAST", toastId: existingToast.id }),
+      update,
+    }
+  }
 
   const update = (props: ToasterToast) =>
     dispatch({
@@ -155,11 +184,20 @@ function toast({ ...props }: Toast) {
       ...props,
       id,
       open: true,
+      duration,
+      count: 1,
       onOpenChange: (open) => {
         if (!open) dismiss()
       },
     },
   })
+
+  // Auto-dismiss after duration
+  const timeout = setTimeout(() => {
+    dismiss()
+  }, duration)
+
+  toastTimeouts.set(id, timeout)
 
   return {
     id: id,

@@ -55,7 +55,10 @@ export interface IStorage {
   // Backup / restore
   exportAll(): { agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] };
   importAll(data: {
-    agents: Array<Omit<Agent, "id"> & { shifts: Array<Omit<Shift, "id" | "agentId">> }>;
+    agents: Array<Omit<Agent, "id"> & {
+      shifts: Array<Omit<Shift, "id" | "agentId">>;
+      historicalShifts?: Array<{ date: string; offWeekend: number; note?: string | null }>;
+    }>;
     overtime?: Array<Omit<OvertimeLog, "id">>;
     logs?: Array<Omit<AgentLog, "id">>;
   }): void;
@@ -290,17 +293,35 @@ export const storage: IStorage = {
     }
 
     const oldToNewAgentId = new Map<number, number>();
+    const agentNameToId = new Map<string, number>();
 
     for (const agentData of data.agents) {
-      const { shifts: agentShifts, id: oldAgentId, ...agentFields } = agentData as any;
+      const { shifts: agentShifts, historicalShifts, id: oldAgentId, ...agentFields } = agentData as any;
       const newAgent = db.insert(agents).values(agentFields).returning().get();
       if (typeof oldAgentId === "number") {
         oldToNewAgentId.set(oldAgentId, newAgent.id);
       }
+      agentNameToId.set((agentFields as any).name, newAgent.id);
+
       for (const s of (agentShifts ?? [])) {
         db.insert(shifts)
           .values({ ...s, agentId: newAgent.id, activeStart: null, activeEnd: null })
           .run();
+      }
+
+      // Convert historical shifts to agent logs
+      if (Array.isArray(historicalShifts)) {
+        for (const hs of historicalShifts) {
+          db.insert(agentLogs).values({
+            agentId: newAgent.id,
+            date: hs.date,
+            type: "schedule_change",
+            description: `Imported retroactive shift: ${hs.note || "Weekly pattern"}`,
+            notes: hs.note || null,
+            actionType: "admin_import",
+            createdAt: new Date().toISOString(),
+          }).run();
+        }
       }
     }
 

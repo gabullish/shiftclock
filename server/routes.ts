@@ -6,7 +6,7 @@ import { db } from "./db";
 import { agents, shifts } from "@shared/schema";
 
 type NormalizedBackup = {
-  agents: Array<Record<string, unknown> & { id?: number; shifts: Array<Record<string, unknown>> }>;
+  agents: Array<Record<string, unknown> & { id?: number; shifts: Array<Record<string, unknown>>; historicalShifts?: Array<Record<string, unknown>> }>;
   overtime: Array<Record<string, unknown>>;
   logs: Array<Record<string, unknown>>;
 };
@@ -262,6 +262,22 @@ function normalizeImportPayload(payload: unknown): NormalizedBackup {
         };
       });
 
+    // Extract and validate historicalShifts (optional)
+    const historicalShifts = Array.isArray(row.historicalShifts) ? row.historicalShifts : [];
+    const cleanedHistoricalShifts = historicalShifts
+      .filter((h) => {
+        const hs = h as Record<string, unknown>;
+        return isIsoDate(hs.date) && typeof hs.offWeekend === "number";
+      })
+      .map((h) => {
+        const hs = h as Record<string, unknown>;
+        return {
+          date: hs.date as string,
+          offWeekend: Number(hs.offWeekend),
+          note: typeof hs.note === "string" ? hs.note : null,
+        };
+      });
+
     return {
       id: typeof row.id === "number" ? row.id : undefined,
       name: typeof row.name === "string" ? row.name : "Unnamed Agent",
@@ -272,6 +288,7 @@ function normalizeImportPayload(payload: unknown): NormalizedBackup {
       offWeekend: typeof row.offWeekend === "number" ? row.offWeekend : 1,
       offCycleStart: typeof row.offCycleStart === "string" ? row.offCycleStart : null,
       shifts: cleanedNestedShifts,
+      historicalShifts: cleanedHistoricalShifts,
     };
   });
 

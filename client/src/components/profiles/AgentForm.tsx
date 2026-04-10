@@ -28,14 +28,14 @@ const TIMEZONES = [
 ];
 
 export const DEFAULT_COLORS = [
-  "#FFD700", "#FFA500", "#FF6B35", "#E63946", "#7B2FBE",
-  "#2196F3", "#00BCD4", "#4CAF50", "#FF4081", "#00E676",
-  "#FF9800", "#9C27B0", "#03A9F4",
+  "#C4A574", "#D4A574", "#C69B7B", "#B8956A", "#A68A64",
+  "#9B8B7E", "#B5A69D", "#C4B5A0", "#D4C4B0", "#E5D5C4",
+  "#C8A88C", "#B39B8D", "#A89080",
 ];
 
 export function AgentForm({
   defaultValues,
-  defaultColor = "#FFD700",
+  defaultColor = "#C4A574",
   onSubmit,
   loading,
   playSuccess,

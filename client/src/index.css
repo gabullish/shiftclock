@@ -5,13 +5,13 @@
 @tailwind components;
 @tailwind utilities;
 
-/* SOLFLARE DARK THEME — Deep Matte Slate + Yellow */
+/* PASTEL DARK THEME — Muted Slate + Soft Amber */
 :root {
-  --button-outline: rgba(255,215,0, .15);
-  --badge-outline: rgba(255,215,0, .08);
+  --button-outline: rgba(180, 140, 90, .12);
+  --badge-outline: rgba(180, 140, 90, .06);
   --opaque-button-border-intensity: 9;
-  --elevate-1: rgba(255,215,0, .04);
-  --elevate-2: rgba(255,215,0, .10);
+  --elevate-1: rgba(180, 140, 90, .03);
+  --elevate-2: rgba(180, 140, 90, .08);
 
   /* Deep matte slate — not pure black, warm undertone for better arc contrast */
   --background: 224 16% 10%;        /* #141720 — deep blue-slate */
@@ -23,33 +23,33 @@
   --sidebar: 224 18% 8%;            /* #0f1219 — slightly darker sidebar */
   --sidebar-foreground: 220 15% 94%;
   --sidebar-border: 224 14% 16%;    /* #1e2433 */
-  --sidebar-primary: 51 100% 50%;
+  --sidebar-primary: 38 70% 54%;
   --sidebar-primary-foreground: 224 16% 8%;
   --sidebar-accent: 224 16% 16%;    /* #1c2230 */
   --sidebar-accent-foreground: 220 15% 94%;
-  --sidebar-ring: 51 100% 50%;
+  --sidebar-ring: 38 70% 54%;
   --popover: 224 16% 12%;           /* #161b26 */
   --popover-foreground: 220 15% 94%;
   --popover-border: 224 14% 20%;
-  --primary: 51 100% 50%;
+  --primary: 38 70% 54%;
   --primary-foreground: 224 16% 8%;
   --secondary: 224 14% 17%;         /* #1f2535 */
   --secondary-foreground: 220 15% 94%;
   --muted: 224 14% 18%;             /* #222838 */
   --muted-foreground: 220 10% 58%;  /* #8a91a3 — readable muted text */
-  --accent: 224 14% 17%;
-  --accent-foreground: 220 15% 94%;
-  --destructive: 0 84% 60%;
+  --accent: 38 70% 54%;
+  --accent-foreground: 224 16% 8%;
+  --destructive: 0 65% 55%;
   --destructive-foreground: 0 0% 98%;
   --input: 224 14% 22%;             /* #282f42 */
-  --ring: 51 100% 50%;
+  --ring: 38 70% 54%;
 
-  /* Chart colors — vivid for data viz */
-  --chart-1: 51 100% 50%;
-  --chart-2: 30 100% 55%;
-  --chart-3: 200 100% 50%;
-  --chart-4: 280 80% 60%;
-  --chart-5: 140 80% 50%;
+  /* Chart colors — soft pastels for data viz */
+  --chart-1: 38 70% 54%;
+  --chart-2: 30 60% 60%;
+  --chart-3: 200 60% 60%;
+  --chart-4: 280 50% 65%;
+  --chart-5: 140 50% 60%;
 
   --font-sans: 'Space Grotesk', sans-serif;
   --font-mono: 'Space Mono', monospace;
@@ -67,13 +67,13 @@
   --tracking-normal: -0.01em;
   --spacing: 0.25rem;
 
-  --sidebar-primary-border: hsl(51 100% 50%);
+  --sidebar-primary-border: hsl(38 70% 54%);
   --sidebar-accent-border: hsl(0 0% 12%);
-  --primary-border: hsl(51 100% 42%);
+  --primary-border: hsl(38 70% 50%);
   --secondary-border: hsl(0 0% 18%);
   --muted-border: hsl(0 0% 18%);
-  --accent-border: hsl(0 0% 18%);
-  --destructive-border: hsl(0 84% 45%);
+  --accent-border: hsl(38 70% 50%);
+  --destructive-border: hsl(0 65% 45%);
 }
 
 /* Force dark everywhere */
