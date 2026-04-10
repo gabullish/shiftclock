@@ -1,36 +1,53 @@
-import React, { createContext, useContext, useMemo, useState } from "react";
+// use-drag-scroll.tsx — pointer-capture drag scroll for the timeline canvas.
+// Uses setPointerCapture so the drag stays active even when the pointer leaves the element.
 
-type DragScrollContextValue = {
-  enabled: boolean;
-  setEnabled: (enabled: boolean) => void;
-};
+import { useRef, useState } from "react";
 
-const DragScrollContext = createContext<DragScrollContextValue | null>(null);
+const DRAG_THRESHOLD = 5; // px — below this we treat it as a click, not a drag
 
-const STORAGE_KEY = "drag-scroll-enabled";
+export function useDragScroll() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const startX    = useRef(0);
+  const scrollLeft = useRef(0);
+  const dragged   = useRef(false);
 
-export function DragScrollProvider({ children }: { children: React.ReactNode }) {
-  const [enabled, setEnabledState] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw == null ? true : raw === "1";
-  });
-
-  const setEnabled = (next: boolean) => {
-    setEnabledState(next);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
-    }
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ref.current) return;
+    ref.current.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    startX.current    = e.pageX - ref.current.offsetLeft;
+    scrollLeft.current = ref.current.scrollLeft;
+    dragged.current   = false;
   };
 
-  const value = useMemo(() => ({ enabled, setEnabled }), [enabled]);
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging || !ref.current) return;
+    const x    = e.pageX - ref.current.offsetLeft;
+    const walk = (x - startX.current) * 2.5;
+    if (Math.abs(walk) > DRAG_THRESHOLD) dragged.current = true;
+    ref.current.scrollLeft = scrollLeft.current - walk;
+  };
 
-  return <DragScrollContext.Provider value={value}>{children}</DragScrollContext.Provider>;
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ref.current) return;
+    ref.current.releasePointerCapture(e.pointerId);
+    setIsDragging(false);
+    dragged.current = false;
+  };
+
+  // Call this in onPointerDownCapture on interactive children to let clicks through
+  const stopDrag = (e: React.PointerEvent) => {
+    if (dragged.current) e.stopPropagation();
+  };
+
+  return {
+    ref,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerLeave: onPointerUp,
+    stopDrag,
+    isDragging,
+  };
 }
-
-export function useDragScrollPreference() {
-  const ctx = useContext(DragScrollContext);
-  if (!ctx) throw new Error("useDragScrollPreference must be used within DragScrollProvider");
-  return ctx;
-}
-

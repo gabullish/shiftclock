@@ -1,84 +1,21 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Agent, Shift } from "@shared/schema";
+import type { Agent, Shift, InsertShift } from "@shared/schema";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { useSoothingSounds } from "@/hooks/useSoothingSounds";
-import { Plus, Pencil, Trash2, Clock, Coffee, AlertTriangle, X, Lock, CalendarDays, Download, Upload } from "lucide-react";
+import { useSoothingSounds } from "@/hooks/use-soothing-sounds";
+import { Plus, Pencil, Trash2, Clock, CalendarDays, Download, Upload, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { getEffectiveAdminToken } from "@/lib/adminAccess";
-import { useAgentSession } from "@/App";
-
-const TIMEZONES = [
-  "UTC",
-  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-  "America/Sao_Paulo", "America/Bogota", "America/Santo_Domingo",
-  "America/Mexico_City", "America/Toronto",
-  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
-  "Europe/Zagreb", "Europe/Moscow",
-  "Africa/Johannesburg", "Africa/Casablanca", "Africa/Lagos",
-  "Africa/Nairobi", "Africa/Addis_Ababa",
-  "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok", "Asia/Singapore",
-  "Asia/Manila", "Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai",
-  "Australia/Sydney", "Australia/Melbourne",
-  "Pacific/Auckland", "Pacific/Honolulu",
-];
+import { useAgentSession } from "@/hooks/use-agent-session";
+import { AgentForm, AgentFormData, DEFAULT_COLORS } from "@/components/profiles/AgentForm";
+import { ShiftPill } from "@/components/profiles/ShiftPill";
+import { ApplyWeekRow } from "@/components/profiles/ApplyWeekRow";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-const DEFAULT_COLORS = [
-  "#FFD700", "#FFA500", "#FF6B35", "#E63946", "#7B2FBE",
-  "#2196F3", "#00BCD4", "#4CAF50", "#FF4081", "#00E676",
-  "#FF9800", "#9C27B0", "#03A9F4",
-];
-
-interface AgentFormData {
-  name: string;
-  color: string;
-  timezone: string;
-  role: string;
-  avatarUrl: string;
-}
-
-const HALF_HOUR_OPTIONS = Array.from({ length: 48 }, (_, i) => i * 0.5);
-
-function formatHour(h: number) {
-  const norm = ((h % 24) + 24) % 24;
-  const hh = Math.floor(norm);
-  const mm = Math.round((norm % 1) * 60);
-  return `${hh.toString().padStart(2, "00")}:${mm.toString().padStart(2, "0")}`;
-}
-
-function isOvernight(startUtc: number, endUtc: number) {
-  return endUtc < startUtc;
-}
-
-function shiftLabel(startUtc: number, endUtc: number, dayIdx?: number) {
-  const overnight = isOvernight(startUtc, endUtc);
-  if (overnight && dayIdx != null) {
-    const prevDay = DAYS[(dayIdx + 6) % 7];
-    const curDay = DAYS[dayIdx];
-    return `${prevDay}/${curDay} ${formatHour(startUtc)} – ${formatHour(endUtc)}`;
-  }
-  return `${formatHour(startUtc)} – ${formatHour(endUtc)}${overnight ? " (+1)" : ""}`;
-}
-
-function shiftDurH(startUtc: number, endUtc: number) {
-  return endUtc > startUtc ? endUtc - startUtc : 24 - startUtc + endUtc;
-}
-
-function isBreakBadTiming(breakStart: number, startUtc: number, endUtc: number): boolean {
-  const dur = shiftDurH(startUtc, endUtc);
-  let rel = breakStart - startUtc;
-  if (rel < 0) rel += 24;
-  return rel < 1.0 || rel + 0.5 > dur - 1.0;
-}
 
 function getOffDays(offWeekend: number): number[] {
   return offWeekend === 1 ? [0, 6] : [4, 5];
@@ -91,6 +28,19 @@ function seedFromShifts(shifts: Shift[]): { start: number; end: number } {
     start: ((s.startUtc % 24) + 24) % 24,
     end:   ((s.endUtc   % 24) + 24) % 24,
   };
+}
+
+function getLocalTime(tz: string) {
+  try {
+    return new Date().toLocaleTimeString("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return "??:??";
+  }
 }
 
 export default function Profiles() {
@@ -154,12 +104,12 @@ export default function Profiles() {
   });
 
   const upsertShiftMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/shifts", data),
+    mutationFn: (data: InsertShift) => apiRequest("POST", "/api/shifts", data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
   });
 
   const updateShiftMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: any }) =>
+    mutationFn: ({ id, data }: { id: number; data: Partial<InsertShift> }) =>
       apiRequest("PATCH", `/api/shifts/${id}`, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
   });
@@ -175,22 +125,18 @@ export default function Profiles() {
       return apiRequest("PATCH", `/api/agents/${id}`, { offWeekend, offCycleStart });
     },
     onSuccess: (_, variables) => {
-      // Mark this agent's Apply button dirty — the shift assignments need to be
-      // redistributed to the new working-day pattern
-      setOffTogglePending(prev => new Set([...prev, variables.id]));
+      setOffTogglePending(prev => new Set(prev).add(variables.id));
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       toast({ title: "Days off updated — click Apply to reassign shifts" });
     },
   });
 
-  // Tracks agents whose off-day pattern was toggled but Apply hasn't been clicked yet
   const [offTogglePending, setOffTogglePending] = useState<Set<number>>(new Set());
 
   const applyWeekMutation = useMutation({
     mutationFn: ({ id, startUtc, endUtc }: { id: number; startUtc: number; endUtc: number }) =>
       apiRequest("POST", `/api/agents/${id}/apply-week`, { startUtc, endUtc }),
     onSuccess: (_, variables) => {
-      // Clear the off-toggle pending flag for this agent
       setOffTogglePending(prev => {
         const next = new Set(prev);
         next.delete(variables.id);
@@ -201,7 +147,6 @@ export default function Profiles() {
     },
   });
 
-  // Track per-agent dirty state from ApplyWeekRow children
   const [dirtyAgentSettings, setDirtyAgentSettings] = useState<
     Record<number, { startH: number; endH: number }>
   >({});
@@ -218,15 +163,12 @@ export default function Profiles() {
     });
   };
 
-  // Merge off-toggle-pending agents into the dirty count for "Apply All"
   const allDirtyIds = new Set([
     ...Object.keys(dirtyAgentSettings).map(Number),
-    ...offTogglePending,
+    ...Array.from(offTogglePending),
   ]);
   const dirtyCount = allDirtyIds.size;
 
-  // ── Navigate-away guard ──────────────────────────────────────────────────────
-  // 1. Warn on browser refresh / tab close
   useEffect(() => {
     if (dirtyCount === 0) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -237,7 +179,6 @@ export default function Profiles() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirtyCount]);
 
-  // 2. Warn on in-app navigation (sidebar / any nav link)
   useEffect(() => {
     if (dirtyCount === 0) return;
     const handler = (e: MouseEvent) => {
@@ -251,16 +192,15 @@ export default function Profiles() {
         e.stopImmediatePropagation();
       }
     };
-    document.addEventListener("click", handler, true); // capture phase
+    document.addEventListener("click", handler, true);
     return () => document.removeEventListener("click", handler, true);
   }, [dirtyCount]);
 
   const handleApplyAll = () => {
     if (allDirtyIds.size === 0) return;
-    for (const agentId of allDirtyIds) {
+    for (const agentId of Array.from(allDirtyIds)) {
       const localSettings = dirtyAgentSettings[agentId];
       const agentShifts = allShifts.filter(s => s.agentId === agentId);
-      // Prefer local dirty values; fall back to current shift seed (covers off-toggle-only case)
       const { start, end } = localSettings
         ? { start: localSettings.startH, end: localSettings.endH }
         : seedFromShifts(agentShifts);
@@ -393,7 +333,7 @@ export default function Profiles() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-8">
+        <div className="space-y-3 sm:space-y-4">
           {agents.map(agent => {
             const agentShifts = allShifts.filter(s => s.agentId === agent.id);
             const offDays = getOffDays(agent.offWeekend ?? 1);
@@ -533,480 +473,6 @@ export default function Profiles() {
           })}
         </div>
       </div>
-    </div>
-  );
-}
-
-function getLocalTime(tz: string) {
-  try {
-    return new Date().toLocaleTimeString("en-US", {
-      timeZone: tz,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return "??:??";
-  }
-}
-
-function ApplyWeekRow({
-  agentId, agentShifts, offWeekend, onApply, loading, playSuccess, onDirtyChange, forceDirty,
-}: {
-  agentId: number;
-  agentShifts: Shift[];
-  offWeekend: number;
-  onApply: (startUtc: number, endUtc: number) => void;
-  loading: boolean;
-  playSuccess: () => void;
-  onDirtyChange?: (agentId: number, isDirty: boolean, startH: number, endH: number) => void;
-  forceDirty?: boolean;
-}) {
-  const seed = seedFromShifts(agentShifts);
-  const [startH, setStartH] = useState<number>(seed.start);
-  const [endH, setEndH]     = useState<number>(seed.end);
-
-  // Sync local state when shifts change externally (e.g. after import or another client applies)
-  const prevSeedRef = useRef({ start: seed.start, end: seed.end });
-  useEffect(() => {
-    const newSeed = seedFromShifts(agentShifts);
-    if (newSeed.start !== prevSeedRef.current.start || newSeed.end !== prevSeedRef.current.end) {
-      prevSeedRef.current = newSeed;
-      setStartH(newSeed.start);
-      setEndH(newSeed.end);
-    }
-  }, [agentShifts]);
-
-  const overnight  = endH <= startH;
-  const dur        = overnight ? 24 - startH + endH : endH - startH;
-  const serverSeed = seedFromShifts(agentShifts);
-  const isDirty    = forceDirty || startH !== serverSeed.start || endH !== serverSeed.end;
-
-  // Notify parent whenever dirty state changes
-  useEffect(() => {
-    onDirtyChange?.(agentId, isDirty, startH, endH);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDirty, startH, endH, agentId]);
-
-  const handleApplyClick = () => {
-    if (dur <= 0) return;
-    playSuccess();
-    onApply(startH, endH);
-  };
-
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      <select
-        value={startH}
-        onChange={e => setStartH(parseFloat(e.target.value))}
-        className={cn(
-          "w-16 text-xs bg-muted rounded px-1 py-1 font-mono border transition-colors min-h-[28px]",
-          isDirty ? "border-amber-400/60" : "border-border"
-        )}
-        title="Start UTC"
-      >
-        {HALF_HOUR_OPTIONS.map(h => (
-          <option key={h} value={h}>{formatHour(h)}</option>
-        ))}
-      </select>
-      <span className="text-[10px] text-muted-foreground">–</span>
-      <select
-        value={endH}
-        onChange={e => setEndH(parseFloat(e.target.value))}
-        className={cn(
-          "w-16 text-xs bg-muted rounded px-1 py-1 font-mono border transition-colors min-h-[28px]",
-          isDirty ? "border-amber-400/60" : "border-border"
-        )}
-        title="End UTC"
-      >
-        {HALF_HOUR_OPTIONS.map(h => (
-          <option key={h} value={h}>{formatHour(h)}{h <= startH ? " (+1)" : ""}</option>
-        ))}
-      </select>
-      {overnight && (
-        <span className="text-[10px] text-amber-400 font-mono" title={`${dur}h overnight`}>+1 {dur}h</span>
-      )}
-      <button
-        onClick={handleApplyClick}
-        disabled={loading || dur <= 0}
-        title="Apply week template to all working days"
-        className={cn(
-          "text-xs px-2 py-1 min-h-[28px] rounded flex items-center gap-1 transition-all duration-200",
-          "disabled:opacity-50 hover:opacity-90",
-          isDirty
-            ? "bg-amber-500/20 text-amber-300 border border-amber-400/60 ring-1 ring-amber-400/40 animate-pulse"
-            : "bg-primary text-primary-foreground border border-transparent"
-        )}
-      >
-        <CalendarDays size={9} />
-        Apply week
-      </button>
-    </div>
-  );
-}
-
-function AgentForm({
-  defaultValues,
-  defaultColor = "#FFD700",
-  onSubmit,
-  loading,
-  playSuccess,
-  playSoftClick,
-}: {
-  defaultValues?: AgentFormData;
-  defaultColor?: string;
-  onSubmit: (data: AgentFormData) => void;
-  loading: boolean;
-  playSuccess: () => void;
-  playSoftClick: () => void;
-}) {
-  const [form, setForm] = useState<AgentFormData>({
-    name: defaultValues?.name || "",
-    color: defaultValues?.color || defaultColor,
-    timezone: defaultValues?.timezone || "UTC",
-    role: defaultValues?.role || "Support Agent",
-    avatarUrl: defaultValues?.avatarUrl || "",
-  });
-
-  const set = (k: keyof AgentFormData, v: string) => setForm(f => ({ ...f, [k]: v }));
-
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); playSuccess(); onSubmit(form); }} className="space-y-4">
-      <div className="space-y-1.5">
-        <Label className="text-xs">Name</Label>
-        <Input
-          value={form.name}
-          onChange={e => set("name", e.target.value)}
-          placeholder="Agent name"
-          required
-          data-testid="input-agent-name"
-          className="bg-muted border-border text-sm"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label className="text-xs">Role</Label>
-        <Input
-          value={form.role}
-          onChange={e => set("role", e.target.value)}
-          placeholder="Support Agent"
-          className="bg-muted border-border text-sm"
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label className="text-xs">Color</Label>
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={form.color}
-              onChange={e => set("color", e.target.value)}
-              className="w-9 h-9 rounded cursor-pointer bg-transparent border border-border"
-              data-testid="input-agent-color"
-            />
-            <div className="flex flex-wrap gap-1">
-              {DEFAULT_COLORS.slice(0, 8).map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => { playSoftClick(); set("color", c); }}
-                  className="w-4 h-4 rounded-full border border-transparent hover:scale-110 transition-transform"
-                  style={{ backgroundColor: c, borderColor: form.color === c ? "white" : "transparent" }}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label className="text-xs">Timezone</Label>
-          <Select value={form.timezone} onValueChange={v => set("timezone", v)}>
-            <SelectTrigger className="bg-muted border-border text-sm h-9" data-testid="select-timezone">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="max-h-48">
-              {TIMEZONES.map(tz => (
-                <SelectItem key={tz} value={tz} className="text-xs">{tz}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label className="text-xs">Avatar URL (optional)</Label>
-        <Input
-          value={form.avatarUrl}
-          onChange={e => set("avatarUrl", e.target.value)}
-          placeholder="https://..."
-          className="bg-muted border-border text-sm"
-        />
-      </div>
-
-      <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/40 border border-border">
-        <div
-          className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
-          style={{ backgroundColor: form.color + "20", border: `2px solid ${form.color}50`, color: form.color }}
-        >
-          {form.name ? form.name.slice(0, 2).toUpperCase() : "??"}
-        </div>
-        <div>
-          <p className="text-sm font-medium">{form.name || "Agent name"}</p>
-          <p className="text-[10px] text-muted-foreground">{form.role} · {form.timezone}</p>
-        </div>
-      </div>
-
-      <Button type="submit" disabled={loading} className="w-full" data-testid="btn-submit-agent">
-        {loading ? "Saving..." : "Save Agent"}
-      </Button>
-    </form>
-  );
-}
-
-function ShiftPill({
-  day, dayIdx, shift, agentId, color, isAdmin, isDayOff,
-  agentShifts, onUpsert, onUpdateShift,
-}: {
-  day: string;
-  dayIdx: number;
-  shift: Shift | undefined;
-  agentId: number;
-  color: string;
-  isAdmin: boolean;
-  isDayOff: boolean;
-  agentShifts: Shift[];
-  onUpsert: (data: any) => void;
-  onUpdateShift: (id: number, data: any) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [settingBreak, setSettingBreak] = useState(false);
-
-  function resolveDefaults() {
-    if (shift) {
-      return {
-        s: ((shift.startUtc % 24) + 24) % 24,
-        e: ((shift.endUtc   % 24) + 24) % 24,
-      };
-    }
-    const seed = seedFromShifts(agentShifts);
-    return { s: seed.start, e: seed.end };
-  }
-
-  const def = resolveDefaults();
-  const [startH, setStartH] = useState<number>(def.s);
-  const [endH, setEndH]     = useState<number>(def.e);
-  const [breakH, setBreakH] = useState<string>(
-    shift?.breakStart != null ? String(((shift.breakStart % 24) + 24) % 24) : ""
-  );
-
-  const openEdit = () => {
-    const d = resolveDefaults();
-    setStartH(d.s);
-    setEndH(d.e);
-    setEditing(true);
-  };
-
-  const overnight = endH <= startH;
-  const dur       = overnight ? 24 - startH + endH : endH - startH;
-
-  const save = () => {
-    if (dur <= 0) return;
-    onUpsert({
-      agentId,
-      dayOfWeek: dayIdx,
-      startUtc: startH,
-      endUtc: endH,
-      activeStart: null,
-      activeEnd: null,
-      breakStart: null,
-    });
-    setEditing(false);
-  };
-
-  const saveBreak = () => {
-    if (!shift) return;
-    const b = parseFloat(breakH);
-    if (!isNaN(b)) onUpdateShift(shift.id, { breakStart: b % 24 });
-    setSettingBreak(false);
-  };
-
-  const clearBreak = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!shift) return;
-    onUpdateShift(shift.id, { breakStart: null });
-    setBreakH("");
-  };
-
-  const savedBreak = shift?.breakStart;
-  const showBreakWarning = shift && savedBreak != null &&
-    isBreakBadTiming(savedBreak, shift.startUtc, shift.endUtc);
-
-  if (editing && isAdmin) {
-    return (
-      <div className="flex flex-col gap-1 text-[9px] bg-muted rounded p-1.5 min-w-[130px]">
-        <div className="flex items-center gap-1">
-          <span className="text-muted-foreground w-5">{day}</span>
-          <select
-            value={startH}
-            onChange={e => setStartH(parseFloat(e.target.value))}
-            className="flex-1 bg-accent rounded text-center text-[9px] font-mono"
-          >
-            {HALF_HOUR_OPTIONS.map(h => (
-              <option key={h} value={h}>{formatHour(h)}</option>
-            ))}
-          </select>
-          <span className="text-muted-foreground">–</span>
-          <select
-            value={endH}
-            onChange={e => setEndH(parseFloat(e.target.value))}
-            className="flex-1 bg-accent rounded text-center text-[9px] font-mono"
-          >
-            {HALF_HOUR_OPTIONS.map(h => (
-              <option key={h} value={h}>
-                {formatHour(h)}{h <= startH ? " (+1)" : ""}
-              </option>
-            ))}
-          </select>
-          <button onClick={save} disabled={dur <= 0} className="text-primary font-bold disabled:opacity-40">✓</button>
-          <button onClick={() => setEditing(false)} className="text-muted-foreground">✕</button>
-        </div>
-        <div className="flex items-center gap-1 px-0.5">
-          {overnight && <span className="text-amber-400 font-mono">{DAYS[(dayIdx + 6) % 7]}/{DAYS[dayIdx]}</span>}
-          <span className="text-muted-foreground">{shiftLabel(startH, endH, dayIdx)} · {dur}h</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (settingBreak && isAdmin && shift) {
-    const dur2 = shiftDurH(shift.startUtc, shift.endUtc);
-    const breakOptions = HALF_HOUR_OPTIONS.filter(h => {
-      let rel = h - shift.startUtc;
-      if (rel < 0) rel += 24;
-      return rel >= 1.0 && rel + 0.5 <= dur2 - 1.0;
-    });
-    const warnNow = breakH !== "" && !isNaN(parseFloat(breakH)) &&
-      isBreakBadTiming(parseFloat(breakH), shift.startUtc, shift.endUtc);
-    return (
-      <div className="flex flex-col gap-1 text-[9px] bg-muted rounded p-1.5 min-w-[130px]">
-        <div className="flex items-center gap-1">
-          <Coffee size={9} style={{ color }} />
-          <span className="text-muted-foreground font-medium">Break (UTC)</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <select
-            value={breakH}
-            onChange={e => setBreakH(e.target.value)}
-            className="flex-1 bg-accent rounded text-center text-[9px] font-mono"
-            autoFocus
-          >
-            <option value="">pick time</option>
-            {breakOptions.map(h => (
-              <option key={h} value={h}>{formatHour(h)}</option>
-            ))}
-          </select>
-          <button onClick={saveBreak} disabled={breakH === ""} className="text-primary font-bold disabled:opacity-40">✓</button>
-          <button onClick={() => setSettingBreak(false)} className="text-muted-foreground">✕</button>
-        </div>
-        {warnNow && (
-          <div className="flex items-center gap-1 text-amber-400">
-            <AlertTriangle size={8} />
-            <span>First or last hour — not ideal</span>
-          </div>
-        )}
-        <div className="text-muted-foreground opacity-60">
-          {shiftLabel(shift.startUtc, shift.endUtc, dayIdx)} · {dur2}h
-        </div>
-      </div>
-    );
-  }
-
-  if (isDayOff && !shift) {
-    return (
-      <div
-        className="text-[9px] px-1.5 py-0.5 rounded"
-        style={{
-          backgroundColor: "hsl(var(--muted))",
-          color: "hsl(var(--muted-foreground))",
-          border: "1px solid hsl(var(--border))",
-          opacity: 0.4,
-        }}
-        title="Day off"
-      >
-        {day}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-0.5">
-      <div className="flex items-center gap-0.5">
-        <button
-          onClick={() => isAdmin && openEdit()}
-          className={cn(
-            "text-[9px] px-1.5 py-0.5 rounded transition-all",
-            !isAdmin && "cursor-default"
-          )}
-          style={shift ? {
-            backgroundColor: color + "20",
-            color: color,
-            border: `1px solid ${color}30`,
-          } : {
-            backgroundColor: "hsl(var(--muted))",
-            color: "hsl(var(--muted-foreground))",
-            border: "1px dashed hsl(var(--border))",
-          }}
-          data-testid={`shift-pill-${agentId}-${dayIdx}`}
-          title={shift ? shiftLabel(shift.startUtc, shift.endUtc, dayIdx) + " UTC" : "No shift — click to add"}
-        >
-          {shift
-            ? isOvernight(shift.startUtc, shift.endUtc)
-              ? `${DAYS[(dayIdx + 6) % 7]}/${day} ${formatHour(shift.startUtc)}`
-              : `${day} ${formatHour(shift.startUtc)}`
-            : day}
-        </button>
-
-        {shift && (
-          <button
-            onClick={() => isAdmin && setSettingBreak(true)}
-            title={savedBreak != null ? `Break at ${formatHour(savedBreak)}` : "Set break"}
-            className={cn(
-              "p-0.5 rounded transition-all",
-              savedBreak != null ? "opacity-100" : "opacity-30 hover:opacity-70",
-              !isAdmin && "cursor-default pointer-events-none"
-            )}
-            style={{
-              color: showBreakWarning ? "#F59E0B" : savedBreak != null ? "white" : "hsl(var(--muted-foreground))",
-              filter: savedBreak != null && !showBreakWarning ? `drop-shadow(0 0 2px ${color})` : undefined,
-            }}
-          >
-            <Coffee size={9} />
-          </button>
-        )}
-
-        {shift && savedBreak != null && isAdmin && (
-          <button
-            onClick={clearBreak}
-            title="Clear break"
-            className="p-0.5 rounded opacity-40 hover:opacity-100 hover:text-destructive transition-all"
-          >
-            <X size={8} />
-          </button>
-        )}
-      </div>
-
-      {shift && savedBreak != null && (
-        <div className={cn(
-          "flex items-center gap-1 text-[8px] px-1",
-          showBreakWarning ? "text-amber-400" : "text-muted-foreground"
-        )}>
-          {showBreakWarning && <AlertTriangle size={7} />}
-          <Coffee size={7} />
-          <span>{formatHour(savedBreak)}</span>
-          {showBreakWarning && <span>· not ideal</span>}
-        </div>
-      )}
     </div>
   );
 }

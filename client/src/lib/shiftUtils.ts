@@ -209,6 +209,11 @@ export function resolveShift(
 
 /**
  * Returns structured BreakInfo for a shift, or null if no break is set.
+ *
+ * `isBadTiming` is true when the break is scheduled too close to the start or
+ * end of the shift (< 1h buffer on either side). ShiftPill uses this flag to
+ * show a warning indicator without blocking the break — managers can still save
+ * it, but the UI lets them know it looks odd.
  */
 export function resolveBreak(
   breakStart: number | null,
@@ -220,6 +225,8 @@ export function resolveBreak(
   const dur     = shiftDuration(startUtc, normEnd);
   let rel       = breakStart - startUtc;
   if (rel < 0) rel += 24;
+  // Break must fall at least 1h into the shift AND leave ≥ 1h before the end.
+  // rel + 0.5 accounts for the 30-min break duration itself.
   const isBadTiming = rel < 1.0 || rel + 0.5 > dur - 1.0;
   return {
     start: breakStart,

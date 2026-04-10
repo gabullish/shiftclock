@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { AlignLeft, CalendarRange, CircleDot, Clock, Users, LayoutDashboard, Hand, ScrollText, LogOut } from "lucide-react";
+import { AlignLeft, CalendarRange, CircleDot, Clock, Users, LayoutDashboard, ScrollText, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useDragScrollPreference } from "@/hooks/use-drag-scroll";
 import type { AgentSession } from "@/lib/agentAccess";
 
 const navItems = [
@@ -28,7 +27,6 @@ export default function Sidebar({
   isOnBreak?: boolean;
 }) {
   const [location] = useLocation();
-  const { enabled: dragScrollEnabled, setEnabled: setDragScrollEnabled } = useDragScrollPreference();
 
   const [viewMode, setViewMode] = useState<"clock" | "timeline">(
     () => (localStorage.getItem("shiftclock:viewMode") as "clock" | "timeline") ?? "clock"
@@ -119,21 +117,6 @@ export default function Sidebar({
 
       {/* Bottom area: agent indicator or UTC clock */}
       <div className="p-2 sm:p-3 border-t border-border space-y-2">
-        <button
-          onClick={() => setDragScrollEnabled(!dragScrollEnabled)}
-          className={cn(
-            "w-full flex items-center gap-2 rounded-md border px-2 py-2 min-h-[36px] text-xs transition-colors",
-            dragScrollEnabled
-              ? "border-primary/40 bg-primary/10 text-primary"
-              : "border-border text-muted-foreground hover:text-foreground"
-          )}
-          data-testid="toggle-drag-scroll"
-        >
-          <Hand size={11} />
-          <span className="hidden lg:inline">Drag scroll</span>
-          <span className="ml-auto font-mono">{dragScrollEnabled ? "ON" : "OFF"}</span>
-        </button>
-
         {agentSession ? (
           <AgentIndicator session={agentSession} onSignOff={onAgentSignOff} isOnBreak={isOnBreak} />
         ) : (

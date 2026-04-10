@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Root application shell — auth gate, hash routing, idle timeout, and context providers.
+// Three access modes: "admin" (password-only), "agent" (token + agent ID), view-only (null).
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Switch, Route, Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { Toaster } from "@/components/ui/toaster";
-import { PerplexityAttribution } from "@/components/PerplexityAttribution";
+import { AppFooter } from "@/components/AppFooter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
@@ -12,7 +14,7 @@ import ActivityLog from "./pages/ActivityLog";
 import NotFound from "./pages/not-found";
 import Sidebar from "./components/Sidebar";
 import { AdminProvider } from "@/hooks/use-admin-mode";
-import { DragScrollProvider } from "@/hooks/use-drag-scroll";
+import { AgentSessionContext } from "@/hooks/use-agent-session";
 import { clearAdminToken, getEffectiveAdminToken, saveAdminToken } from "@/lib/adminAccess";
 import {
   clearAgentSession,
@@ -26,13 +28,15 @@ import {
 import type { Agent } from "@shared/schema";
 import { useQuery } from "@tanstack/react-query";
 
-// Context so that Sidebar and pages can read the active agent session
-import { createContext, useContext } from "react";
-export const AgentSessionContext = createContext<AgentSession | null>(null);
-export function useAgentSession() { return useContext(AgentSessionContext); }
+// Re-export so legacy imports (e.g. `from "@/App"`) keep working during migration.
+// TODO: remove once all consumers point to @/hooks/use-agent-session
+export { AgentSessionContext, useAgentSession } from "@/hooks/use-agent-session";
 
 const IDLE_TIMEOUT_MS = 4 * 60 * 1000;
 const IDLE_EVENTS: Array<keyof WindowEventMap> = ["click", "keydown", "pointerdown", "scroll", "input"];
+
+// Stable empty fallback — avoids new [] reference on every render while agents query is loading.
+const NO_AGENTS: Agent[] = [];
 
 type AccessMode = "admin" | "agent" | "view";
 
@@ -215,7 +219,7 @@ export default function App() {
   const [agentSession, setAgentSession] = useState<AgentSession | null>(() => getAgentSession());
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { data: agentsForStatus = [] } = useQuery<Agent[]>({
+  const { data: agentsForStatus = NO_AGENTS } = useQuery<Agent[]>({
     queryKey: ["/api/agents"],
     refetchInterval: 30_000,
     staleTime: Infinity,
@@ -243,7 +247,11 @@ export default function App() {
     window.history.replaceState(null, "", next);
   }, []);
 
-  // Idle timeout for agent mode
+  // Idle timeout for agent mode — every user interaction resets a 4-minute countdown.
+  // When the timer fires, the session is cleared in both sessionStorage and React state,
+  // dropping the user back to view-only. We also touch sessionStorage on each activity
+  // so that tabs opened in the background don't silently expire while the user is active
+  // in another tab (both tabs share sessionStorage and both reset the lastActivity stamp).
   const resetIdle = useCallback(() => {
     if (accessMode !== "agent") return;
     touchAgentSession();
@@ -277,48 +285,43 @@ export default function App() {
     }
   }, []);
 
-  const appShell = useMemo(() => {
-    if (accessMode == null) {
-      return <AccessGate onSelectMode={onSelectMode} />;
-    }
-
+  if (accessMode == null) {
     return (
-      <AgentSessionContext.Provider value={agentSession}>
-        <AdminProvider>
-          <Router hook={useHashLocation}>
-            <DragScrollProvider>
-              <div className="flex h-dvh overflow-hidden bg-background">
-                <Sidebar
-                  agentSession={agentSession}
-                  isOnBreak={isOnBreak}
-                  onAgentSignOff={() => {
-                    clearAgentSession();
-                    setAgentSession(null);
-                    setAccessMode(null);
-                  }}
-                />
-                <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
-                  <Switch>
-                    <Route path="/" component={Dashboard} />
-                    <Route path="/activity" component={ActivityLog} />
-                    <Route path="/overtime" component={ActivityLog} />
-                    <Route path="/profiles" component={Profiles} />
-                    <Route component={NotFound} />
-                  </Switch>
-                </main>
-              </div>
-            </DragScrollProvider>
-            <PerplexityAttribution />
-          </Router>
-        </AdminProvider>
-      </AgentSessionContext.Provider>
+      <>
+        <AccessGate onSelectMode={onSelectMode} />
+        <Toaster />
+      </>
     );
-  }, [accessMode, agentSession, onSelectMode, isOnBreak]);
+  }
 
   return (
-    <>
-      {appShell}
+    <AgentSessionContext.Provider value={agentSession}>
+      <AdminProvider>
+        <Router hook={useHashLocation}>
+          <div className="flex h-dvh overflow-hidden bg-background">
+            <Sidebar
+              agentSession={agentSession}
+              isOnBreak={isOnBreak}
+              onAgentSignOff={() => {
+                clearAgentSession();
+                setAgentSession(null);
+                setAccessMode(null);
+              }}
+            />
+            <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
+              <Switch>
+                <Route path="/" component={Dashboard} />
+                <Route path="/activity" component={ActivityLog} />
+                <Route path="/overtime" component={ActivityLog} />
+                <Route path="/profiles" component={Profiles} />
+                <Route component={NotFound} />
+              </Switch>
+            </main>
+          </div>
+          <AppFooter />
+        </Router>
+      </AdminProvider>
       <Toaster />
-    </>
+    </AgentSessionContext.Provider>
   );
 }

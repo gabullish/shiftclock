@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo } from "react";
 import { getEffectiveAdminToken } from "@/lib/adminAccess";
 
-function readAdminFromUrl(): boolean {
+function isAdminAuthenticated(): boolean {
   return Boolean(getEffectiveAdminToken());
 }
 
@@ -13,6 +13,6 @@ export function useAdminMode(): boolean {
 
 // Provider reads once on mount (token doesn't change during session)
 export function AdminProvider({ children }: { children: React.ReactNode }) {
-  const isAdmin = useMemo(() => readAdminFromUrl(), []);
+  const isAdmin = useMemo(() => isAdminAuthenticated(), []);
   return <AdminContext.Provider value={isAdmin}>{children}</AdminContext.Provider>;
 }

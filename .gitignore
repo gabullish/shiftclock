@@ -4,7 +4,7 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
-data.db
+*.db
 *.db-shm
 *.db-wal
 .env

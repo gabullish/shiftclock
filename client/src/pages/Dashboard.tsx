@@ -1,279 +1,54 @@
-import { useState, useEffect, useRef, Fragment } from "react";
+// Main dashboard page — orchestrates data fetching, day selection, lever state,
+// and hands slices to the clock/timeline/panel components.
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift, OvertimeLog } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Clock, AlignLeft, Lock, CalendarRange, X, ExternalLink, ChevronLeft, ChevronRight } from "lucide-react";
+import { RotateCcw, Lock, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
-import { useSoothingSounds } from "@/hooks/useSoothingSounds";
+import { useSoothingSounds } from "@/hooks/use-soothing-sounds";
 import { toast } from "@/hooks/use-toast";
-import { useAgentSession } from "@/App";
+import { useAgentSession } from "@/hooks/use-agent-session";
 import {
   clampShiftWindow,
-  segmentShift,
   resolveShift,
-  shiftProgress,
   calcCoverageForDay,
   formatUtcHour,
   formatDuration,
-  shiftLabel,
-  shiftDuration,
   normaliseEndUtc,
-  displayHour,
   getActiveClaimForShift,
   isCoverageClaim,
-  shiftHasOverride,
-  MAX_LEVER_DRIFT_HOURS,
-  MIN_SHIFT_DURATION_HOURS,
-  MAX_OT_EXTENSION_HOURS,
-  WAIVE_PROMPT_THRESHOLD_HOURS,
 } from "@/lib/shiftUtils";
+import {
+  getUTCDay, getUTCHour,
+  parseIsoDate, resolveDateForWeekday,
+  formatWeekdayWithDate, buildWeekCycleDays,
+  findGapRanges, expandGapRangesToSlices,
+  errorMessageFromUnknown,
+  type LeverState, type TooltipInfo,
+} from "@/lib/dashboardUtils";
+import { KpiCell }             from "@/components/dashboard/KpiCell";
+import { AgentBreakControl }   from "@/components/dashboard/AgentBreakControl";
+import { EmptyState }          from "@/components/dashboard/EmptyState";
+import { SummaryPanel }        from "@/components/dashboard/SummaryPanel";
+import { AssignOvertimeModal } from "@/components/dashboard/AssignOvertimeModal";
+import { ShiftLever }          from "@/components/dashboard/ShiftLever";
+import { ClockVisualizer }     from "@/components/dashboard/ClockVisualizer";
+import { UnifiedTimeline }     from "@/components/dashboard/UnifiedTimeline";
 
-// Reusable drag-scroll hook with PointerCapture
-const useDragScroll = () => {
-  const ref = useRef<HTMLDivElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const startX = useRef(0);
-  const scrollLeft = useRef(0);
-  const dragged = useRef(false);
-  const DRAG_THRESHOLD = 5;
-
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!ref.current) return;
-    ref.current.setPointerCapture(e.pointerId);
-    setIsDragging(true);
-    startX.current = e.pageX - ref.current.offsetLeft;
-    scrollLeft.current = ref.current.scrollLeft;
-    dragged.current = false;
-  };
-
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDragging || !ref.current) return;
-    const x = e.pageX - ref.current.offsetLeft;
-    const walk = (x - startX.current) * 2.5;
-    if (Math.abs(walk) > DRAG_THRESHOLD) dragged.current = true;
-    ref.current.scrollLeft = scrollLeft.current - walk;
-  };
-
-  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!ref.current) return;
-    ref.current.releasePointerCapture(e.pointerId);
-    setIsDragging(false);
-    dragged.current = false;
-  };
-
-  const stopDrag = (e: React.PointerEvent) => {
-    if (dragged.current) e.stopPropagation();
-  };
-
-  return {
-    ref,
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-    onPointerLeave: onPointerUp,
-    stopDrag,
-    isDragging,
-  };
-};
-
-const DAYS   = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-
-function getUTCDay()  { return new Date().getUTCDay(); }
-function getUTCHour() {
-  const now = new Date();
-  return now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
-}
-
-function hourToAngle(hour: number) { return (hour / 24) * 360 - 90; }
-
-function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  const rad = (angleDeg * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
-
-function describeArc(cx: number, cy: number, r: number, startHour: number, endHour: number) {
-  const s = Math.max(0, Math.min(24, startHour));
-  const e = Math.max(0, Math.min(24, endHour));
-  if (s >= e) return "";
-  const sa = hourToAngle(s), ea = hourToAngle(e);
-  const p1 = polarToCartesian(cx, cy, r, sa);
-  const p2 = polarToCartesian(cx, cy, r, ea);
-  const largeArc = (e - s) > 12 ? 1 : 0;
-  return `M ${p1.x} ${p1.y} A ${r} ${r} 0 ${largeArc} 1 ${p2.x} ${p2.y}`;
-}
-
-function hexToRgba(hex: string, alpha: number) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-interface LeverState { activeStart: number; activeEnd: number; }
-
-interface DayDesc {
-  date: string;
-  dayOfWeek: number;
-  label: string;
-  dateLabel: string;
-  isToday: boolean;
-  dayIndex: number;
-}
-
-interface GapRange {
-  start: number;
-  end: number;
-}
-
-interface GapSlice {
-  startUtc: number;
-  endUtc: number;
-}
-
-function parseIsoDate(date: string): Date {
-  return new Date(`${date}T00:00:00Z`);
-}
-
-function formatDayMonth(value: Date | string): string {
-  const date = typeof value === "string" ? parseIsoDate(value) : value;
-  return `${date.getUTCDate().toString().padStart(2, "0")}/${(date.getUTCMonth() + 1).toString().padStart(2, "0")}`;
-}
-
-function formatWeekdayWithDate(dayOfWeek: number, date: string): string {
-  return `${DAYS[dayOfWeek]} ${formatDayMonth(date)}`;
-}
-
-function formatWeekdayLongWithDate(dayOfWeek: number, date: string): string {
-  return `${DAY_FULL[dayOfWeek]} ${formatDayMonth(date)}`;
-}
-
-function findGapRanges(coverage: number[]): GapRange[] {
-  const ranges: GapRange[] = [];
-  let start: number | null = null;
-
-  for (let hour = 0; hour <= 24; hour++) {
-    const isGap = hour < 24 && coverage[hour] === 0;
-    if (isGap && start == null) start = hour;
-    if (!isGap && start != null) {
-      ranges.push({ start, end: hour });
-      start = null;
-    }
-  }
-
-  return ranges;
-}
-
-function expandGapRangesToSlices(ranges: GapRange[]): GapSlice[] {
-  return ranges.flatMap((range) => {
-    const slices: GapSlice[] = [];
-    for (let hour = range.start; hour < range.end; hour++) {
-      slices.push({ startUtc: hour, endUtc: hour + 1 });
-    }
-    return slices;
-  });
-}
-
-function buildDays(pastDays: number, futureDays: number, anchor = new Date()): DayDesc[] {
-  const today    = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
-  const result: DayDesc[] = [];
-  const total = pastDays + 1 + futureDays;
-  for (let i = 0; i < total; i++) {
-    const d = new Date(anchor);
-    d.setUTCDate(anchor.getUTCDate() - pastDays + i);
-    const dateStr = d.toISOString().slice(0, 10);
-    const dow     = d.getUTCDay();
-    result.push({
-      date: dateStr,
-      dayOfWeek: dow,
-      label: DAYS[dow],
-      dateLabel: formatDayMonth(d),
-      isToday: dateStr === todayStr,
-      dayIndex: i,
-    });
-  }
-  return result;
-}
-
-function buildWeekCycleDays(anchorDate: string): DayDesc[] {
-  const anchor = parseIsoDate(anchorDate);
-  const start = new Date(anchor);
-  start.setUTCDate(anchor.getUTCDate() - anchor.getUTCDay());
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-  return Array.from({ length: 8 }, (_, dayIndex) => {
-    const d = new Date(start);
-    d.setUTCDate(start.getUTCDate() + dayIndex);
-    const date = d.toISOString().slice(0, 10);
-    const dayOfWeek = d.getUTCDay();
-    return {
-      date,
-      dayOfWeek,
-      label: DAYS[dayOfWeek],
-      dateLabel: formatDayMonth(d),
-      isToday: date === todayStr,
-      dayIndex,
-    };
-  });
-}
-
-function resolveDateForWeekday(dayOfWeek: number, anchor = new Date()): string {
-  const d = new Date(anchor);
-  d.setUTCDate(d.getUTCDate() + (dayOfWeek - d.getUTCDay()));
-  return d.toISOString().slice(0, 10);
-}
-
-function errorMessageFromUnknown(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return "Unexpected error";
-}
-
-function AgentBreakControl({
-  isOnBreak,
-  startedAt,
-  onBreakStart,
-  onBreakEnd,
-}: {
-  isOnBreak: boolean;
-  startedAt: number | null;
-  onBreakStart: () => void;
-  onBreakEnd: () => void;
-}) {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!startedAt) { setElapsed(0); return; }
-    const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 60000));
-    tick();
-    const t = setInterval(tick, 10_000);
-    return () => clearInterval(t);
-  }, [startedAt]);
-
-  return (
-    <div className="mb-3">
-      <button
-        onClick={isOnBreak ? onBreakEnd : onBreakStart}
-        className={cn(
-          "w-full text-xs py-2 min-h-[36px] rounded border transition-colors flex items-center justify-center gap-1",
-          isOnBreak
-            ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
-            : "border-border text-muted-foreground hover:text-foreground"
-        )}
-      >
-        {isOnBreak ? `☕ ${elapsed}m · I'm back` : "☕ Take break"}
-      </button>
-    </div>
-  );
-}
+// Stable empty arrays — module-level so these are the same reference across renders.
+// Avoids spurious effect re-runs from the `= []` inline default in useQuery destructuring.
+const NO_AGENTS:  Agent[]       = [];
+const NO_SHIFTS:  Shift[]       = [];
+const NO_OT:      OvertimeLog[] = [];
 
 export default function Dashboard() {
   const isAdmin = useAdminMode();
   const agentSession = useAgentSession();
   const { playSoftClick, playDragWhoosh, playSuccess, playBreakStart } = useSoothingSounds();
-  const selectedDateAnchor = (date: string) => parseIsoDate(date);
 
   const initDate = () => {
     const params = new URLSearchParams(window.location.search);
@@ -330,7 +105,7 @@ export default function Dashboard() {
   });
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">(initScope);
   const [focusHour] = useState<number | null>(initFocusHour);
-  const [tooltipInfo,    setTooltipInfo]    = useState<{ agent: Agent; shift: Shift; x: number; y: number; pct: number; otPct: number } | null>(null);
+  const [tooltipInfo,    setTooltipInfo]    = useState<TooltipInfo | null>(null);
 
   const todayDateStr = new Date().toISOString().slice(0, 10);
   const isSelectedDateToday = selectedDate === todayDateStr;
@@ -350,6 +125,7 @@ export default function Dashboard() {
     window.addEventListener("shiftclock:viewchange", handler);
     return () => window.removeEventListener("shiftclock:viewchange", handler);
   }, []);
+
   const canEditAgentLane = (agentId: number) => isAdmin || agentSession?.agentId === agentId;
 
   const openOvertimeForRecord = (record: OvertimeLog) => {
@@ -362,9 +138,9 @@ export default function Dashboard() {
     window.location.href = `${window.location.pathname}?${params.toString()}#/overtime`;
   };
 
-  const { data: agents    = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"], refetchInterval: 30_000, staleTime: Infinity });
-  const { data: allShifts = [] } = useQuery<Shift[]>({ queryKey: ["/api/shifts"], refetchInterval: 15_000 });
-  const { data: otRecords = [] } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"], refetchInterval: 15_000 });
+  const { data: agents    = NO_AGENTS } = useQuery<Agent[]>({ queryKey: ["/api/agents"], refetchInterval: 30_000, staleTime: Infinity });
+  const { data: allShifts = NO_SHIFTS } = useQuery<Shift[]>({ queryKey: ["/api/shifts"], refetchInterval: 15_000, staleTime: Infinity });
+  const { data: otRecords = NO_OT     } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"], refetchInterval: 15_000, staleTime: Infinity });
 
   const updateShiftMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Shift> & { date?: string } }) =>
@@ -398,20 +174,20 @@ export default function Dashboard() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agents"] }),
   });
 
-    const bulkDeleteOTMutation = useMutation({
-      mutationFn: (ids: number[]) => apiRequest("DELETE", "/api/overtime", { ids }),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-      },
-    });
+  const bulkDeleteOTMutation = useMutation({
+    mutationFn: (ids: number[]) => apiRequest("DELETE", "/api/overtime", { ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+    },
+  });
 
-    const [confirmReset, setConfirmReset] = useState(false);
-    const confirmResetTimer = useRef<ReturnType<typeof setTimeout>>();
-
+  const visibleInitialized = useRef(false);
   useEffect(() => {
-    if (agents.length > 0 && visible.size === 0)
+    if (!visibleInitialized.current && agents.length > 0) {
+      visibleInitialized.current = true;
       setVisible(new Set(agents.map(a => a.id)));
+    }
   }, [agents]);
 
   const prevBreakRef = useRef<Map<number, string | null>>(new Map());
@@ -454,12 +230,19 @@ export default function Dashboard() {
         next[s.id] = { activeStart: clamped.activeStart, activeEnd: clamped.activeEnd };
       }
     }
-    setLeverState(prev => ({ ...prev, ...next }));
+    setLeverState(prev => {
+      // Bail out if nothing actually changed — avoids spurious re-renders
+      const changed = Object.entries(next).some(([id, val]) => {
+        const p = prev[Number(id)];
+        return !p || p.activeStart !== val.activeStart || p.activeEnd !== val.activeEnd;
+      });
+      return changed ? { ...prev, ...next } : prev;
+    });
   }, [allShifts]);
 
   const updateSelectedDay = (
     dayOfWeek: number,
-    date = resolveDateForWeekday(dayOfWeek, selectedDate ? selectedDateAnchor(selectedDate) : new Date())
+    date = resolveDateForWeekday(dayOfWeek, selectedDate ? parseIsoDate(selectedDate) : new Date())
   ) => {
     setSelectedDay(dayOfWeek);
     setSelectedDate(date);
@@ -569,7 +352,7 @@ export default function Dashboard() {
           activeEnd: record.coverEndUtc!,
         }))
     );
-  const coverage    = calcCoverageForDay(coverageInput);
+  const coverage = calcCoverageForDay(coverageInput);
 
   const agentSummaries = agents.map(agent => {
     const agentTodayShifts = todayShifts.filter(s => s.agentId === agent.id);
@@ -632,7 +415,6 @@ export default function Dashboard() {
       record.coverEndUtc != null
   );
 
-  const todayUTCDay  = getUTCDay();
   const onlineAgents = agents.filter(agent => {
     if (!isSelectedDateToday) return false;
     const isOnShift = todayShifts.some(s => {
@@ -658,7 +440,6 @@ export default function Dashboard() {
     });
   });
 
-  const agentsOnBreak = agents.filter(a => a.breakActiveAt != null && visible.has(a.id));
   // Agents whose break is within the next 30 min (but not yet started)
   const agentsBreakSoon = isSelectedDateToday ? onlineAgents.filter(agent => {
     if (agent.breakActiveAt) return false;
@@ -674,37 +455,30 @@ export default function Dashboard() {
   const isWeekend      = selectedDay === 0 || selectedDay === 6;
 
   const handleUndoDay = () => {
-      if (!confirmReset) {
-        setConfirmReset(true);
-        clearTimeout(confirmResetTimer.current);
-        confirmResetTimer.current = setTimeout(() => setConfirmReset(false), 3500);
-        return;
-      }
-      clearTimeout(confirmResetTimer.current);
-      setConfirmReset(false);
+    if (!window.confirm("Reset levers and pending OT for this day?")) return;
 
-      // Optimistically reset lever state for visual immediacy
-      const reset: Record<number, LeverState> = { ...leverState };
-      for (const s of todayShifts) {
-        const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
-        reset[s.id] = { activeStart: s.startUtc, activeEnd: normEnd };
-      }
-      setLeverState(reset);
+    // Optimistically reset lever state for visual immediacy
+    const reset: Record<number, LeverState> = { ...leverState };
+    for (const s of todayShifts) {
+      const normEnd = normaliseEndUtc(s.startUtc, s.endUtc);
+      reset[s.id] = { activeStart: s.startUtc, activeEnd: normEnd };
+    }
+    setLeverState(reset);
 
-      // Warn if approved/paid OT records exist for this date — they won't be cleared
-      const approvedOnDay = otRecords.filter(
-        r => r.date === selectedDate && (r.status === "approved" || r.status === "paid")
-      );
-      if (approvedOnDay.length > 0) {
-        toast({
-          title: `Heads up: ${approvedOnDay.length} approved OT record${approvedOnDay.length > 1 ? "s" : ""} will remain`,
-          description: "Reset clears lever positions and pending OT only. Approved/paid records stay.",
-        });
-      }
+    // Warn if approved/paid OT records exist for this date — they won't be cleared
+    const approvedOnDay = otRecords.filter(
+      r => r.date === selectedDate && (r.status === "approved" || r.status === "paid")
+    );
+    if (approvedOnDay.length > 0) {
+      toast({
+        title: `Heads up: ${approvedOnDay.length} approved OT record${approvedOnDay.length > 1 ? "s" : ""} will remain`,
+        description: "Reset clears lever positions and pending OT only. Approved/paid records stay.",
+      });
+    }
 
-      resetDayMutation.mutate({ date: selectedDate, dayOfWeek: selectedDay });
-      toast({ title: `${selectedDayShortLabel} reset to base schedule` });
-    };
+    resetDayMutation.mutate({ date: selectedDate, dayOfWeek: selectedDay });
+    toast({ title: `${selectedDayShortLabel} reset to base schedule` });
+  };
 
   const isMulti    = viewMode === "timeline" && timelineScope === "multi";
   const isTimeline = viewMode === "timeline";
@@ -877,6 +651,9 @@ export default function Dashboard() {
     });
   };
 
+  // bulkDeleteOTMutation — wired up for future bulk OT delete action; keep the hook alive
+  void bulkDeleteOTMutation;
+
   return (
     <TooltipProvider>
       <div className="flex flex-col h-full overflow-hidden">
@@ -884,53 +661,53 @@ export default function Dashboard() {
         <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur px-3 py-2 sm:px-4 lg:px-6">
           <div className="flex flex-wrap items-center gap-2 md:grid md:grid-cols-[auto_1fr_auto]">
             <div className="flex items-center gap-2 sm:gap-3">
-            <h1 className="text-sm font-semibold">Coverage Command</h1>
-            <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
+              <h1 className="text-sm font-semibold">Coverage Command</h1>
+              <Badge variant="outline" className="text-primary border-primary/30 text-xs font-mono">UTC</Badge>
             </div>
 
-          {/* Day nav — hidden in multi-day timeline */}
+            {/* Day nav — hidden in multi-day timeline */}
             {!isMulti && (
               <div className="order-3 w-full md:order-none md:w-auto md:flex md:justify-center">
                 <div className="flex items-center gap-1 overflow-x-auto pb-1 md:pb-0">
-              <button
-                onClick={goToPreviousWeek}
-                className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                title="Previous week"
-                data-testid="week-prev"
-              >
-                <ChevronLeft size={14} />
-              </button>
-              {weekCycleDays.map((day) => {
-                const hasShifts = allShifts.some(s => s.dayOfWeek === day.dayOfWeek);
-                const isSelected = selectedDate === day.date;
-                return (
-                  <button key={day.date} onClick={() => { playSoftClick(); updateSelectedDay(day.dayOfWeek, day.date); }} data-testid={`day-${day.date}`}
-                    className={cn(
-                      "px-2.5 py-1 rounded text-xs font-medium transition-all relative min-w-[58px] shrink-0",
-                      isSelected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                    )}
+                  <button
+                    onClick={goToPreviousWeek}
+                    className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    title="Previous week"
+                    data-testid="week-prev"
                   >
-                    <span className="flex flex-col leading-tight">
-                      <span>{day.label}</span>
-                      <span className={cn("text-[10px] font-mono", isSelected ? "text-primary-foreground/80" : "text-muted-foreground")}>{day.dateLabel}</span>
-                    </span>
-                    {hasShifts && !isSelected && (
-                      <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
-                    )}
+                    <ChevronLeft size={14} />
                   </button>
-                );
-              })}
-              <button
-                onClick={goToNextWeek}
-                className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                title="Next week"
-                data-testid="week-next"
-              >
-                <ChevronRight size={14} />
-              </button>
+                  {weekCycleDays.map((day) => {
+                    const hasShifts = allShifts.some(s => s.dayOfWeek === day.dayOfWeek);
+                    const isSelected = selectedDate === day.date;
+                    return (
+                      <button key={day.date} onClick={() => { playSoftClick(); updateSelectedDay(day.dayOfWeek, day.date); }} data-testid={`day-${day.date}`}
+                        className={cn(
+                          "px-2.5 py-1 rounded text-xs font-medium transition-all relative min-w-[58px] shrink-0",
+                          isSelected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                        )}
+                      >
+                        <span className="flex flex-col leading-tight">
+                          <span>{day.label}</span>
+                          <span className={cn("text-[10px] font-mono", isSelected ? "text-primary-foreground/80" : "text-muted-foreground")}>{day.dateLabel}</span>
+                        </span>
+                        {hasShifts && !isSelected && (
+                          <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary/50" />
+                        )}
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick={goToNextWeek}
+                    className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    title="Next week"
+                    data-testid="week-next"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
                 </div>
-            </div>
-          )}
+              </div>
+            )}
 
             {isMulti && (
               <span className="order-3 w-full text-[11px] text-muted-foreground font-mono md:order-none md:w-auto md:text-center">14-day view · scroll to navigate · click day label → Day view</span>
@@ -954,23 +731,23 @@ export default function Dashboard() {
                     ? Math.floor((Date.now() - Date.parse(agent.breakActiveAt)) / 60000)
                     : null;
                   return (
-                  <div key={agent.id}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all duration-300",
-                      agentOnBreak && "ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.25)]"
-                    )}
-                    style={{
-                      backgroundColor: agentOnBreak ? "rgba(251,191,36,0.12)" : agent.color + "20",
-                      border: `1px solid ${agentOnBreak ? "rgba(251,191,36,0.4)" : agent.color + "40"}`,
-                      color: agentOnBreak ? "rgb(252,211,77)" : agent.color,
-                    }}>
-                    <span className="w-1.5 h-1.5 rounded-full animate-pulse"
-                      style={{ backgroundColor: agentOnBreak ? "rgb(251,191,36)" : agent.color }} />
-                    {agent.name}
-                    {agentOnBreak && breakElapsed !== null && (
-                      <span className="opacity-80">☕ {breakElapsed}m</span>
-                    )}
-                  </div>
+                    <div key={agent.id}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all duration-300",
+                        agentOnBreak && "ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.25)]"
+                      )}
+                      style={{
+                        backgroundColor: agentOnBreak ? "rgba(251,191,36,0.12)" : agent.color + "20",
+                        border: `1px solid ${agentOnBreak ? "rgba(251,191,36,0.4)" : agent.color + "40"}`,
+                        color: agentOnBreak ? "rgb(252,211,77)" : agent.color,
+                      }}>
+                      <span className="w-1.5 h-1.5 rounded-full animate-pulse"
+                        style={{ backgroundColor: agentOnBreak ? "rgb(251,191,36)" : agent.color }} />
+                      {agent.name}
+                      {agentOnBreak && breakElapsed !== null && (
+                        <span className="opacity-80">☕ {breakElapsed}m</span>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1035,13 +812,13 @@ export default function Dashboard() {
             <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
               <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 overflow-hidden min-w-0 relative min-h-[220px] md:min-h-0">
                 {!hasShiftsToday ? (
-                    <EmptyState
-                      isWeekend={isWeekend}
-                      dayLabel={selectedDayShortLabel}
-                      canClaimCoverage={canClaimCoverage}
-                      gapSlices={gapSlices}
-                      onAssignGap={openGapAssignModal}
-                    />
+                  <EmptyState
+                    isWeekend={isWeekend}
+                    dayLabel={selectedDayShortLabel}
+                    canClaimCoverage={canClaimCoverage}
+                    gapSlices={gapSlices}
+                    onAssignGap={openGapAssignModal}
+                  />
                 ) : (
                   <ClockVisualizer
                     agents={agents}
@@ -1074,31 +851,31 @@ export default function Dashboard() {
                     {agents.map(agent => {
                       const isOnBreak = Boolean(agent.breakActiveAt) && visible.has(agent.id);
                       return (
-                      <button key={agent.id}
-                        onClick={() => toggleVisible(agent.id)}
-                        onMouseEnter={() => setHighlighted(agent.id)}
-                        onMouseLeave={() => setHighlighted(null)}
-                        data-testid={`toggle-agent-${agent.id}`}
-                        className={cn(
-                          "text-xs px-2.5 py-1.5 min-h-[30px] flex items-center rounded-full border font-medium transition-all duration-150",
-                          visible.has(agent.id)
-                            ? isOnBreak
-                              ? "ring-1 ring-amber-400/70 animate-pulse"
-                              : "opacity-100"
-                            : "opacity-40 grayscale"
-                        )}
-                        style={{
-                          pointerEvents: "auto",
-                          borderColor: isOnBreak ? "rgba(251,191,36,0.5)" : agent.color + "60",
-                          backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
-                          color: isOnBreak ? "rgb(252,211,77)" : visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
-                          boxShadow: isOnBreak
-                            ? "0 0 14px rgba(251,191,36,0.35)"
-                            : highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
-                        }}
-                      >
-                        {agent.name}{isOnBreak ? " ☕" : ""}
-                      </button>
+                        <button key={agent.id}
+                          onClick={() => toggleVisible(agent.id)}
+                          onMouseEnter={() => setHighlighted(agent.id)}
+                          onMouseLeave={() => setHighlighted(null)}
+                          data-testid={`toggle-agent-${agent.id}`}
+                          className={cn(
+                            "text-xs px-2.5 py-1.5 min-h-[30px] flex items-center rounded-full border font-medium transition-all duration-150",
+                            visible.has(agent.id)
+                              ? isOnBreak
+                                ? "ring-1 ring-amber-400/70 animate-pulse"
+                                : "opacity-100"
+                              : "opacity-40 grayscale"
+                          )}
+                          style={{
+                            pointerEvents: "auto",
+                            borderColor: isOnBreak ? "rgba(251,191,36,0.5)" : agent.color + "60",
+                            backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
+                            color: isOnBreak ? "rgb(252,211,77)" : visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
+                            boxShadow: isOnBreak
+                              ? "0 0 14px rgba(251,191,36,0.35)"
+                              : highlighted === agent.id ? `0 0 8px ${agent.color}50` : undefined,
+                          }}
+                        >
+                          {agent.name}{isOnBreak ? " ☕" : ""}
+                        </button>
                       );
                     })}
                   </div>
@@ -1127,16 +904,11 @@ export default function Dashboard() {
                       {isAdmin && (
                         <button
                           onClick={handleUndoDay}
-                          className={cn(
-                            "text-[10px] flex items-center gap-1 transition-colors select-none",
-                            confirmReset
-                              ? "text-destructive hover:text-destructive font-semibold"
-                              : "text-muted-foreground hover:text-foreground"
-                          )}
-                          title={confirmReset ? "Click again to confirm reset" : "Reset levers and pending OT for this day"}
+                          className="text-[10px] flex items-center gap-1 transition-colors select-none text-muted-foreground hover:text-foreground"
+                          title="Reset levers and pending OT for this day"
                         >
                           <RotateCcw size={10} />
-                          {confirmReset ? "Confirm reset?" : "Reset day"}
+                          Reset day
                         </button>
                       )}
                     </div>
@@ -1255,1959 +1027,5 @@ export default function Dashboard() {
         />
       )}
     </TooltipProvider>
-  );
-}
-
-function EmptyState({
-  isWeekend,
-  dayLabel,
-  canClaimCoverage,
-  gapSlices,
-  onAssignGap,
-}: {
-  isWeekend: boolean;
-  dayLabel: string;
-  canClaimCoverage: boolean;
-  gapSlices: GapSlice[];
-  onAssignGap: (startUtc: number, endUtc: number) => void;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-4 text-center max-w-xs">
-      <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center">
-        <Clock size={24} className="text-muted-foreground" />
-      </div>
-      <div>
-        <p className="text-sm font-medium text-foreground mb-1">
-          {isWeekend ? `${dayLabel} — Weekend` : `No shifts on ${dayLabel}`}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {isWeekend
-            ? "No shifts are scheduled on weekends. Head to Agents to add weekend coverage."
-            : "No agents have shifts scheduled for this day. Go to Agents to set up shifts."}
-        </p>
-      </div>
-      {canClaimCoverage && gapSlices.length > 0 && (
-        <div className="flex flex-wrap justify-center gap-1.5">
-          {gapSlices.slice(0, 8).map((gap) => (
-            <button
-              key={`${gap.startUtc}-${gap.endUtc}`}
-              onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
-              className="text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"
-            >
-              {"Join line "}{formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UnifiedTimeline({
-  scope, agents, allShifts, otRecords, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
-  leverState, utcHour, selectedDay, selectedDate, focusHour, onSelectDay,
-  toggleVisible, toggleAll, onAssignOvertime, onAssignGap, onOpenOvertime,
-}: {
-  scope: "day" | "multi";
-  agents: Agent[];
-  allShifts: Shift[];
-  otRecords: OvertimeLog[];
-  isAdmin: boolean;
-  agentSessionId: number | null;
-  visible: Set<number>;
-  highlighted: number | null;
-  setHighlighted: (id: number | null) => void;
-  leverState: Record<number, LeverState>;
-  utcHour: number;
-  selectedDay: number;
-  selectedDate: string;
-  focusHour: number | null;
-  onSelectDay: (dow: number, date?: string) => void;
-  toggleVisible: (id: number) => void;
-  toggleAll: () => void;
-  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number, segStart?: number, segEnd?: number, segDayOffset?: number) => void;
-  onAssignGap: (startUtc: number, endUtc: number, dayOfWeek?: number, date?: string) => void;
-  onOpenOvertime: (record: OvertimeLog) => void;
-}) {
-  const canClaimCoverage = isAdmin || agentSessionId != null;
-  const PX_PER_HOUR = window.innerWidth < 768 ? 36 : window.innerWidth < 1024 ? 46 : 56;
-  const LABEL_W     = window.innerWidth < 768 ? 80 : 120;
-  const RULER_H     = 50;
-  const COV_H       = 14;
-  const ROW_H       = agents.length > 12 ? 28 : agents.length > 8 ? 32 : 38;
-
-  const PAST_DAYS   = 7;
-  const FUTURE_DAYS = 6;
-  const days        = scope === "multi" ? buildDays(PAST_DAYS, FUTURE_DAYS, parseIsoDate(selectedDate)) : null;
-  const todayIndex  = scope === "multi" ? (days?.findIndex((day) => day.isToday) ?? -1) : -1;
-  const selectedIndex = scope === "multi" ? (days?.findIndex((day) => day.date === selectedDate) ?? -1) : -1;
-
-  const TOTAL_HOURS = scope === "multi" ? (days!.length * 24) : 24;
-  const CANVAS_W    = TOTAL_HOURS * PX_PER_HOUR;
-  const CANVAS_H    = RULER_H + agents.length * (ROW_H + 2) + COV_H + 20;
-
-  const { ref: scrollRef, onPointerDown, onPointerMove, onPointerUp, isDragging, stopDrag } = useDragScroll();
-  const [barTooltip, setBarTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
-  const hasAppliedDeepLinkFocus = useRef(false);
-
-  useEffect(() => {
-    if (!scrollRef.current) return;
-    if (hasAppliedDeepLinkFocus.current) return;
-
-    if (scope === "multi" && focusHour != null && selectedDate) {
-      const targetIndex = days?.findIndex((d) => d.date === selectedDate) ?? -1;
-      if (targetIndex >= 0) {
-        const focusPx = (targetIndex * 24 + focusHour) * PX_PER_HOUR;
-        const w = scrollRef.current.clientWidth;
-        scrollRef.current.scrollLeft = Math.max(0, focusPx - w / 2 + LABEL_W);
-        hasAppliedDeepLinkFocus.current = true;
-        return;
-      }
-    }
-
-    if (scope === "multi") {
-      const anchorIndex = todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex);
-      const nowPx = (anchorIndex * 24 + utcHour) * PX_PER_HOUR;
-      const w     = scrollRef.current.clientWidth;
-      scrollRef.current.scrollLeft = Math.max(0, nowPx - w / 2 + LABEL_W);
-    } else {
-      const nowPx = utcHour * PX_PER_HOUR;
-      const w     = scrollRef.current.clientWidth - LABEL_W;
-      if (nowPx > w * 0.6) {
-        scrollRef.current.scrollLeft = Math.max(0, nowPx - w * 0.3);
-      }
-    }
-    hasAppliedDeepLinkFocus.current = true;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, focusHour, selectedDate]);
-
-  const scrollToNow = () => {
-    if (!scrollRef.current) return;
-    if (scope === "multi") {
-      const anchorIndex = todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex);
-      const nowPx = (anchorIndex * 24 + utcHour) * PX_PER_HOUR;
-      const w     = scrollRef.current.clientWidth;
-      scrollRef.current.scrollTo({ left: Math.max(0, nowPx - w / 2 + LABEL_W), behavior: "smooth" });
-    } else {
-      scrollRef.current.scrollTo({ left: Math.max(0, utcHour * PX_PER_HOUR - 80), behavior: "smooth" });
-    }
-  };
-
-  const nowCanvasPx = scope === "multi"
-    ? ((todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex)) * 24 + utcHour) * PX_PER_HOUR
-    : utcHour * PX_PER_HOUR;
-
-  const gridHours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
-
-  const renderAgentRow = (agent: Agent, dayOffset: number, dayShifts: Shift[]) => {
-    const isVis  = visible.has(agent.id);
-    const isHigh = highlighted === agent.id;
-
-    const agentShifts = dayShifts.filter(s => s.agentId === agent.id);
-    const rowOffsetX  = dayOffset * 24 * PX_PER_HOUR;
-
-    return agentShifts.map(shift => {
-      const ls         = leverState[shift.id];
-      const as_        = ls?.activeStart ?? shift.startUtc;
-      const ae         = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
-      const resolved   = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
-      const baseSegs   = segmentShift(shift.startUtc, normaliseEndUtc(shift.startUtc, shift.endUtc));
-      const activeSegs = segmentShift(as_, ae);
-      const normBaseEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
-      const isOvernight = baseSegs.length > 1;
-      const showGhost = isVis && shiftHasOverride(shift.startUtc, shift.endUtc, as_, ae);
-
-      // For overnight shifts in multi-day scope:
-      //   dayOfWeek = the labeled/operational day (where the bulk of hours fall)
-      //   dayOffset:0 segment (e.g. 23:00-24:00) starts on the PREVIOUS calendar day
-      //   dayOffset:1 segment (e.g. 00:00-07:00) is on the shift's own day (rowOffsetX)
-      // No suppression: the pre-midnight segment always belongs to this shift,
-      // even if the previous day is an off-day (e.g. Mon shift starts Sun 23:00)
-      const segOffsetX = (seg: { dayOffset: number }) => {
-        // dayOffset:-1 = lever pulled back into previous calendar day (negative activeStart)
-        if (seg.dayOffset === -1) return scope === "day" ? rowOffsetX : rowOffsetX - 24 * PX_PER_HOUR;
-        if (!isOvernight || scope === "day") return rowOffsetX;
-        return seg.dayOffset === 0
-          ? rowOffsetX - 24 * PX_PER_HOUR   // previous day column
-          : rowOffsetX;                      // shift's own day column
-      };
-
-      const { pct, otPct } = scope === "day" && selectedDay === getUTCDay()
-        ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)
-        : { pct: 0, otPct: 0 };
-      const barLabel = `${agent.name}: ${shiftLabel(shift.startUtc, shift.endUtc)} · ${formatDuration(resolved.baseDuration)}`;
-
-      // Check if there's a pending OT record claiming a portion of this shift
-      const activeClaimForShift = getActiveClaimForShift(shift, otRecords, shift.dayOfWeek);
-
-      return (
-        <div key={shift.id} style={{ position: "absolute", inset: 0 }}>
-          {showGhost && baseSegs.map((seg, si) => {
-            const offX = segOffsetX(seg);
-            return (
-            <div key={`ghost-${si}`}
-              style={{
-                position: "absolute",
-                left: offX + seg.start * PX_PER_HOUR,
-                width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
-                top: 6, height: ROW_H - 12,
-                backgroundColor: agent.color + (isVis ? "28" : "10"),
-                border: `1px solid ${agent.color}${isVis ? "35" : "15"}`,
-                borderRadius: 3,
-              }}
-            />
-            );
-          })}
-
-          {/* Overnight connector: only show in day view where segments wrap */}
-          {isOvernight && scope === "day" && (() => {
-            const seg0 = baseSegs[0];
-            const x1   = rowOffsetX + seg0.end * PX_PER_HOUR;
-            const x2   = rowOffsetX + baseSegs[1].start * PX_PER_HOUR;
-            if (Math.abs(x2 - x1) < 2) return null; // contiguous, no connector needed
-            const midY = ROW_H / 2;
-            return (
-              <svg style={{ position: "absolute", left: 0, top: 0, width: "100%", height: ROW_H, overflow: "visible", pointerEvents: "none" }}>
-                <circle cx={x1} cy={midY} r={2.5} fill={agent.color} opacity={isVis ? 0.5 : 0.15} />
-                <circle cx={x2} cy={midY} r={2.5} fill={agent.color} opacity={isVis ? 0.5 : 0.15} />
-                <line x1={x1} y1={midY} x2={x2} y2={midY}
-                  stroke={agent.color} strokeWidth={1} strokeDasharray="3 3" opacity={isVis ? 0.35 : 0.1} />
-                <text x={x1 + 3} y={midY - 4} fontSize="7" fill={agent.color} opacity={isVis ? 0.7 : 0.2} fontFamily="monospace">+1</text>
-              </svg>
-            );
-          })()}
-
-          {isVis && activeSegs.map((seg, si) => {
-            const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
-            if (segEnd <= seg.start) return null;
-            const offX = segOffsetX(seg);
-            const barLeft = offX + seg.start * PX_PER_HOUR;
-            const barW    = Math.max(2, (segEnd - seg.start) * PX_PER_HOUR);
-            const showLabel = barW > 56;
-            return (
-              <div key={`active-${si}`}
-                style={{
-                  position: "absolute",
-                  left: barLeft, width: barW,
-                  top: 4, height: ROW_H - 8,
-                  backgroundColor: agent.color,
-                  opacity: isHigh ? 0.95 : 0.78,
-                  borderRadius: 3,
-                  boxShadow: isHigh ? `0 0 8px ${agent.color}60` : undefined,
-                  cursor: "default",
-                }}
-                onPointerDownCapture={stopDrag}
-                onMouseEnter={!showLabel ? (e) => {
-                  const rect = scrollRef.current?.getBoundingClientRect();
-                  if (rect) setBarTooltip({ text: barLabel, x: e.clientX - rect.left + scrollRef.current!.scrollLeft, y: e.clientY - rect.top });
-                } : undefined}
-                onMouseLeave={!showLabel ? () => setBarTooltip(null) : undefined}
-              >
-                {showLabel && (
-                  <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", padding: "0 6px", pointerEvents: "none", overflow: "hidden" }}>
-                    <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 700, whiteSpace: "nowrap", color: "white", mixBlendMode: "difference", opacity: 0.9 }}>
-                      {formatUtcHour(shift.startUtc)}–{formatUtcHour(shift.endUtc)}
-                      {pct > 0 && <span style={{ marginLeft: 4, opacity: 0.8 }}>{pct}%</span>}
-                    </span>
-                  </span>
-                )}
-              </div>
-            );
-          })}
-
-          {resolved.breakStart != null && (() => {
-            const bk  = resolved.breakStart;
-            // Position break on correct day column for overnight shifts
-            const bkDayOff = isOvernight && bk < shift.startUtc ? 1 : 0;
-            const bkOffX = segOffsetX({ dayOffset: bkDayOff });
-            const bkL = bkOffX + bk * PX_PER_HOUR;
-            const bkW = Math.max(4, 0.5 * PX_PER_HOUR);
-            return (
-              <>
-                <div style={{ position: "absolute", left: bkL, width: bkW, top: 2, height: ROW_H - 4, backgroundColor: "rgba(255,255,255,0.92)", borderRadius: 2, zIndex: 2 }} />
-                <div style={{ position: "absolute", left: bkL + bkW / 2 - 5, top: 0, width: 10, height: ROW_H, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, zIndex: 3, pointerEvents: "none" }}>☕</div>
-              </>
-            );
-          })()}
-
-          {isVis && resolved.hasOvertime && (() => {
-            const otSegs = [
-              ...(as_ < shift.startUtc ? segmentShift(as_, shift.startUtc) : []),
-              ...(ae > normBaseEnd     ? segmentShift(normBaseEnd, ae)      : []),
-            ];
-            return otSegs.map((seg, si) => (
-              <div key={`ot-${si}`}
-                style={{
-                  position: "absolute",
-                  left: segOffsetX(seg) + seg.start * PX_PER_HOUR,
-                  width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
-                  top: 2, height: ROW_H - 4,
-                  backgroundColor: agent.color, opacity: 0.9, borderRadius: 3,
-                  boxShadow: `0 0 4px white, 0 0 8px ${agent.color}`,
-                }}
-              />
-            ));
-          })()}
-
-          {isVis && resolved.hasShrink && !activeClaimForShift && (() => {
-            const shrinkSegs = [
-              ...(as_ > shift.startUtc ? segmentShift(shift.startUtc, as_) : []),
-              ...(ae < normBaseEnd     ? segmentShift(ae, normBaseEnd)      : []),
-            ];
-            return shrinkSegs.map((seg, si) => (
-              <div key={`shrink-${si}`}
-                onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, seg.end - seg.start, seg.start, seg.end, seg.dayOffset)}
-                onPointerDownCapture={stopDrag}
-                title={canClaimCoverage ? "Join line for this freed time" : "Freed segment"}
-                style={{
-                  position: "absolute",
-                  left: segOffsetX(seg) + seg.start * PX_PER_HOUR,
-                  width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
-                  top: 8, height: ROW_H - 16, borderRadius: 2,
-                  background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
-                  border: "1px dashed rgba(255,140,0,0.6)",
-                  cursor: canClaimCoverage ? "pointer" : "default",
-                  zIndex: 10,
-                }}
-              />
-            ));
-          })()}
-
-          {isVis && activeClaimForShift && (() => {
-            const claimSegs = segmentShift(activeClaimForShift.coverStartUtc!, activeClaimForShift.coverEndUtc!);
-            const isPending = activeClaimForShift.status === "pending";
-            return claimSegs.map((seg, si) => (
-              <div key={`pending-shrink-${si}`}
-                onClick={() => onOpenOvertime(activeClaimForShift)}
-                title={isPending
-                  ? `Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`
-                  : `Claimed coverage: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} (${activeClaimForShift.status})`}
-                style={{
-                  position: "absolute",
-                  left: segOffsetX(seg) + seg.start * PX_PER_HOUR,
-                  width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
-                  top: 8, height: ROW_H - 16, borderRadius: 2,
-                  background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.7) 0px,rgba(255,140,0,0.7) 3px,transparent 3px,transparent 6px)",
-                  border: isPending ? "1px dashed rgba(255,140,0,0.6)" : "1px dashed rgba(255,255,255,0.85)",
-                  cursor: "pointer",
-                  zIndex: 9,
-                }}
-              />
-            ));
-          })()}
-        </div>
-      );
-    });
-  };
-
-  const renderCoverageBars = (agent: Agent, dayOffset: number, dayOfWeek: number) => {
-    if (!visible.has(agent.id)) return null;
-    // Show pending claims as preview and approved/paid claims as committed coverage.
-    const coverageSlots = otRecords.filter(
-      r => r.agentId === agent.id
-        && isCoverageClaim(r)
-        && (r.status === "pending" || r.status === "approved" || r.status === "paid")
-        && r.dayOfWeek === dayOfWeek
-        && r.coverStartUtc != null
-        && r.coverEndUtc != null
-    );
-    if (coverageSlots.length === 0) return null;
-
-    const rowOffsetX = dayOffset * 24 * PX_PER_HOUR;
-    const coveredByAgent = (covByAgentId: number | null) =>
-      agents.find(a => a.id === covByAgentId);
-
-    return coverageSlots.map(slot => {
-      const segs = segmentShift(slot.coverStartUtc!, slot.coverEndUtc!);
-      const covAgent = coveredByAgent(slot.coveredByAgentId);
-      const isOvernight = segs.length > 1;
-      const isPending = slot.status === "pending";
-      const sourceLabel = covAgent?.name ?? (slot.origin === "claimed-open-gap" ? "open gap" : "agent");
-
-      const covSegOffsetX = (seg: { dayOffset: number }) => {
-        if (!isOvernight || scope === "day") return rowOffsetX;
-        return seg.dayOffset === 0
-          ? rowOffsetX - 24 * PX_PER_HOUR
-          : rowOffsetX;
-      };
-
-      return segs.map((seg, si) => (
-        <div
-          key={`cov-${slot.id}-${si}`}
-          onClick={() => onOpenOvertime(slot)}
-          title={`${isPending ? "Pending preview" : "Covering"} ${sourceLabel}: ${formatUtcHour(slot.coverStartUtc!)}–${formatUtcHour(slot.coverEndUtc!)} UTC`}
-          style={{
-            position: "absolute",
-            left: covSegOffsetX(seg) + seg.start * PX_PER_HOUR,
-            width: Math.max(2, (seg.end - seg.start) * PX_PER_HOUR),
-            top: 4, height: ROW_H - 8,
-            backgroundColor: isPending ? "transparent" : agent.color,
-            opacity: isPending ? 0.75 : 0.85,
-            borderRadius: 3,
-            border: isPending ? `2px dashed ${hexToRgba(agent.color, 0.9)}` : `2px dashed white`,
-            boxShadow: isPending ? "none" : `0 0 6px ${agent.color}80`,
-            cursor: "pointer",
-          }}
-        >
-          <span style={{
-            position: "absolute", inset: 0, display: "flex", alignItems: "center",
-            padding: "0 4px", pointerEvents: "none", overflow: "hidden",
-          }}>
-            <span style={{
-              fontSize: 8, fontFamily: "monospace", fontWeight: 700,
-              whiteSpace: "nowrap", color: "white", mixBlendMode: "difference", opacity: 0.9,
-            }}>
-              {isPending ? "~" : "↗"} {sourceLabel} {formatUtcHour(slot.coverStartUtc!)}–{formatUtcHour(slot.coverEndUtc!)}
-            </span>
-          </span>
-        </div>
-      ));
-    });
-  };
-
-  const renderCoverageStrip = (shiftsForDay: Shift[], dayOffsetPx: number, dayOfWeek: number) => {
-    const covInput = shiftsForDay
-      .filter(s => visible.has(s.agentId))
-      .map(s => {
-        const ls = leverState[s.id];
-        return {
-          activeStart: ls?.activeStart ?? s.startUtc,
-          activeEnd:   ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc),
-        };
-      })
-      .concat(
-        otRecords
-          .filter(
-            (slot) =>
-              visible.has(slot.agentId) &&
-              isCoverageClaim(slot) &&
-              (slot.status === "approved" || slot.status === "paid") &&
-              slot.dayOfWeek === dayOfWeek &&
-              slot.coverStartUtc != null &&
-              slot.coverEndUtc != null
-          )
-          .map((slot) => ({ activeStart: slot.coverStartUtc!, activeEnd: slot.coverEndUtc! }))
-      );
-    const cov    = calcCoverageForDay(covInput);
-    const maxCov = Math.max(...cov, 1);
-    return cov.map((c, h) => (
-      <div key={`${dayOffsetPx}-${h}`}
-        style={{
-          position: "absolute",
-          left: dayOffsetPx + h * PX_PER_HOUR,
-          width: Math.max(1, PX_PER_HOUR - 1),
-          top: 0, height: COV_H, borderRadius: 1,
-          backgroundColor: c === 0
-            ? "rgba(230,57,70,0.4)"
-            : hexToRgba("#FFD700", 0.1 + (c / maxCov) * 0.55),
-        }}
-      />
-    ));
-  };
-
-  const renderDayRuler = (offsetPx: number) => {
-    const items: JSX.Element[] = [];
-    for (let h = 0; h <= 24; h++) {
-      const x       = offsetPx + h * PX_PER_HOUR;
-      const isMajor = h % 6 === 0;
-      items.push(
-        <div key={`hr-${offsetPx}-${h}`} style={{ position: "absolute", left: x, top: 0, bottom: 0 }}>
-          <div style={{
-            position: "absolute",
-            top: isMajor ? 0 : RULER_H - 10,
-            bottom: 0, width: 1,
-            backgroundColor: isMajor ? "hsl(var(--border))" : "hsl(var(--border) / 0.4)",
-          }} />
-          {h < 24 && (
-            <span style={{
-              position: "absolute", bottom: 3, left: 2,
-              fontSize: 8, fontFamily: "monospace",
-              color: isMajor ? "hsl(var(--primary) / 0.8)" : "hsl(var(--muted-foreground))",
-              whiteSpace: "nowrap",
-            }}>
-              {h}h
-            </span>
-          )}
-        </div>
-      );
-      if (h < 24) {
-        for (let m = 1; m <= 11; m++) {
-          const mx        = x + m * (PX_PER_HOUR / 12);
-          const isHalf    = m === 6;
-          const isQuarter = m === 3 || m === 9;
-          const top   = isHalf ? RULER_H - 9 : isQuarter ? RULER_H - 6 : RULER_H - 3;
-          const color = isHalf ? "rgba(255,255,255,0.35)" : isQuarter ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.12)";
-          items.push(
-            <div key={`min-${offsetPx}-${h}-${m}`} style={{
-              position: "absolute",
-              left: mx,
-              top, bottom: 0, width: 1,
-              backgroundColor: color,
-            }} />
-          );
-        }
-      }
-    }
-    return items;
-  };
-
-  return (
-    <div className="flex flex-col h-full min-h-0 bg-background" onMouseLeave={() => setBarTooltip(null)}>
-      {/* Sub-header: info + Now button + agent chips (day scope) */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0 gap-3 min-h-0">
-        <span className="text-[11px] text-muted-foreground shrink-0">
-          {scope === "multi"
-            ? `${days![0].dateLabel} — ${days![days!.length - 1].dateLabel} · UTC`
-            : `${formatWeekdayLongWithDate(selectedDay, selectedDate)} · UTC`}
-        </span>
-
-        {/* Agent toggle chips — only in day timeline */}
-        {scope === "day" && (
-          <div className="flex items-center gap-1 flex-wrap overflow-hidden">
-            <button onClick={toggleAll}
-              className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all shrink-0">
-              {visible.size === agents.length ? "Hide all" : "Show all"}
-            </button>
-            {agents.map(agent => (
-              <button key={agent.id}
-                onClick={() => toggleVisible(agent.id)}
-                onMouseEnter={() => setHighlighted(agent.id)}
-                onMouseLeave={() => setHighlighted(null)}
-                data-testid={`toggle-agent-${agent.id}`}
-                className={cn(
-                  "text-[10px] px-2 py-0.5 rounded-full border font-medium transition-all duration-150 shrink-0",
-                  visible.has(agent.id) ? "opacity-100" : "opacity-40 grayscale"
-                )}
-                style={{
-                  borderColor: agent.color + "60",
-                  backgroundColor: visible.has(agent.id) ? agent.color + "20" : "transparent",
-                  color: visible.has(agent.id) ? agent.color : "hsl(var(--muted-foreground))",
-                  boxShadow: highlighted === agent.id ? `0 0 6px ${agent.color}50` : undefined,
-                }}
-              >
-                {agent.name}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <button
-          onClick={scrollToNow}
-          className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-md bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-all font-medium shrink-0"
-        >
-          <Clock size={11} /> Now
-        </button>
-      </div>
-
-      {/* Scrollable canvas */}
-      <div
-        ref={scrollRef}
-        className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain"
-        style={{ scrollBehavior: "auto", cursor: isDragging ? "grabbing" : "grab" }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-      >
-        <div style={{ display: "flex", minWidth: CANVAS_W + LABEL_W, height: CANVAS_H, position: "relative" }}>
-
-          {/* Sticky agent label column */}
-          <div style={{
-            position: "sticky", left: 0,
-            width: LABEL_W, minWidth: LABEL_W, zIndex: 20,
-            background: "hsl(var(--background))",
-            borderRight: "1px solid hsl(var(--border))",
-            display: "flex", flexDirection: "column",
-          }}>
-            <div style={{ height: RULER_H }} />
-            {agents.map(agent => (
-              <div
-                key={agent.id}
-                className="flex items-center gap-1.5 px-2 cursor-pointer"
-                style={{ height: ROW_H + 2, opacity: visible.has(agent.id) ? 1 : 0.3 }}
-                onMouseEnter={() => setHighlighted(agent.id)}
-                onMouseLeave={() => setHighlighted(null)}
-              >
-                <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
-                <span className="text-[10px] font-medium truncate" style={{ color: agent.color }}>{agent.name}</span>
-              </div>
-            ))}
-            <div className="flex items-center px-2" style={{ height: COV_H + 8 }}>
-              <span className="text-[9px] text-muted-foreground uppercase tracking-wider">Cov</span>
-            </div>
-          </div>
-
-          {/* Canvas */}
-          <div style={{ position: "relative", width: CANVAS_W, flexShrink: 0 }}>
-
-            {/* Ruler */}
-            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: RULER_H, zIndex: 10, borderBottom: "1px solid hsl(var(--border) / 0.6)" }}>
-              {scope === "day" ? (
-                renderDayRuler(0)
-              ) : (
-                <>
-                  {Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
-                    const x      = h * PX_PER_HOUR;
-                    const localH = h % 24;
-                    const isMid  = localH === 0;
-                    const isEven = h % 2 === 0;
-                    return (
-                      <Fragment key={`mh-${h}`}>
-                        {/* Hour tick */}
-                        <div style={{ position: "absolute", left: x, top: 0, bottom: 0 }}>
-                          <div style={{
-                            position: "absolute",
-                            top: isMid ? 0 : isEven ? RULER_H - 8 : RULER_H - 5,
-                            bottom: 0, width: 1,
-                            backgroundColor: isMid ? "hsl(var(--border))" : isEven ? "hsl(var(--border) / 0.4)" : "hsl(var(--border) / 0.2)",
-                          }} />
-                          {isEven && !isMid && (
-                            <span style={{ position: "absolute", bottom: 2, left: 2, fontSize: 8, fontFamily: "monospace", color: "hsl(var(--muted-foreground))", whiteSpace: "nowrap" }}>
-                              {localH.toString().padStart(2, "0")}
-                            </span>
-                          )}
-                        </div>
-                        {/* 30-min and 15-min sub-ticks */}
-                        {h < TOTAL_HOURS && (
-                          <>
-                            <div style={{
-                              position: "absolute", left: x + PX_PER_HOUR / 2,
-                              top: RULER_H - 5, bottom: 0, width: 1,
-                              backgroundColor: "rgba(255,255,255,0.28)",
-                            }} />
-                            <div style={{
-                              position: "absolute", left: x + PX_PER_HOUR / 4,
-                              top: RULER_H - 3, bottom: 0, width: 1,
-                              backgroundColor: "rgba(255,255,255,0.15)",
-                            }} />
-                            <div style={{
-                              position: "absolute", left: x + PX_PER_HOUR * 3 / 4,
-                              top: RULER_H - 3, bottom: 0, width: 1,
-                              backgroundColor: "rgba(255,255,255,0.15)",
-                            }} />
-                          </>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                  {days!.map(day => {
-                    const x         = day.dayIndex * 24 * PX_PER_HOUR;
-                    const isWeekend = day.dayOfWeek === 0 || day.dayOfWeek === 6;
-                    return (
-                      <div
-                        key={day.date}
-                        onClick={() => {
-                          const d = new Date(day.date + "T00:00:00Z");
-                          onSelectDay(d.getUTCDay(), day.date);
-                        }}
-                        title={`Open ${DAY_FULL[day.dayOfWeek]} ${day.dateLabel} in Day view`}
-                        style={{ position: "absolute", left: x + 4, top: 4, cursor: "pointer", userSelect: "none" }}
-                      >
-                        <span style={{
-                          fontSize: day.isToday ? 11 : 10,
-                          fontWeight: day.isToday ? 700 : 500,
-                          color: day.isToday
-                            ? "hsl(var(--primary))"
-                            : isWeekend ? "hsl(var(--muted-foreground) / 0.5)"
-                            : "hsl(var(--muted-foreground))",
-                          fontFamily: "monospace",
-                        }}>
-                          {day.label} {day.dateLabel}
-                        </span>
-                        {day.isToday && (
-                          <span style={{
-                            display: "inline-block", width: 5, height: 5, borderRadius: "50%",
-                            backgroundColor: "hsl(var(--primary))", marginLeft: 4, verticalAlign: "middle",
-                            animation: "pulse 2s infinite",
-                          }} />
-                        )}
-                      </div>
-                    );
-                  })}
-                </>
-              )}
-            </div>
-
-            {/* Current hour highlight */}
-            {scope === "day" ? (
-              <div style={{
-                position: "absolute",
-                left: Math.floor(utcHour) * PX_PER_HOUR,
-                top: RULER_H, width: PX_PER_HOUR, bottom: 0,
-                background: "rgba(255,215,0,0.04)",
-                borderLeft: "1px solid rgba(255,215,0,0.12)",
-                borderRight: "1px solid rgba(255,215,0,0.12)",
-                pointerEvents: "none",
-              }} />
-            ) : (
-              days!.map(day => {
-                const x         = day.dayIndex * 24 * PX_PER_HOUR;
-                const isWeekend = day.dayOfWeek === 0 || day.dayOfWeek === 6;
-                return (
-                  <div key={day.date} style={{
-                    position: "absolute", left: x, top: RULER_H,
-                    width: 24 * PX_PER_HOUR, bottom: 0,
-                    backgroundColor: day.isToday
-                      ? "rgba(255,215,0,0.03)"
-                      : isWeekend ? "rgba(255,255,255,0.008)" : undefined,
-                    borderLeft: day.dayIndex > 0 ? "1px solid hsl(var(--border) / 0.3)" : undefined,
-                  }} />
-                );
-              })
-            )}
-
-            {/* Grid lines */}
-            {scope === "day" ? (
-              gridHours.map(h => (
-                <div key={h} style={{
-                  position: "absolute", left: h * PX_PER_HOUR,
-                  top: RULER_H, bottom: 0, width: 1,
-                  backgroundColor: "hsl(var(--border) / 0.4)", pointerEvents: "none",
-                }} />
-              ))
-            ) : (
-              Array.from({ length: TOTAL_HOURS + 1 }, (_, h) => {
-                if (h % 24 === 0 || (h % 24 !== 0 && h % 2 !== 0)) return null;
-                return (
-                  <div key={h} style={{
-                    position: "absolute", left: h * PX_PER_HOUR,
-                    top: RULER_H, bottom: 0, width: 1,
-                    backgroundColor: "hsl(var(--border) / 0.2)", pointerEvents: "none",
-                  }} />
-                );
-              })
-            )}
-
-            {/* Agent rows */}
-            {agents.map((agent, ai) => {
-              const rowTop = RULER_H + ai * (ROW_H + 2);
-              const isHigh = highlighted === agent.id;
-
-              return (
-                <div
-                  key={agent.id}
-                  style={{
-                    position: "absolute", top: rowTop, left: 0, right: 0, height: ROW_H,
-                    opacity: visible.has(agent.id) ? 1 : 0.2,
-                    backgroundColor: isHigh ? agent.color + "08" : undefined,
-                    borderRadius: 3,
-                    transition: "background-color 0.1s",
-                  }}
-                  onMouseEnter={() => setHighlighted(agent.id)}
-                  onMouseLeave={() => setHighlighted(null)}
-                >
-                  {scope === "day" ? (
-                    <>
-                      {renderAgentRow(agent, 0, allShifts.filter(s => s.dayOfWeek === selectedDay))}
-                      {renderCoverageBars(agent, 0, selectedDay)}
-                    </>
-                  ) : (
-                    days!.map(day => (
-                      <div key={day.date} style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H }}>
-                        {renderAgentRow(agent, day.dayIndex, allShifts.filter(s => s.dayOfWeek === day.dayOfWeek))}
-                        {renderCoverageBars(agent, day.dayIndex, day.dayOfWeek)}
-                      </div>
-                    ))
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Coverage strip */}
-            <div style={{
-              position: "absolute",
-              top: RULER_H + agents.length * (ROW_H + 2) + 4,
-              left: 0, right: 0, height: COV_H,
-            }}>
-              {scope === "day"
-                ? renderCoverageStrip(allShifts.filter(s => s.dayOfWeek === selectedDay), 0, selectedDay)
-                : days!.map(day => renderCoverageStrip(allShifts.filter(s => s.dayOfWeek === day.dayOfWeek), day.dayIndex * 24 * PX_PER_HOUR, day.dayOfWeek))
-              }
-            </div>
-
-            {scope === "day" && canClaimCoverage && findGapRanges(calcCoverageForDay(
-              allShifts
-                .filter(s => s.dayOfWeek === selectedDay && visible.has(s.agentId))
-                .map(s => {
-                  const ls = leverState[s.id];
-                  return {
-                    activeStart: ls?.activeStart ?? s.startUtc,
-                    activeEnd: ls?.activeEnd ?? normaliseEndUtc(s.startUtc, s.endUtc),
-                  };
-                })
-                .concat(
-                  otRecords
-                    .filter(r => visible.has(r.agentId) && isCoverageClaim(r) && (r.status === "approved" || r.status === "paid") && r.dayOfWeek === selectedDay && r.coverStartUtc != null && r.coverEndUtc != null)
-                    .map((r) => ({ activeStart: r.coverStartUtc!, activeEnd: r.coverEndUtc! }))
-                )
-            )).map((gap) => (
-              <button
-                key={`timeline-gap-${gap.start}-${gap.end}`}
-                onClick={() => onAssignGap(gap.start, gap.end, selectedDay, selectedDate)}
-                style={{
-                  position: "absolute",
-                  left: gap.start * PX_PER_HOUR,
-                  width: Math.max(2, (gap.end - gap.start) * PX_PER_HOUR),
-                  top: RULER_H + agents.length * (ROW_H + 2) + 2,
-                  height: COV_H + 4,
-                  border: "1px dashed rgba(230,57,70,0.8)",
-                  background: "rgba(230,57,70,0.08)",
-                  borderRadius: 3,
-                  zIndex: 12,
-                  cursor: "pointer",
-                }}
-                title={`Join line for gap ${formatUtcHour(gap.start)}-${formatUtcHour(gap.end)} UTC`}
-              />
-            ))}
-
-            {/* Now line */}
-            {(scope === "day" || todayIndex >= 0) && (
-              <div style={{
-                position: "absolute", left: nowCanvasPx,
-                top: 0, bottom: 0, width: 1,
-                backgroundColor: "hsl(var(--primary))", opacity: 0.85,
-                zIndex: 15, pointerEvents: "none",
-              }}>
-                <div style={{
-                  position: "absolute", top: RULER_H - 6, left: -4,
-                  width: 9, height: 9, borderRadius: "50%",
-                  backgroundColor: "hsl(var(--primary))",
-                }} />
-              </div>
-            )}
-
-          </div>
-        </div>
-      </div>
-
-      {barTooltip && (
-        <div
-          className="fixed z-50 pointer-events-none px-2.5 py-1.5 rounded-md bg-card border border-border shadow-lg text-xs whitespace-nowrap"
-          style={{ left: barTooltip.x + 12, top: barTooltip.y - 32 }}
-        >
-          {barTooltip.text}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ClockVisualizer({
-  agents, shifts, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
-  leverState, utcHour, coverage, otRecords,
-  tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime, onAssignGap, onOpenOvertime,
-}: {
-  agents: Agent[]; shifts: Shift[]; isAdmin: boolean; agentSessionId: number | null; visible: Set<number>;
-  highlighted: number | null; setHighlighted: (id: number | null) => void;
-  leverState: Record<number, LeverState>; utcHour: number;
-  coverage: number[]; otRecords: OvertimeLog[];
-  tooltipInfo: any; setTooltipInfo: (v: any) => void;
-  selectedDay: number;
-  onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number, segStart?: number, segEnd?: number, segDayOffset?: number) => void;
-  onAssignGap: (startUtc: number, endUtc: number) => void;
-  onOpenOvertime: (record: OvertimeLog) => void;
-}) {
-  const canClaimCoverage = isAdmin || agentSessionId != null;
-  const SIZE   = 360;
-  const CX = SIZE / 2, CY = SIZE / 2;
-  const BASE_R = 100;
-  const RING_W = 10;
-  const GAP    = 3;
-  const HEAT_R = BASE_R + agents.length * (RING_W + GAP) + 10;
-  const svgRef = useRef<SVGSVGElement>(null);
-
-  const todayUTCDay = getUTCDay();
-  const isToday     = selectedDay === todayUTCDay;
-  const now         = new Date();
-  const secAngle    = (now.getUTCSeconds() / 60) * 360 - 90;
-
-  const NON_HOVER_START = 11;
-  const NON_HOVER_END   = 13;
-
-  const interactiveParts = (start: number, end: number) => {
-    if (end <= NON_HOVER_START || start >= NON_HOVER_END) return [{ start, end }];
-    if (start >= NON_HOVER_START && end <= NON_HOVER_END) return [];
-    if (start < NON_HOVER_START && end > NON_HOVER_END) {
-      return [{ start, end: NON_HOVER_START }, { start: NON_HOVER_END, end }];
-    }
-    if (start < NON_HOVER_START) return [{ start, end: NON_HOVER_START }];
-    return [{ start: NON_HOVER_END, end }];
-  };
-
-  const gapRanges = findGapRanges(coverage);
-
-  return (
-    <div className="relative flex items-center justify-center w-full">
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${SIZE} ${SIZE}`}
-        className="overflow-visible"
-        style={{ width: `min(${SIZE}px, 100%)`, height: "auto", filter: "drop-shadow(0 0 30px rgba(0,0,0,0.8))" }}
-        onMouseLeave={() => { setHighlighted(null); setTooltipInfo(null); }}
-      >
-        <circle cx={CX} cy={CY} r={HEAT_R + 4} fill="none" stroke="hsl(224 14% 16%)" strokeWidth="1" opacity="0.6" />
-
-        {/* ── Outer ring tick marks — 288 ticks (every 5 min), radiating outside boundary ring ── */}
-        {Array.from({ length: 288 }, (_, i) => {
-          const angle    = hourToAngle(i / 12);
-          const isMajor  = i % 72 === 0;   // 6h: 00, 06, 12, 18
-          const isHour   = i % 12 === 0;   // every 1h
-          const isHalf   = i % 6 === 0;    // every 30min
-          const innerR   = HEAT_R + 5;
-          const outerR   = isMajor ? HEAT_R + 22 : isHour ? HEAT_R + 16 : isHalf ? HEAT_R + 12 : HEAT_R + 9;
-          const color    = isMajor ? "hsl(51 100% 50%)" : isHour ? "rgba(255,255,255,0.60)" : isHalf ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.18)";
-          const sw       = isMajor ? 1.5 : isHour ? 1.0 : isHalf ? 0.75 : 0.6;
-          const p1 = polarToCartesian(CX, CY, innerR, angle);
-          const p2 = polarToCartesian(CX, CY, outerR, angle);
-          return <line key={`otick-${i}`} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={color} strokeWidth={sw} />;
-        })}
-
-        <circle cx={CX} cy={CY} r={BASE_R - 8} fill="hsl(224 18% 11%)" stroke="hsl(224 14% 22%)" strokeWidth="1.5" />
-
-        {Array.from({ length: 48 }, (_, i) => {
-          const h = i / 2;
-          const angle = hourToAngle(h);
-          const isFullHour = i % 2 === 0;
-          const isMajor    = i % 12 === 0;
-          const outer = BASE_R - 9;
-          const inner = isMajor ? BASE_R - 20 : isFullHour ? BASE_R - 16 : BASE_R - 13;
-          const p1 = polarToCartesian(CX, CY, outer, angle);
-          const p2 = polarToCartesian(CX, CY, inner, angle);
-          return (
-            <line key={i} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
-              stroke={isMajor ? "hsl(51 100% 50%)" : isFullHour ? "hsl(0 0% 40%)" : "hsl(0 0% 22%)"}
-              strokeWidth={isMajor ? 1.5 : isFullHour ? 0.75 : 0.5}
-            />
-          );
-        })}
-
-        {Array.from({ length: 24 }, (_, h) => {
-          const isMajor = h % 6 === 0;
-          const labelR  = BASE_R - (isMajor ? 30 : 26);
-          const p = polarToCartesian(CX, CY, labelR, hourToAngle(h));
-          return (
-            <text key={h} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-              fontSize={isMajor ? 8 : 6}
-              fill={isMajor ? "hsl(51 100% 50%)" : "hsl(0 0% 50%)"}
-              fontFamily="Space Mono, monospace"
-              fontWeight={isMajor ? "700" : "400"}
-            >
-              {h.toString().padStart(2, "00")}
-            </text>
-          );
-        })}
-
-        {Array.from({ length: 24 }, (_, h) => {
-          const isMajor = h % 6 === 0;
-          const labelR  = HEAT_R + (isMajor ? 30 : 27);
-          const p = polarToCartesian(CX, CY, labelR, hourToAngle(h));
-          return (
-            <text key={`outer-${h}`} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-              fontSize={isMajor ? 8.5 : 6.5}
-              fill={isMajor ? "rgba(255,255,255,0.90)" : "rgba(255,255,255,0.45)"}
-              fontFamily="Space Mono, monospace"
-              fontWeight={isMajor ? "700" : "400"}
-              style={{ pointerEvents: "none" }}
-            >
-              {h.toString().padStart(2, "0")}
-            </text>
-          );
-        })}
-
-        {/* Outer ring: white base full circle */}
-        <circle
-          cx={CX} cy={CY} r={HEAT_R}
-          fill="none"
-          stroke="rgba(255,255,255,0.12)"
-          strokeWidth={4}
-        />
-
-        {/* Outer ring: dashed red arcs over zero-coverage hours */}
-        {gapRanges.map((gap, i) => {
-          const d = describeArc(CX, CY, HEAT_R, gap.start, gap.end);
-          if (!d) return null;
-          // strokeDasharray approximates per-hour dash segments along the arc circumference
-          const arcLen = ((gap.end - gap.start) / 24) * 2 * Math.PI * HEAT_R;
-          const dash = Math.min(6, arcLen / 3);
-          return (
-            <path
-              key={i}
-              d={d}
-              fill="none"
-              stroke="rgba(230,57,70,0.85)"
-              strokeWidth={4}
-              strokeLinecap="butt"
-              strokeDasharray={`${dash} ${dash}`}
-              style={{ cursor: canClaimCoverage ? "pointer" : "default" }}
-              onClick={() => canClaimCoverage && onAssignGap(gap.start, gap.end)}
-            />
-          );
-        })}
-
-        {agents.map((agent, idx) => {
-          const isVis  = visible.has(agent.id);
-          const isHigh = highlighted === agent.id;
-          const r      = BASE_R + idx * (RING_W + GAP);
-          const alpha  = isVis ? (isHigh ? 1.0 : 0.72) : 0.10;
-          const strokeW = isHigh ? RING_W + 2 : RING_W;
-
-          return (
-            <g key={agent.id}>
-              <circle cx={CX} cy={CY} r={r} fill="none"
-                stroke={hexToRgba(agent.color, 0.12)} strokeWidth={RING_W}
-                style={{ pointerEvents: "none" }}
-              />
-              {shifts.filter(s => s.agentId === agent.id).map(shift => {
-                const ls  = leverState[shift.id];
-                const as_ = ls?.activeStart ?? shift.startUtc;
-                const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
-                const resolved = resolveShift(shift.startUtc, shift.endUtc, as_, ae, shift.breakStart ?? null);
-                const activeClaimForShift = getActiveClaimForShift(shift, otRecords, selectedDay);
-                const bk = resolved.breakStart;
-                const showGhost = isVis && shiftHasOverride(shift.startUtc, shift.endUtc, as_, ae);
-                const { pct, otPct } = isToday
-                  ? shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour)
-                  : { pct: 0, otPct: 0 };
-
-                const baseSegs    = segmentShift(shift.startUtc, normaliseEndUtc(shift.startUtc, shift.endUtc));
-                const activeSegs  = segmentShift(as_, ae);
-                const normBaseEnd = normaliseEndUtc(shift.startUtc, shift.endUtc);
-
-                return (
-                  <g key={shift.id}>
-                    {showGhost && baseSegs.map((seg, si) => (
-                      <path key={`ghost-${si}`}
-                        d={describeArc(CX, CY, r, seg.start, seg.end)}
-                        fill="none" stroke={hexToRgba(agent.color, isVis ? 0.22 : 0.06)}
-                        strokeWidth={RING_W}
-                        style={{ pointerEvents: "none" }}
-                      />
-                    ))}
-                    {baseSegs.flatMap((seg, si) =>
-                      interactiveParts(seg.start, seg.end).map((part, pi) => (
-                        <path key={`hit-${si}-${pi}`}
-                          d={describeArc(CX, CY, r, part.start, part.end)}
-                          fill="none" stroke="white" strokeWidth={RING_W + 6} strokeOpacity={0}
-                          style={{ cursor: "pointer", pointerEvents: "stroke" }}
-                          onMouseEnter={(e) => {
-                            const rect = svgRef.current?.getBoundingClientRect();
-                            setHighlighted(agent.id);
-                            if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
-                          }}
-                          onMouseMove={(e) => {
-                            const rect = svgRef.current?.getBoundingClientRect();
-                            if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
-                          }}
-                          onMouseLeave={() => {
-                            setTooltipInfo(null);
-                            setHighlighted(null);
-                          }}
-                        />
-                      ))
-                    )}
-                    {isVis && bk == null && activeSegs.map((seg, si) => {
-                      const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
-                      if (segEnd <= seg.start) return null;
-                      return (
-                        <path key={`active-${si}`}
-                          d={describeArc(CX, CY, r, seg.start, segEnd)}
-                          fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
-                          style={{ pointerEvents: "none" }}
-                        />
-                      );
-                    })}
-                    {isVis && bk != null && activeSegs.map((seg, si) => {
-                      const bkEnd  = bk + 0.5;
-                      const segEnd = resolved.hasOvertime ? seg.end : Math.min(seg.end, seg.dayOffset === 0 ? normBaseEnd : normBaseEnd - 24);
-                      if (segEnd <= seg.start) return null;
-                      const beforeEnd  = Math.min(bk, segEnd);
-                      const afterStart = Math.min(bkEnd, segEnd);
-                      return (
-                        <g key={`bk-${si}`}>
-                          {beforeEnd > seg.start && (
-                            <path d={describeArc(CX, CY, r, seg.start, beforeEnd)}
-                              fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
-                              style={{ pointerEvents: "none" }}
-                            />
-                          )}
-                          {afterStart < segEnd && (
-                            <path d={describeArc(CX, CY, r, afterStart, segEnd)}
-                              fill="none" stroke={hexToRgba(agent.color, alpha)} strokeWidth={strokeW}
-                              style={{ pointerEvents: "none" }}
-                            />
-                          )}
-                          <path d={describeArc(CX, CY, r, bk, Math.min(bkEnd, segEnd))}
-                            fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth={strokeW + 2}
-                            style={{ pointerEvents: "none" }}
-                          />
-                          {(() => {
-                            const p = polarToCartesian(CX, CY, r, hourToAngle(bk + 0.25));
-                            return (
-                              <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-                                fontSize="5" style={{ pointerEvents: "none", userSelect: "none" }}>
-                                ☕
-                              </text>
-                            );
-                          })()}
-                          {[bk, bk + 0.5].map((pt, pi) => {
-                            const p = polarToCartesian(CX, CY, r, hourToAngle(pt));
-                            return <circle key={pi} cx={p.x} cy={p.y} r={1.5} fill={hexToRgba(agent.color, 0.7)} />;
-                          })}
-                        </g>
-                      );
-                    })}
-                    {isVis && resolved.hasOvertime && (() => {
-                      const otSegs = [
-                        ...(as_ < shift.startUtc ? segmentShift(as_, shift.startUtc) : []),
-                        ...(ae > normBaseEnd     ? segmentShift(normBaseEnd, ae)      : []),
-                      ];
-                      return otSegs.map((seg, si) => (
-                        <path key={`ot-${si}`}
-                          d={describeArc(CX, CY, r, seg.start, seg.end)}
-                          fill="none" stroke={agent.color} strokeWidth={strokeW + 2}
-                          strokeOpacity={isHigh ? 1 : 0.9}
-                          style={{ filter: `drop-shadow(0 0 3px white) drop-shadow(0 0 6px ${agent.color})`, pointerEvents: "none" }}
-                        />
-                      ));
-                    })()}
-                    {isVis && resolved.hasShrink && !activeClaimForShift && (() => {
-                      const shrinkSegs = [
-                        ...(as_ > shift.startUtc ? segmentShift(shift.startUtc, as_) : []),
-                        ...(ae < normBaseEnd     ? segmentShift(ae, normBaseEnd)      : []),
-                      ];
-                      return shrinkSegs.map((seg, si) => (
-                        <path key={`shrink-${si}`}
-                          d={describeArc(CX, CY, r, seg.start, seg.end)}
-                          fill="none" stroke="rgba(255,140,0,0.85)"
-                          strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
-                          style={{ cursor: canClaimCoverage ? "pointer" : "default" }}
-                          onClick={() => canClaimCoverage && onAssignOvertime(shift, agent, seg.end - seg.start, seg.start, seg.end, seg.dayOffset)}
-                        >
-                          <title>{canClaimCoverage ? "Join line for this freed time" : "Freed segment"}</title>
-                        </path>
-                      ));
-                    })()}
-                    {isVis && activeClaimForShift && activeClaimForShift.status === "pending" && (() => {
-                      const claimSegs = segmentShift(activeClaimForShift.coverStartUtc!, activeClaimForShift.coverEndUtc!);
-                      return claimSegs.map((seg, si) => (
-                        <path key={`pending-shrink-${si}`}
-                          d={describeArc(CX, CY, r, seg.start, seg.end)}
-                          fill="none" stroke="rgba(255,140,0,0.85)"
-                          strokeWidth={strokeW * 0.6} strokeDasharray="3 3"
-                          style={{ cursor: "pointer" }}
-                          onClick={() => onOpenOvertime(activeClaimForShift)}
-                        >
-                          <title>{`Pending claim: ${formatDuration(activeClaimForShift.coverEndUtc! - activeClaimForShift.coverStartUtc!)} awaiting manager approval`}</title>
-                        </path>
-                      ));
-                    })()}
-                  </g>
-                );
-              })}
-
-              {isVis && otRecords
-                .filter(
-                  (slot) =>
-                    slot.agentId === agent.id &&
-                    isCoverageClaim(slot) &&
-                    (slot.status === "pending" || slot.status === "approved" || slot.status === "paid") &&
-                    slot.dayOfWeek === selectedDay &&
-                    slot.coverStartUtc != null &&
-                    slot.coverEndUtc != null
-                )
-                .flatMap((slot) => {
-                  const isPending = slot.status === "pending";
-                  const segs = segmentShift(slot.coverStartUtc!, slot.coverEndUtc!);
-                  return segs.map((seg, si) => (
-                    <path
-                      key={`cov-claim-${slot.id}-${si}`}
-                      d={describeArc(CX, CY, r, seg.start, seg.end)}
-                      fill="none"
-                      stroke={hexToRgba(agent.color, isPending ? 0.65 : 0.96)}
-                      strokeWidth={RING_W}
-                      strokeDasharray={isPending ? "2 5" : "6 3"}
-                      strokeLinecap={isPending ? "butt" : "round"}
-                      style={{
-                        filter: isPending
-                          ? "none"
-                          : `drop-shadow(0 0 4px ${agent.color}) drop-shadow(0 0 8px ${agent.color}80)`,
-                        pointerEvents: "auto",
-                        cursor: "pointer",
-                      }}
-                      onClick={() => onOpenOvertime(slot)}
-                    >
-                      <title>{`${isPending ? "Pending coverage preview" : "Approved claimed coverage"}: ${formatUtcHour(slot.coverStartUtc!)}-${formatUtcHour(slot.coverEndUtc!)} UTC`}</title>
-                    </path>
-                  ));
-                })}
-            </g>
-          );
-        })}
-
-        {isToday && (() => {
-          const secTip  = polarToCartesian(CX, CY, HEAT_R + 14, secAngle);
-          const secBase = polarToCartesian(CX, CY, 14, secAngle + 180);
-          return (
-            <line x1={secBase.x} y1={secBase.y} x2={secTip.x} y2={secTip.y}
-              stroke="rgba(255,255,255,0.18)" strokeWidth="0.8" strokeLinecap="round"
-              style={{ pointerEvents: "none" }}
-            />
-          );
-        })()}
-
-        {(() => {
-          const angle = hourToAngle(utcHour);
-          const tip   = polarToCartesian(CX, CY, HEAT_R + 12, angle);
-          const base  = polarToCartesian(CX, CY, 10, angle);
-          return (
-            <g style={{ pointerEvents: "none" }}>
-              <line x1={base.x} y1={base.y} x2={tip.x} y2={tip.y}
-                stroke="hsl(51 100% 50%)" strokeWidth="1.5" strokeLinecap="round" opacity="0.9"
-              />
-              <circle cx={tip.x} cy={tip.y} r={3} fill="hsl(51 100% 50%)" />
-            </g>
-          );
-        })()}
-
-        <circle cx={CX} cy={CY} r={6} fill="hsl(51 100% 50%)" style={{ pointerEvents: "none" }} />
-        <circle cx={CX} cy={CY} r={3} fill="hsl(224 16% 8%)" style={{ pointerEvents: "none" }} />
-
-        {isToday && agents.map((agent, idx) => {
-          const r = BASE_R + idx * (RING_W + GAP);
-          const shift = shifts.find(s => s.agentId === agent.id);
-          if (!shift || !visible.has(agent.id)) return null;
-          const ls  = leverState[shift.id];
-          const as_ = ls?.activeStart ?? shift.startUtc;
-          const ae  = ls?.activeEnd   ?? normaliseEndUtc(shift.startUtc, shift.endUtc);
-          const { pct } = shiftProgress(shift.startUtc, shift.endUtc, as_, ae, utcHour);
-          if (pct <= 0 || pct > 100) return null;
-          const midH = as_ + (pct / 100) * shiftDuration(shift.startUtc, normaliseEndUtc(shift.startUtc, shift.endUtc)) / 2;
-          const p = polarToCartesian(CX, CY, r, hourToAngle(displayHour(midH)));
-          return (
-            <text key={agent.id} x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-              fontSize="6.5" fill="white" fontWeight="800"
-              style={{ pointerEvents: "none", textShadow: `0 0 3px ${agent.color}` }}
-            >
-              {pct}%
-            </text>
-          );
-        })}
-      </svg>
-
-      {tooltipInfo && (
-        <div
-          className="absolute pointer-events-none z-50 px-2.5 py-1.5 rounded-md bg-card border border-border shadow-lg text-xs"
-          style={{ left: tooltipInfo.x + 14, top: tooltipInfo.y - 10 }}
-        >
-          <div className="flex items-center gap-1.5 font-medium" style={{ color: tooltipInfo.agent.color }}>
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tooltipInfo.agent.color }} />
-            {tooltipInfo.agent.name}
-          </div>
-          <div className="text-muted-foreground mt-0.5">
-            {shiftLabel(tooltipInfo.shift.startUtc, tooltipInfo.shift.endUtc)}
-          </div>
-          <div className="text-muted-foreground text-[10px]">
-            {formatDuration(shiftDuration(tooltipInfo.shift.startUtc, normaliseEndUtc(tooltipInfo.shift.startUtc, tooltipInfo.shift.endUtc)))} shift
-          </div>
-          {tooltipInfo.pct > 0 && (
-            <div className="mt-1 pt-1 border-t border-border">
-              <div className="flex items-center gap-1.5 text-[10px]">
-                <div className="h-1 rounded-full flex-1 bg-muted overflow-hidden">
-                  <div className="h-full rounded-full transition-all"
-                    style={{ width: `${Math.min(100, tooltipInfo.pct)}%`, backgroundColor: tooltipInfo.agent.color }}
-                  />
-                </div>
-                <span style={{ color: tooltipInfo.agent.color }} className="font-mono font-bold text-xs">{tooltipInfo.pct}%</span>
-              </div>
-              {tooltipInfo.otPct > 0 && (
-                <div className="text-[9px] mt-0.5" style={{ color: tooltipInfo.agent.color }}>
-                  OT: {tooltipInfo.otPct}% complete
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="absolute top-0 right-0 flex flex-col gap-1.5 bg-card/80 rounded-lg p-2 border border-border">
-        <div className="flex items-center gap-1.5">
-          <div className="w-4 h-1" style={{ backgroundColor: "rgba(255,255,255,0.3)", borderRadius: 2 }} />
-          <span className="text-[9px] text-muted-foreground">Covered</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(230,57,70,0.85)" }} />
-          <span className="text-[9px] text-muted-foreground">Gap</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,140,0,0.9)" }} />
-          <span className="text-[9px] text-muted-foreground">Up for grabs</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-4 border-t-2 border-dashed" style={{ borderColor: "rgba(255,255,255,0.96)" }} />
-          <span className="text-[9px] text-muted-foreground">Claim / preview</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-1.5 rounded-full bg-white" style={{ boxShadow: "0 0 5px white, 0 0 8px rgba(255,255,255,0.6)" }} />
-          <span className="text-[9px] text-muted-foreground">Overtime</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-4 h-1.5 rounded-full bg-white flex items-center justify-center" style={{ fontSize: 5 }}>☕</div>
-          <span className="text-[9px] text-muted-foreground">Break</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ShiftLever({
-  agent, shift, leverState, onLeverPreview, onLeverCommit,
-  onBreakChange,
-  highlighted, onHighlight, onUnhighlight,
-  baseHours, overtimeHours, releasedHours, canEdit, utcHour, selectedDay,
-  playSoftClick, playDragWhoosh,
-}: {
-  agent: Agent; shift: Shift | undefined;
-  leverState: LeverState | undefined;
-  onLeverPreview: (id: number, start: number, end: number) => void;
-  onLeverCommit: (id: number, start: number, end: number) => void;
-  onBreakChange: (id: number, breakStart: number | null) => void;
-  highlighted: boolean; onHighlight: () => void; onUnhighlight: () => void;
-  baseHours: number; overtimeHours: number; releasedHours: number;
-  canEdit: boolean; utcHour: number; selectedDay: number;
-  playSoftClick: () => void;
-  playDragWhoosh: () => void;
-}) {
-  if (!shift || !leverState) return null;
-
-  const { startUtc, endUtc } = shift;
-  const { activeStart, activeEnd } = leverState;
-  const resolved = resolveShift(startUtc, endUtc, activeStart, activeEnd, shift.breakStart ?? null);
-
-  const isToday = selectedDay === getUTCDay();
-  const { pct, otPct } = isToday
-    ? shiftProgress(startUtc, endUtc, activeStart, activeEnd, utcHour)
-    : { pct: 0, otPct: 0 };
-
-  const barMax    = 48;
-  const normEnd   = normaliseEndUtc(startUtc, endUtc);
-  const baseLeft  = (startUtc / barMax) * 100;
-  const baseWidth = (resolved.baseDuration / barMax) * 100;
-  const actLeft   = (activeStart / barMax) * 100;
-  const actWidth  = (resolved.activeDuration / barMax) * 100;
-
-  // OT cap and drift floor flags for inline labels
-  const otCap        = normEnd + MAX_OT_EXTENSION_HOURS;
-  const hitOTCap     = activeEnd >= otCap;
-  const hitDriftFloor = activeStart <= startUtc - MAX_LEVER_DRIFT_HOURS;
-
-  const [showWaivePrompt, setShowWaivePrompt] = useState(false);
-
-  const baseDuration   = normEnd - startUtc;
-  const maxTotalActive = baseDuration + MAX_OT_EXTENSION_HOURS; // combined cap (e.g. 8h shift → 10h max)
-
-  const applyGuards = (start: number, end: number) => {
-    // Individual guards
-    const guardedStart = Math.max(startUtc - MAX_LEVER_DRIFT_HOURS, start);
-    const guardedEnd   = Math.min(otCap, Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, end));
-    // Combined duration cap — prevents stacking both ends to their max simultaneously
-    const durationCappedEnd = Math.min(guardedEnd, guardedStart + maxTotalActive);
-    const finalEnd = Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, durationCappedEnd);
-    return clampShiftWindow(guardedStart, finalEnd);
-  };
-
-  const commitWindow = (start: number, end: number) => {
-    const next = applyGuards(start, end);
-    onLeverPreview(shift.id, next.activeStart, next.activeEnd);
-    onLeverCommit(shift.id, next.activeStart, next.activeEnd);
-  };
-
-  const adjustEnd = (delta: number) => {
-    if (!canEdit) return;
-    const proposed = activeEnd + delta;
-    if (proposed - activeStart < WAIVE_PROMPT_THRESHOLD_HOURS) {
-      setShowWaivePrompt(true); // intercept — show waive prompt instead of committing
-      return;
-    }
-    setShowWaivePrompt(false);
-    commitWindow(activeStart, proposed);
-  };
-
-  const adjustStart = (delta: number) => {
-    if (!canEdit) return;
-    commitWindow(activeStart + delta, activeEnd);
-  };
-
-  const setBreakAt = (nextBreak: number | null) => {
-    if (!canEdit) return;
-    if (nextBreak == null) {
-      onBreakChange(shift.id, null);
-      return;
-    }
-    const min = activeStart;
-    const max = activeEnd - 0.5;
-    if (max < min) return;
-    const snapped = Math.round(nextBreak * 2) / 2;
-    const clamped = Math.max(min, Math.min(max, snapped));
-    onBreakChange(shift.id, clamped);
-  };
-
-  const moveBreakBy = (delta: number) => {
-    if (!canEdit || shift.breakStart == null) return;
-    setBreakAt(shift.breakStart + delta);
-  };
-
-  const setBreakDefault = () => {
-    if (!canEdit) return;
-    const duration = Math.max(0.5, activeEnd - activeStart);
-    const centered = activeStart + Math.max(0, (duration - 0.5) / 2);
-    setBreakAt(centered);
-  };
-
-  const barRef   = useRef<HTMLDivElement>(null);
-  const dragging = useRef<{
-    type: "start" | "end" | "move";
-    startX: number;
-    startVal: number;
-    startEnd: number;
-    currentStart: number;
-    currentEnd: number;
-  } | null>(null);
-
-  const onMouseDown = (e: React.MouseEvent, type: "start" | "end" | "move") => {
-    if (!canEdit) return;
-    e.preventDefault();
-    playDragWhoosh();
-    dragging.current = {
-      type,
-      startX: e.clientX,
-      startVal: activeStart,
-      startEnd: activeEnd,
-      currentStart: activeStart,
-      currentEnd: activeEnd,
-    };
-    const onMove = (ev: MouseEvent) => {
-      if (!dragging.current || !barRef.current) return;
-      const rect  = barRef.current.getBoundingClientRect();
-      const delta = ((ev.clientX - dragging.current.startX) / rect.width) * barMax;
-      const { type: t, startVal, startEnd } = dragging.current;
-      if (t === "start") {
-        const next = applyGuards(startVal + delta, startEnd);
-        dragging.current.currentStart = next.activeStart;
-        dragging.current.currentEnd = next.activeEnd;
-        onLeverPreview(shift.id, next.activeStart, next.activeEnd);
-      } else if (t === "end") {
-        // Enforce 1h minimum via drag (waive prompt is for button clicks only)
-        const dragFloorEnd = startVal + WAIVE_PROMPT_THRESHOLD_HOURS;
-        const next = applyGuards(startVal, Math.max(dragFloorEnd, startEnd + delta));
-        dragging.current.currentStart = next.activeStart;
-        dragging.current.currentEnd = next.activeEnd;
-        onLeverPreview(shift.id, next.activeStart, next.activeEnd);
-      } else {
-        const dur = startEnd - startVal;
-        const next = applyGuards(startVal + delta, startVal + delta + dur);
-        dragging.current.currentStart = next.activeStart;
-        dragging.current.currentEnd = next.activeEnd;
-        onLeverPreview(shift.id, next.activeStart, next.activeEnd);
-      }
-    };
-    const onUp = () => { 
-      if (dragging.current) {
-        onLeverCommit(shift.id, dragging.current.currentStart, dragging.current.currentEnd);
-      }
-      dragging.current = null; 
-      window.removeEventListener("mousemove", onMove); 
-      window.removeEventListener("mouseup", onUp); 
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
-  return (
-    <div
-      className={cn("p-2.5 rounded-lg border transition-all duration-150")}
-      style={{
-        borderColor: highlighted ? agent.color + "60" : "hsl(var(--border))",
-        backgroundColor: highlighted ? agent.color + "08" : undefined,
-      }}
-      onMouseEnter={onHighlight} onMouseLeave={onUnhighlight}
-      data-testid={`lever-agent-${agent.id}`}
-    >
-      <div className="flex items-center justify-between mb-1.5">
-        <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
-          <span className="text-xs font-medium truncate max-w-[80px]">{agent.name}</span>
-          {isToday && pct > 0 && (
-            <span className="text-[11px] px-1 py-0.5 rounded font-mono font-bold"
-              style={{ backgroundColor: agent.color + "25", color: agent.color }}>
-              {pct}%
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          {resolved.hasOvertime && formatDuration(resolved.overtimeHours) && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded-sm font-medium"
-              style={{ background: agent.color + "30", color: agent.color }}>
-              +{formatDuration(resolved.overtimeHours)} OT
-              {isToday && otPct > 0 && <span className="ml-1 opacity-70">{otPct}%</span>}
-            </span>
-          )}
-          {resolved.hasShrink && formatDuration(resolved.shrinkHours) && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded-sm font-medium bg-orange-500/20 text-orange-400">
-              -{formatDuration(resolved.shrinkHours)} free
-            </span>
-          )}
-          {shift.breakStart != null && (() => {
-            const isOnBreak = Boolean(agent.breakActiveAt);
-            const breakElapsed = isOnBreak && agent.breakActiveAt
-              ? Math.floor((Date.now() - Date.parse(agent.breakActiveAt)) / 60000)
-              : null;
-            const isBreakSoon = !isOnBreak
-              && utcHour >= shift.breakStart - 0.25
-              && utcHour < shift.breakStart + 0.5;
-            const label = isOnBreak
-              ? `☕ on break${breakElapsed !== null ? ` ${breakElapsed}m` : ""}`
-              : isBreakSoon
-                ? `☕ ${formatUtcHour(shift.breakStart)} soon`
-                : `☕ ${formatUtcHour(shift.breakStart)}`;
-            return (
-              <span
-                className={cn(
-                  "text-[9px] px-1.5 py-0.5 rounded-sm font-medium transition-all duration-300",
-                  isOnBreak
-                    ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-400/50"
-                    : isBreakSoon
-                      ? "bg-amber-500/15 text-amber-400 animate-pulse"
-                      : "bg-muted text-muted-foreground"
-                )}
-                title={`Break at ${formatUtcHour(shift.breakStart)} UTC`}>
-                {label}
-              </span>
-            );
-          })()}
-        </div>
-      </div>
-
-      {isToday && pct > 0 && (
-        <div className="mb-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
-          <div className="h-full rounded-full transition-all duration-1000"
-            style={{ width: `${Math.min(100, pct)}%`, backgroundColor: agent.color, opacity: 0.7 }}
-          />
-        </div>
-      )}
-
-      {activeStart < 0 && (
-        <div className="mb-1 flex items-center gap-1 text-xs text-amber-400">
-          <ChevronLeft className="h-3 w-3" />
-          <span>+{formatDuration(-activeStart)} prev day</span>
-        </div>
-      )}
-      <div ref={barRef} className="relative h-5 bg-muted rounded-sm overflow-hidden mb-2 select-none">
-        <div className="absolute h-full rounded-sm opacity-20"
-          style={{ left: `${baseLeft}%`, width: `${baseWidth}%`, backgroundColor: agent.color }}
-        />
-        {activeStart > startUtc && (
-          <div className="absolute h-3 top-1 rounded-sm"
-            style={{
-              left: `${(startUtc / barMax) * 100}%`,
-              width: `${((activeStart - startUtc) / barMax) * 100}%`,
-              background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.6) 0px,rgba(255,140,0,0.6) 3px,transparent 3px,transparent 6px)",
-            }}
-          />
-        )}
-        {activeEnd < normEnd && (
-          <div className="absolute h-3 top-1 rounded-sm"
-            style={{
-              left: `${(activeEnd / barMax) * 100}%`,
-              width: `${((normEnd - activeEnd) / barMax) * 100}%`,
-              background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.6) 0px,rgba(255,140,0,0.6) 3px,transparent 3px,transparent 6px)",
-            }}
-          />
-        )}
-        <div className="absolute h-full rounded-sm transition-none"
-          style={{
-            left: `${actLeft}%`,
-            width: `${Math.max(1, Math.min(actWidth, resolved.hasOvertime ? actWidth : baseWidth))}%`,
-            backgroundColor: agent.color,
-            opacity: resolved.hasOvertime ? 0.9 : resolved.hasShrink ? 0.55 : 0.75,
-            boxShadow: resolved.hasOvertime ? `0 0 6px white, 0 0 10px ${agent.color}` : undefined,
-            cursor: canEdit ? "grab" : "default",
-          }}
-          onMouseDown={e => onMouseDown(e, "move")}
-        />
-        {activeStart < startUtc && (
-          <div className="absolute h-full rounded-sm"
-            style={{
-              left: `${(activeStart / barMax) * 100}%`,
-              width: `${((startUtc - activeStart) / barMax) * 100}%`,
-              backgroundColor: agent.color,
-              boxShadow: `0 0 6px white, 0 0 10px ${agent.color}`,
-            }}
-          />
-        )}
-        {activeEnd > normEnd && (
-          <div className="absolute h-full rounded-sm"
-            style={{
-              left: `${(normEnd / barMax) * 100}%`,
-              width: `${((activeEnd - normEnd) / barMax) * 100}%`,
-              backgroundColor: agent.color,
-              boxShadow: `0 0 6px white, 0 0 10px ${agent.color}`,
-            }}
-          />
-        )}
-        {shift.breakStart != null && (() => {
-          const bkLeft  = (shift.breakStart / barMax) * 100;
-          const bkWidth = (0.5 / barMax) * 100;
-          return (
-            <div className="absolute top-0 bottom-0 z-20 rounded-sm flex items-center justify-center"
-              style={{ left: `${bkLeft}%`, width: `${Math.max(1.5, bkWidth)}%`, backgroundColor: "rgba(255,255,255,0.92)" }}
-              title={`Break: ${formatUtcHour(shift.breakStart)}–${formatUtcHour(shift.breakStart + 0.5)}`}
-            >
-              <span style={{ fontSize: 6, lineHeight: 1 }}>☕</span>
-            </div>
-          );
-        })()}
-        {canEdit && (
-          <div className="absolute top-0 bottom-0 w-2 rounded-l-sm hover:opacity-100 opacity-0 bg-white/30 cursor-col-resize z-10"
-            style={{ left: `${actLeft}%` }}
-            onMouseDown={e => onMouseDown(e, "start")}
-          />
-        )}
-        {canEdit && (
-          <div className="absolute top-0 bottom-0 w-2 rounded-r-sm hover:opacity-100 opacity-0 bg-white/30 cursor-col-resize z-10"
-            style={{ left: `calc(${actLeft}% + ${Math.max(1, actWidth)}% - 8px)` }}
-            onMouseDown={e => onMouseDown(e, "end")}
-          />
-        )}
-      </div>
-
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1">
-          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
-          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
-          <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
-          {hitDriftFloor && (
-            <span className="text-[9px] text-amber-400/80" title="Maximum 8h before shift start">max -8h</span>
-          )}
-        </div>
-        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">{formatDuration(resolved.activeDuration)}</span>
-        <div className="flex items-center gap-1">
-          {hitOTCap && (
-            <span className="text-[9px] text-amber-400/80" title="Maximum 2h past scheduled end">max +2h</span>
-          )}
-          <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
-          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
-          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
-        </div>
-      </div>
-
-      {showWaivePrompt && (
-        <div className="mt-1.5 p-2 rounded-md bg-amber-500/10 border border-amber-400/30 text-[10px]">
-          <p className="text-amber-300 mb-0.5 leading-tight font-medium">Almost no shift left</p>
-          <p className="text-muted-foreground mb-1.5 leading-tight">
-            Waive = release hours for others to claim. Keep 30m = stay with minimal coverage.
-          </p>
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => {
-                // Waive: collapse to minimum AND signal freed hours are claimable
-                commitWindow(activeStart, activeStart + MIN_SHIFT_DURATION_HOURS);
-                setShowWaivePrompt(false);
-                toast({
-                  title: `${agent.name}'s shift waived`,
-                  description: "Freed hours are now up for grabs in the coverage view.",
-                  duration: 5000,
-                });
-              }}
-              className="px-2 py-0.5 rounded bg-amber-500/25 text-amber-200 hover:bg-amber-500/40 transition-colors"
-              title="Release hours — others can claim them"
-            >
-              Waive shift
-            </button>
-            <button
-              onClick={() => {
-                // Keep 30m: collapse to minimum silently (agent stays, no freed hours)
-                commitWindow(activeStart, activeStart + MIN_SHIFT_DURATION_HOURS);
-                setShowWaivePrompt(false);
-              }}
-              className="px-2 py-0.5 rounded bg-muted text-muted-foreground hover:bg-accent transition-colors"
-              title="Stay for minimum 30m coverage"
-            >
-              Keep 30m
-            </button>
-            <button
-              onClick={() => setShowWaivePrompt(false)}
-              className="px-2 py-0.5 rounded bg-muted text-muted-foreground hover:bg-accent transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {canEdit && (
-        <div className="mt-1.5 flex items-center gap-1 text-[9px]">
-          {shift.breakStart == null ? (
-            <button
-              onClick={() => { playSoftClick(); setBreakDefault(); }}
-              className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
-              title="Set 30m break near center of current shift"
-            >
-              ☕ Set break
-            </button>
-          ) : (
-            <>
-              <button
-                onClick={() => { playSoftClick(); moveBreakBy(-0.5); }}
-                className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
-                title="Move break earlier by 30m"
-              >
-                ☕ ←
-              </button>
-              <button
-                onClick={() => { playSoftClick(); moveBreakBy(0.5); }}
-                className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
-                title="Move break later by 30m"
-              >
-                ☕ →
-              </button>
-              <button
-                onClick={() => { playSoftClick(); setBreakAt(null); }}
-                className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors"
-                title="Clear break"
-              >
-                Clear break
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function KpiCell({ label, value, warn, accent }: { label: string; value: string; warn?: boolean; accent?: boolean }) {
-  return (
-    <div className="p-2.5 border-r last:border-r-0 border-border text-center">
-      <p className="text-[9px] text-muted-foreground uppercase tracking-wider mb-0.5">{label}</p>
-      <p className={cn("text-sm font-mono font-bold tabular-nums",
-        warn ? "text-red-400" : accent ? "text-primary" : "text-foreground"
-      )}>{value}</p>
-    </div>
-  );
-}
-
-function SummaryPanel({
-  agentSummaries,
-  selectedDay,
-  selectedDate,
-  zeroCoverageHours,
-  peakCoverageHour,
-  totalOvertimeHours,
-  totalReleasedHours,
-  canClaimCoverage,
-  gapSlices,
-  onAssignGap,
-  pendingClaims,
-  agents,
-  onOpenOvertime,
-}: any) {
-  const agentMap = new Map<number, Agent>((agents ?? []).map((a: Agent) => [a.id, a]));
-  const coveredByName = (id: number | null) => (id != null ? agentMap.get(id)?.name : null);
-
-  return (
-    <div className="border-t border-border p-3 max-h-52 min-h-0 overflow-y-auto overscroll-contain bg-card/30 shrink-0">
-      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 font-medium">
-        Coverage Report · {formatWeekdayWithDate(selectedDay, selectedDate)}
-      </p>
-      {zeroCoverageHours > 0 && (
-        <div className="mb-2 p-2 rounded bg-red-500/10 border border-red-500/20">
-          <p className="text-[10px] text-red-400 font-medium">
-            ⚠ {zeroCoverageHours} hour{zeroCoverageHours !== 1 ? "s" : ""} with zero coverage
-          </p>
-          {canClaimCoverage && gapSlices.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {gapSlices.slice(0, 8).map((gap: GapSlice) => (
-                <button
-                  key={`${gap.startUtc}-${gap.endUtc}`}
-                  onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
-                  className="text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"
-                >
-                  {"Join line "}{formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {pendingClaims.length > 0 && (
-        <div className="mb-2 p-2 rounded border border-amber-500/30 bg-amber-500/10">
-          <p className="text-[10px] text-amber-300 font-medium mb-1">
-            {pendingClaims.length} claim{pendingClaims.length !== 1 ? "s" : ""} waiting manager approval
-          </p>
-          <div className="space-y-1">
-            {pendingClaims.slice(0, 4).map((claim: OvertimeLog) => {
-              const target = agentMap.get(claim.agentId)?.name ?? "Agent";
-              const fromName = coveredByName(claim.coveredByAgentId);
-              const context = claim.origin === "claimed-open-gap"
-                ? `open gap ${formatUtcHour(claim.coverStartUtc!)}-${formatUtcHour(claim.coverEndUtc!)} UTC`
-                : `${fromName ?? "agent"} → ${target} ${formatUtcHour(claim.coverStartUtc!)}-${formatUtcHour(claim.coverEndUtc!)} UTC`;
-
-              return (
-                <button
-                  key={claim.id}
-                  onClick={() => onOpenOvertime(claim)}
-                  className="w-full flex items-center justify-between text-left text-[10px] text-amber-100 hover:text-primary transition-colors"
-                  title="Open overtime log"
-                >
-                  <span>{target} waiting approval from manager · {context}</span>
-                  <ExternalLink size={10} className="opacity-60 shrink-0" />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-1">
-        {agentSummaries.map(({ agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentShifts }: any) => {
-          if (baseHours === 0) return null;
-          const uncoveredHours = Math.max(0, releasedHours - (coveredOutHours ?? 0));
-          const coveredName = coveredByAgentId != null ? agentMap.get(coveredByAgentId)?.name : null;
-          // Find scheduled break across this agent's shifts
-          const breakShift = (agentShifts ?? []).find((s: any) => s.breakStart != null);
-          return (
-            <div key={agent.id} className="flex items-start gap-2 text-[10px]">
-              <div className="w-1.5 h-1.5 rounded-full mt-1 shrink-0" style={{ backgroundColor: agent.color }} />
-              <div className="flex-1">
-                <span className="font-medium text-foreground">{agent.name}</span>
-                <span className="text-muted-foreground ml-1">{formatDuration(activeHours)}</span>
-                {overtimeHours > 0 && <span className="ml-1" style={{ color: agent.color }}>+{formatDuration(overtimeHours)} OT</span>}
-                {/* Coverage release labels — distinguish between open and claimed */}
-                {releasedHours > 0 && coveredName && uncoveredHours <= 0 && (
-                  <span className="ml-1 text-emerald-400">{formatDuration(releasedHours)} → {coveredName}</span>
-                )}
-                {releasedHours > 0 && coveredName && uncoveredHours > 0 && (
-                  <>
-                    <span className="ml-1 text-emerald-400">{formatDuration(coveredOutHours)} → {coveredName}</span>
-                    <span className="ml-1 text-orange-400">{formatDuration(uncoveredHours)} open</span>
-                  </>
-                )}
-                {releasedHours > 0 && !coveredName && uncoveredHours > 0 && (
-                  <span className="ml-1 text-orange-400">{formatDuration(uncoveredHours)} up for grabs</span>
-                )}
-                {/* Break info — always shown for retroactive readability */}
-                {breakShift && (
-                  <span className="ml-1 text-muted-foreground/60">· ☕ {formatUtcHour(breakShift.breakStart)}</span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {(() => {
-        const totalCovered = agentSummaries.reduce((a: number, s: any) => a + (s.coveredOutHours ?? 0), 0);
-        if (totalOvertimeHours === 0 && totalReleasedHours === 0 && totalCovered === 0) return null;
-        return (
-          <div className="mt-2 pt-2 border-t border-border">
-            {totalOvertimeHours > 0 && <p className="text-[10px] text-primary">Total overtime: +{formatDuration(totalOvertimeHours)}</p>}
-            {totalCovered > 0 && <p className="text-[10px] text-emerald-400">Coverage filled: {formatDuration(totalCovered)}</p>}
-            {totalReleasedHours > 0 && <p className="text-[10px] text-orange-400">Still up for grabs: {formatDuration(totalReleasedHours)}</p>}
-          </div>
-        );
-      })()}
-    </div>
-  );
-}
-
-/* ──────────────────────────────────────────────────────────────
-   Assign Overtime Modal
-   ────────────────────────────────────────────────────────────── */
-
-function AssignOvertimeModal({
-  source, agents, onAssign, onClose,
-}: {
-  source:
-    | {
-        kind: "shift";
-        shift: Shift;
-        fromAgent: Agent;
-        dayOfWeek: number;
-        date: string;
-        startUtc: number;
-        endUtc: number;
-        freedHours: number;
-      }
-    | {
-        kind: "gap";
-        dayOfWeek: number;
-        date: string;
-        startUtc: number;
-        endUtc: number;
-        freedHours: number;
-      };
-  agents: Agent[];
-  onAssign: (toAgentId: number) => void;
-  onClose: () => void;
-}) {
-  const otherAgents = agents; // filtering is applied by the caller
-  const sourceLabel = source.kind === "shift"
-    ? `${formatDuration(source.freedHours)} freed from ${source.fromAgent.name}'s ${formatWeekdayWithDate(source.dayOfWeek, source.date)} shift`
-    : `${formatDuration(source.freedHours)} open gap on ${formatWeekdayWithDate(source.dayOfWeek, source.date)} · ${formatUtcHour(source.startUtc)}-${formatUtcHour(source.endUtc)} UTC`;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <div>
-            <p className="text-sm font-semibold">Assign Overtime</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {source.kind === "shift" ? (
-                <>
-                  {formatDuration(source.freedHours)} freed from{" "}
-                  <span style={{ color: source.fromAgent.color }}>{source.fromAgent.name}</span>'s {formatWeekdayWithDate(source.dayOfWeek, source.date)} shift
-                </>
-              ) : (
-                sourceLabel
-              )}
-            </p>
-          </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted transition-colors">
-            <X size={14} className="text-muted-foreground" />
-          </button>
-        </div>
-
-        {/* Agent list */}
-        <div className="p-2 max-h-64 overflow-y-auto">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider px-2 pb-1.5">
-            Select an agent to receive this overtime
-          </p>
-          {otherAgents.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground px-3 py-4 text-center">
-              No agents are scheduled on this day.
-            </p>
-          ) : otherAgents.map((agent) => (
-            <button
-              key={agent.id}
-              onClick={() => onAssign(agent.id)}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/70 transition-all group text-left"
-            >
-              <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
-              <div className="flex-1 min-w-0">
-                <span className="text-xs font-medium">{agent.name}</span>
-                <span className="text-[10px] text-muted-foreground ml-2">{agent.role}</span>
-              </div>
-              <span className="text-[10px] text-muted-foreground group-hover:text-primary transition-colors">
-                +{formatDuration(source.freedHours)}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
   );
 }
