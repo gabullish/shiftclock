@@ -730,17 +730,24 @@ export default function Dashboard() {
                   const breakElapsed = agentOnBreak && agent.breakActiveAt
                     ? Math.floor((Date.now() - Date.parse(agent.breakActiveAt)) / 60000)
                     : null;
-                  return (
+                  const pill = (
                     <div key={agent.id}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all duration-300",
-                        agentOnBreak && "ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.25)]"
+                        agentOnBreak && "ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.25)]",
+                        isAdmin && "cursor-pointer hover:brightness-125"
                       )}
                       style={{
                         backgroundColor: agentOnBreak ? "rgba(251,191,36,0.12)" : agent.color + "20",
                         border: `1px solid ${agentOnBreak ? "rgba(251,191,36,0.4)" : agent.color + "40"}`,
                         color: agentOnBreak ? "rgb(252,211,77)" : agent.color,
-                      }}>
+                      }}
+                      onClick={isAdmin ? () => {
+                        if (agentOnBreak) breakEndMutation.mutate(agent.id);
+                        else breakStartMutation.mutate(agent.id);
+                      } : undefined}
+                      title={isAdmin ? (agentOnBreak ? "Click to end break" : "Click to start break") : undefined}
+                    >
                       <span className="w-1.5 h-1.5 rounded-full animate-pulse"
                         style={{ backgroundColor: agentOnBreak ? "rgb(251,191,36)" : agent.color }} />
                       {agent.name}
@@ -749,6 +756,7 @@ export default function Dashboard() {
                       )}
                     </div>
                   );
+                  return pill;
                 })}
               </div>
             )}
@@ -763,7 +771,13 @@ export default function Dashboard() {
                     : null;
                   return (
                     <div key={agent.id}
-                      className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-400 animate-pulse">
+                      className={cn(
+                        "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-400 animate-pulse",
+                        isAdmin && "cursor-pointer hover:bg-amber-500/20"
+                      )}
+                      onClick={isAdmin ? () => breakStartMutation.mutate(agent.id) : undefined}
+                      title={isAdmin ? "Click to start break now" : undefined}
+                    >
                       <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: agent.color }} />
                       {agent.name}
                       {minsUntil !== null && <span className="opacity-70">in {minsUntil}m</span>}

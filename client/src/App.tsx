@@ -11,6 +11,7 @@ import { toast } from "@/hooks/use-toast";
 import Dashboard from "./pages/Dashboard";
 import Profiles from "./pages/Profiles";
 import ActivityLog from "./pages/ActivityLog";
+import WorldView from "./components/world/WorldView";
 import NotFound from "./pages/not-found";
 import Sidebar from "./components/Sidebar";
 import { AdminProvider } from "@/hooks/use-admin-mode";
@@ -314,6 +315,7 @@ export default function App() {
                 <Route path="/activity" component={ActivityLog} />
                 <Route path="/overtime" component={ActivityLog} />
                 <Route path="/profiles" component={Profiles} />
+                <Route path="/world" component={WorldView} />
                 <Route component={NotFound} />
               </Switch>
             </main>

@@ -397,6 +397,59 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.get("/api/agents", (_req, res) => {
+    // Auto-manage scheduled breaks on every poll:
+    //   • Auto-START: breakStart has arrived and agent isn't on break yet
+    //   • Auto-END:   break window (breakStart + 30 min) has passed
+    const now  = new Date();
+    const dow  = now.getUTCDay();
+    const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
+    const BREAK_DURATION_H = 0.5; // standard 30-minute break
+    const allShifts = storage.getShifts();
+
+    const fmtUTC = (ms: number) => {
+      const d = new Date(ms);
+      return `${d.getUTCHours().toString().padStart(2,"0")}:${d.getUTCMinutes().toString().padStart(2,"0")}`;
+    };
+
+    for (const agent of storage.getAgents()) {
+      const todayShift = allShifts.find(
+        s => s.agentId === agent.id && s.dayOfWeek === dow && s.breakStart != null,
+      );
+
+      if (agent.breakActiveAt) {
+        // Decide when the break should end
+        let breakEndH: number;
+        if (todayShift?.breakStart != null) {
+          breakEndH = todayShift.breakStart + BREAK_DURATION_H;
+        } else {
+          const elapsedH = (now.getTime() - Date.parse(agent.breakActiveAt)) / 3_600_000;
+          if (elapsedH < BREAK_DURATION_H) continue;
+          breakEndH = utcH; // already past duration
+        }
+        if (utcH >= breakEndH) {
+          const startMs = Date.parse(agent.breakActiveAt);
+          const durationMins = Math.round((now.getTime() - startMs) / 60_000);
+          const description = `${agent.name} was on break · ${durationMins} min  (${fmtUTC(startMs)} – ${fmtUTC(now.getTime())} UTC)`;
+          storage.endLiveBreak(agent.id);
+          storage.createAgentLog({
+            agentId: agent.id,
+            date: now.toISOString().slice(0, 10),
+            type: "break",
+            coverPct: null,
+            coveredByAgentId: null,
+            notes: null,
+            createdAt: now.toISOString(),
+            actionType: "break-completed",
+            description,
+          });
+        }
+      } else if (todayShift?.breakStart != null) {
+        if (utcH >= todayShift.breakStart && utcH < todayShift.breakStart + BREAK_DURATION_H) {
+          storage.startLiveBreak(agent.id);
+        }
+      }
+    }
+
     res.json(storage.getAgents());
   });
 

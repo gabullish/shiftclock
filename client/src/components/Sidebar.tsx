@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { AlignLeft, CalendarRange, CircleDot, Clock, Users, LayoutDashboard, ScrollText, LogOut } from "lucide-react";
+import { AlignLeft, CalendarRange, CircleDot, Clock, Users, LayoutDashboard, ScrollText, LogOut, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentSession } from "@/lib/agentAccess";
 
@@ -9,6 +9,7 @@ const navItems = [
   { href: "/activity", label: "Activity", icon: ScrollText },
   { href: "/overtime", label: "Overtime", icon: Clock },
   { href: "/profiles", label: "Agents", icon: Users },
+  { href: "/world", label: "World", icon: Globe },
 ];
 
 const VIEW_ITEMS = [
