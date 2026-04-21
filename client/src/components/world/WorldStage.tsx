@@ -52,7 +52,8 @@ interface AgentSprite {
   currentRoom: RoomId;
   targetRoom: RoomId;
   // Meta
-  agentIndex: number;
+  agentIndex: number;       // stable identity, drives idle float phase — NEVER mutate
+  slotIndex: number;        // which slot in currentRoom/targetRoom the sprite occupies
   variant: number;          // 0–3 character skin variant
   animTick: number;
   walkFrame: number;
@@ -101,7 +102,7 @@ function makeAgentSprite(
   idx: number,
   base: Texture,
   states: Texture,
-): Omit<AgentSprite, "x" | "y" | "waypoints"> {
+): Omit<AgentSprite, "x" | "y"> {
   const container = new Container();
   const variant   = idx % CHAR_BASE.variants;
   const special   = isSpecial(d.state);
@@ -123,6 +124,7 @@ function makeAgentSprite(
     currentRoom: d.state,
     targetRoom:  d.state,
     agentIndex:  idx,
+    slotIndex:   idx,
     variant,
     animTick:        0,
     walkFrame:       0,
@@ -228,7 +230,7 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
       roomCounts[d.state] = idx + 1;
       const slot = getSlot(d.state, idx);
       const sd   = makeAgentSprite(d, idx, base, states);
-      const sp: AgentSprite = { ...sd, x: slot.x, y: slot.y, waypoints: [] };
+      const sp: AgentSprite = { ...sd, x: slot.x, y: slot.y };
       sp.container.x = slot.x;
       sp.container.y = slot.y;
       agentLayer.addChild(sp.container);
@@ -251,6 +253,12 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
           const dx     = target.x - sp.x;
           const dy     = target.y - sp.y;
           const dist   = Math.hypot(dx, dy);
+
+          // Guard: waypoint coincident with current position → pop it, skip frame
+          if (dist < 0.001) {
+            sp.waypoints.shift();
+            return; // forEach callback: skip to next sprite
+          }
 
           // Update walk animation frame
           sp.walkFrameTimer += dt;
@@ -373,7 +381,24 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
     const sheets  = sheetsRef.current;
     if (sprites.size === 0 || !sheets) return;
 
-    const roomCounts: Partial<Record<RoomId, number>> = {};
+    // Pre-compute occupancy per room, counting BOTH settled agents (in currentRoom)
+    // AND in-flight walkers (toward targetRoom). This prevents slot collisions when
+    // multiple agents are moving to the same room at once.
+    const occupied: Partial<Record<RoomId, Set<number>>> = {};
+    const claimSlot = (room: RoomId, idx: number) => {
+      (occupied[room] ??= new Set()).add(idx);
+    };
+    const nextFreeSlot = (room: RoomId): number => {
+      const taken = occupied[room] ?? new Set<number>();
+      let i = 0;
+      while (taken.has(i)) i++;
+      return i;
+    };
+
+    sprites.forEach(sp => {
+      if (sp.isWalking) claimSlot(sp.targetRoom, sp.slotIndex);
+      else              claimSlot(sp.currentRoom, sp.slotIndex);
+    });
 
     agentData.forEach(d => {
       const sp = sprites.get(d.agent.id);
@@ -381,14 +406,16 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
 
       const newRoom = d.state;
 
+      // Needs to move? (not already walking, not already in target room)
       if (sp.currentRoom !== newRoom && !sp.isWalking) {
-        // Assign slot index for destination room
-        const destIdx = roomCounts[newRoom] ?? 0;
-        roomCounts[newRoom] = destIdx + 1;
-        sp.agentIndex = destIdx;
+        // Release old slot, claim a new one in the destination room
+        occupied[sp.currentRoom]?.delete(sp.slotIndex);
+        const destIdx = nextFreeSlot(newRoom);
+        claimSlot(newRoom, destIdx);
+
+        sp.slotIndex = destIdx;   // NOTE: only slotIndex changes; agentIndex stays stable
         sp.targetRoom = newRoom;
 
-        // Build the full corridor path from current position to target slot
         const targetSlot = getSlot(newRoom, destIdx);
         sp.waypoints = getWalkPath(
           sp.currentRoom,
@@ -403,9 +430,6 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
         sp.body.anchor.set(0.5, 1);
         sp.body.scale.x  = CHAR_BASE.renderScale;
         sp.label.y       = 4;
-
-      } else if (!sp.isWalking) {
-        roomCounts[newRoom] = (roomCounts[newRoom] ?? 0) + 1;
       }
     });
   }, [agentData]);

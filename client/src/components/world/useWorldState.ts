@@ -18,9 +18,13 @@ function isOnShift(agent: Agent, shifts: Shift[]): boolean {
   const todayShifts = shifts.filter(s => s.agentId === agent.id && s.dayOfWeek === dayOfWeek);
   for (const shift of todayShifts) {
     const start = shift.activeStart ?? shift.startUtc;
-    const end = shift.activeEnd ?? shift.endUtc;
-    if (end > 24) {
-      if (utcHour >= start || utcHour < end - 24) return true;
+    const end   = shift.activeEnd   ?? shift.endUtc;
+    // Shift is overnight if either end > 24 (normalized as 25, 26, ...)
+    // OR end < start (normalized 0-24 form, e.g. start=22, end=6).
+    const wraps = end > 24 || end < start;
+    if (wraps) {
+      const wrapEnd = end > 24 ? end - 24 : end;
+      if (utcHour >= start || utcHour < wrapEnd) return true;
     } else {
       if (utcHour >= start && utcHour < end) return true;
     }

@@ -117,10 +117,10 @@ export function buildWallLayer(layer: Container): void {
         fontFamily: "Space Mono, monospace",
         fontSize: 11,
         fill: room.accentColor,
-        alpha: 0.7,
         letterSpacing: 2,
       },
     });
+    t.alpha = 0.7;
     t.x = room.x + 16;
     t.y = room.y + 16;
     layer.addChild(t);

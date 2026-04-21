@@ -417,18 +417,13 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       );
 
       if (agent.breakActiveAt) {
-        // Decide when the break should end
-        let breakEndH: number;
-        if (todayShift?.breakStart != null) {
-          breakEndH = todayShift.breakStart + BREAK_DURATION_H;
-        } else {
-          const elapsedH = (now.getTime() - Date.parse(agent.breakActiveAt)) / 3_600_000;
-          if (elapsedH < BREAK_DURATION_H) continue;
-          breakEndH = utcH; // already past duration
-        }
-        if (utcH >= breakEndH) {
-          const startMs = Date.parse(agent.breakActiveAt);
-          const durationMins = Math.round((now.getTime() - startMs) / 60_000);
+        // End break after BREAK_DURATION_H has elapsed since it started. Using
+        // absolute elapsed time (not utcH comparison) makes this safe across
+        // midnight wraps when breakStart + duration would exceed 24.
+        const startMs  = Date.parse(agent.breakActiveAt);
+        const elapsedH = (now.getTime() - startMs) / 3_600_000;
+        if (elapsedH >= BREAK_DURATION_H) {
+          const durationMins = Math.round(elapsedH * 60);
           const description = `${agent.name} was on break · ${durationMins} min  (${fmtUTC(startMs)} – ${fmtUTC(now.getTime())} UTC)`;
           storage.endLiveBreak(agent.id);
           storage.createAgentLog({
@@ -444,6 +439,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
           });
         }
       } else if (todayShift?.breakStart != null) {
+        // Auto-start: only trigger inside the [breakStart, breakStart + 30 min]
+        // window. Outside that window, the break is considered skipped.
         if (utcH >= todayShift.breakStart && utcH < todayShift.breakStart + BREAK_DURATION_H) {
           storage.startLiveBreak(agent.id);
         }
