@@ -33,7 +33,8 @@ const LABEL_STYLE  = {
   fontFamily: "Space Mono, monospace",
   fontSize: 11,
   fill: 0xffffff,
-  dropShadow: { color: 0x000000, blur: 2, distance: 1, alpha: 0.9 },
+  stroke: { color: 0x000000, width: 4 },
+  dropShadow: { color: 0x000000, blur: 3, distance: 1, alpha: 1 },
   align: "center" as const,
 };
 

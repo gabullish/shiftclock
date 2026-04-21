@@ -7,7 +7,7 @@ export const CHAR_BASE = {
   cols: 12, rows: 6,
   cellW: 2912 / 12,  // 242.67
   cellH: 1440 / 6,   // 240
-  renderScale: 0.16,
+  renderScale: 0.22,
   // Row → direction
   rowDown: 0,
   rowUp: 1,
@@ -26,7 +26,7 @@ export const CHAR_STATES = {
   cols: 4, rows: 2,
   cellW: 2912 / 4,   // 728
   cellH: 1440 / 2,   // 720
-  renderScale: 0.085,
+  renderScale: 0.11,
   // [col, row] for each room state
   office:    [0, 0] as [number, number],   // sitting at desk
   office2:   [1, 0] as [number, number],   // typing (alt frame)
