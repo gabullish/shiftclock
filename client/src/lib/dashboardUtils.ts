@@ -103,7 +103,7 @@ export function buildWeekCycleDays(anchorDate: string): DayDesc[] {
   start.setUTCDate(anchor.getUTCDate() - anchor.getUTCDay());
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  return Array.from({ length: 8 }, (_, dayIndex) => {
+  return Array.from({ length: 7 }, (_, dayIndex) => {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + dayIndex);
     const date      = d.toISOString().slice(0, 10);

@@ -78,11 +78,14 @@ export const storage: IStorage = {
     return db.update(agents).set(data).where(eq(agents.id, id)).returning().get();
   },
   deleteAgent(id) {
-    // Cascade: remove all related data before deleting the agent
-    db.delete(shifts).where(eq(shifts.agentId, id)).run();
-    db.delete(overtimeLog).where(eq(overtimeLog.agentId, id)).run();
-    db.delete(agentLogs).where(eq(agentLogs.agentId, id)).run();
-    db.delete(agents).where(eq(agents.id, id)).run();
+    // Cascade: remove all related data atomically before deleting the agent
+    db.transaction(() => {
+      db.delete(overtimeClaims).where(eq(overtimeClaims.agentId, id)).run();
+      db.delete(shifts).where(eq(shifts.agentId, id)).run();
+      db.delete(overtimeLog).where(eq(overtimeLog.agentId, id)).run();
+      db.delete(agentLogs).where(eq(agentLogs.agentId, id)).run();
+      db.delete(agents).where(eq(agents.id, id)).run();
+    });
   },
 
   getShifts() {
@@ -92,13 +95,15 @@ export const storage: IStorage = {
     return db.select().from(shifts).where(eq(shifts.agentId, agentId)).all();
   },
   upsertShift(data) {
-    const existing = db.select().from(shifts)
-      .where(and(eq(shifts.agentId, data.agentId), eq(shifts.dayOfWeek, data.dayOfWeek)))
-      .get();
-    if (existing) {
-      return db.update(shifts).set(data).where(eq(shifts.id, existing.id)).returning().get()!;
-    }
-    return db.insert(shifts).values(data).returning().get();
+    return db.transaction(() => {
+      const existing = db.select().from(shifts)
+        .where(and(eq(shifts.agentId, data.agentId), eq(shifts.dayOfWeek, data.dayOfWeek)))
+        .get();
+      if (existing) {
+        return db.update(shifts).set(data).where(eq(shifts.id, existing.id)).returning().get()!;
+      }
+      return db.insert(shifts).values(data).returning().get();
+    });
   },
   updateShift(id, data) {
     return db.update(shifts).set(data).where(eq(shifts.id, id)).returning().get();
@@ -223,14 +228,15 @@ export const storage: IStorage = {
       .all();
   },
   createClaim(data) {
-    // Determine next order for this opportunity
-    const existing = db.select().from(overtimeClaims)
-      .where(eq(overtimeClaims.opportunityId, data.opportunityId))
-      .all();
-    const nextOrder = existing.length + 1;
-    return db.insert(overtimeClaims)
-      .values({ ...data, claimOrder: nextOrder })
-      .returning().get();
+    return db.transaction(() => {
+      const existing = db.select().from(overtimeClaims)
+        .where(eq(overtimeClaims.opportunityId, data.opportunityId))
+        .all();
+      const nextOrder = existing.length + 1;
+      return db.insert(overtimeClaims)
+        .values({ ...data, claimOrder: nextOrder })
+        .returning().get();
+    });
   },
   updateClaim(id, data) {
     return db.update(overtimeClaims).set(data).where(eq(overtimeClaims.id, id)).returning().get();
@@ -246,20 +252,22 @@ export const storage: IStorage = {
       .returning().get();
   },
   approveClaimAndRejectOthers(claimId, opportunityId) {
-    const approved = db.update(overtimeClaims)
-      .set({ status: "approved" })
-      .where(eq(overtimeClaims.id, claimId))
-      .returning().get();
-    // Reject all other pending claims for same opportunity
-    const others = db.select().from(overtimeClaims)
-      .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")))
-      .all();
-    for (const other of others) {
-      if (other.id !== claimId) {
-        db.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id)).run();
+    return db.transaction(() => {
+      const approved = db.update(overtimeClaims)
+        .set({ status: "approved" })
+        .where(eq(overtimeClaims.id, claimId))
+        .returning().get();
+      // Atomically reject all other pending claims for this opportunity
+      const others = db.select().from(overtimeClaims)
+        .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")))
+        .all();
+      for (const other of others) {
+        if (other.id !== claimId) {
+          db.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id)).run();
+        }
       }
-    }
-    return approved;
+      return approved;
+    });
   },
   deleteClaimsByOpportunity(opportunityId) {
     db.delete(overtimeClaims).where(eq(overtimeClaims.opportunityId, opportunityId)).run();
@@ -280,6 +288,7 @@ export const storage: IStorage = {
       shifts: db.select().from(shifts).all(),
       overtime: db.select().from(overtimeLog).all(),
       logs: db.select().from(agentLogs).all(),
+      claims: db.select().from(overtimeClaims).all(),
     };
   },
 

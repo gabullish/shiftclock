@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Shift, InsertShift } from "@shared/schema";
 import { Coffee, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -65,6 +65,11 @@ export function ShiftPill({
   const [breakH, setBreakH] = useState<string>(
     shift?.breakStart != null ? String(((shift.breakStart % 24) + 24) % 24) : ""
   );
+
+  // Keep breakH in sync when shift prop updates externally (e.g. after another admin saves)
+  useEffect(() => {
+    setBreakH(shift?.breakStart != null ? String(((shift.breakStart % 24) + 24) % 24) : "");
+  }, [shift?.breakStart]);
 
   const openEdit = () => {
     const d = resolveDefaults();

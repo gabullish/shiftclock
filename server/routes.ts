@@ -1,9 +1,11 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
 import { storage } from "./storage";
 import { db } from "./db";
-import { agents, shifts } from "@shared/schema";
+import { agents, shifts, insertAgentSchema, insertShiftSchema } from "@shared/schema";
 
 type NormalizedBackup = {
   agents: Array<Record<string, unknown> & { id?: number; shifts: Array<Record<string, unknown>>; historicalShifts?: Array<Record<string, unknown>> }>;
@@ -72,9 +74,26 @@ function readAdminHeaderToken(req: Request): string {
   return (raw || "").trim();
 }
 
+/** Timing-safe token comparison — prevents timing attacks on admin token */
+function safeTokenEqual(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  try {
+    const ba = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ba.length !== bb.length) {
+      // Still run comparison to avoid length-based timing leak
+      timingSafeEqual(ba, Buffer.alloc(ba.length));
+      return false;
+    }
+    return timingSafeEqual(ba, bb);
+  } catch {
+    return false;
+  }
+}
+
 function isAdminRequest(req: Request): boolean {
   if (!ADMIN_TOKEN) return false;
-  return readAdminHeaderToken(req) === ADMIN_TOKEN;
+  return safeTokenEqual(readAdminHeaderToken(req), ADMIN_TOKEN);
 }
 
 /** Middleware: reject non-admin requests to mutating endpoints */
@@ -82,7 +101,7 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!ADMIN_TOKEN) {
     return res.status(500).json({ message: "Server misconfigured: ADMIN_TOKEN is not set" });
   }
-  if (readAdminHeaderToken(req) === ADMIN_TOKEN) return next();
+  if (safeTokenEqual(readAdminHeaderToken(req), ADMIN_TOKEN)) return next();
   res.status(403).json({ message: "Admin access required" });
 }
 
@@ -343,6 +362,15 @@ function normalizeImportPayload(payload: unknown): NormalizedBackup {
   };
 }
 
+// Rate limiter for authentication endpoints — max 20 attempts per 15 min per IP
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many login attempts. Please wait 15 minutes." },
+});
+
 export async function registerRoutes(httpServer: Server, app: Express) {
   if (!ADMIN_TOKEN) {
     console.warn("[routes] ADMIN_TOKEN is not configured. Mutating admin routes will return 500.");
@@ -354,7 +382,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   await seedDefaultData();
 
   // --- Agent session auth ---
-  app.post("/api/auth/agent-session", (req, res) => {
+  app.post("/api/auth/agent-session", authLimiter, (req, res) => {
     if (!AGENT_PASSWORD) {
       return res.status(503).json({ message: "Agent mode is not configured on this server." });
     }
@@ -451,7 +479,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.post("/api/agents", requireAdmin, (req, res) => {
-    const agent = storage.createAgent(req.body);
+    const result = insertAgentSchema.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid agent data" });
+    const agent = storage.createAgent(result.data);
     res.json(agent);
   });
 
@@ -552,7 +582,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.post("/api/shifts", requireAdmin, (req, res) => {
-    const shift = storage.upsertShift(req.body);
+    const result = insertShiftSchema.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid shift data" });
+    const shift = storage.upsertShift(result.data);
     res.json(shift);
   });
 
@@ -688,8 +720,15 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getOvertimeLogs());
   });
 
+  const overtimeCreateSchema = z.object({
+    agentId: z.number().int().positive(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
+  }).passthrough();
+
   app.post("/api/overtime", requireAdmin, (req, res) => {
-    const { agentId, date, ...rest } = req.body;
+    const result = overtimeCreateSchema.safeParse(req.body);
+    if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid overtime data" });
+    const { agentId, date, ...rest } = result.data;
     const log = storage.createOvertimeLog(agentId, date, rest);
     res.json(log);
   });
@@ -804,6 +843,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const { fromShiftId, toAgentId, hours, date, dayOfWeek, coverStartUtc, coverEndUtc } = req.body;
     if (!toAgentId || !date) {
       return res.status(400).json({ message: "toAgentId and date required" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ message: "date must be YYYY-MM-DD" });
     }
     if (typeof dayOfWeek === "number" && (dayOfWeek < 0 || dayOfWeek > 6)) {
       return res.status(400).json({ message: "dayOfWeek must be 0–6" });
@@ -1160,6 +1202,10 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const targetAgentId = Number(agentId);
     if (!Number.isFinite(targetAgentId)) {
       return res.status(400).json({ message: "Invalid agentId" });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ message: "date must be YYYY-MM-DD" });
     }
 
     const admin = isAdminRequest(req);

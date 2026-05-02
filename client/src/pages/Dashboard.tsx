@@ -171,7 +171,10 @@ export default function Dashboard() {
 
   const breakEndMutation = useMutation({
     mutationFn: (agentId: number) => apiRequest("POST", `/api/agents/${agentId}/break/end`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agents"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+    },
   });
 
   const bulkDeleteOTMutation = useMutation({
@@ -417,13 +420,18 @@ export default function Dashboard() {
 
   const onlineAgents = agents.filter(agent => {
     if (!isSelectedDateToday) return false;
+    // Respect off-day schedule — same logic as useWorldState
+    const offDays = (agent.offWeekend ?? 1) === 1 ? [0, 6] : [4, 5];
+    if (offDays.includes(selectedDay)) return false;
+
     const isOnShift = todayShifts.some(s => {
       if (s.agentId !== agent.id) return false;
       const ls    = leverState[s.id];
       const start = ls?.activeStart ?? s.startUtc;
       const end   = ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc);
-      if (end <= 24) return utcHour >= start && utcHour <= end;
-      return utcHour >= start || utcHour <= (end - 24);
+      // Use strict < at shift end (exclusive boundary) to match useWorldState
+      if (end <= 24) return utcHour >= start && utcHour < end;
+      return utcHour >= start || utcHour < (end - 24);
     });
     if (isOnShift) return true;
 

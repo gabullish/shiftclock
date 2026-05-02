@@ -67,6 +67,9 @@ export default function Profiles() {
       setShowCreate(false);
       toast({ title: "Agent created" });
     },
+    onError: (err: any) => {
+      toast({ title: "Failed to create agent", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
   });
 
   const updateMutation = useMutation({
@@ -97,7 +100,12 @@ export default function Profiles() {
         ) : undefined,
       });
     },
+    onError: (err: any) => {
+      toast({ title: "Failed to update agent", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
   });
+
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/agents/${id}`),
@@ -105,17 +113,26 @@ export default function Profiles() {
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       toast({ title: "Agent removed" });
     },
+    onError: (err: any) => {
+      toast({ title: "Failed to delete agent", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
   });
 
   const upsertShiftMutation = useMutation({
     mutationFn: (data: InsertShift) => apiRequest("POST", "/api/shifts", data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
+    onError: (err: any) => {
+      toast({ title: "Failed to save shift", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
   });
 
   const updateShiftMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<InsertShift> }) =>
       apiRequest("PATCH", `/api/shifts/${id}`, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/shifts"] }),
+    onError: (err: any) => {
+      toast({ title: "Failed to update shift", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
   });
 
   const toggleOffDayMutation = useMutation({
@@ -470,7 +487,7 @@ export default function Profiles() {
 
                       {isAdmin && (
                         <button
-                          onClick={() => { playSoftClick(); deleteMutation.mutate(agent.id); }}
+                          onClick={() => { playSoftClick(); setDeleteConfirmId(agent.id); }}
                           className="p-1.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
                           data-testid={`btn-delete-agent-${agent.id}`}
                         >
@@ -545,6 +562,28 @@ export default function Profiles() {
         </div>
       </div>
       </div>
+
+      <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Agent?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove the agent and all their shifts, overtime logs, and activity history.
+              <br /><br />
+              <strong>This action cannot be undone.</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex gap-2 justify-end">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { if (deleteConfirmId !== null) { deleteMutation.mutate(deleteConfirmId); setDeleteConfirmId(null); } }}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={showFullImportWarning} onOpenChange={setShowFullImportWarning}>
         <AlertDialogContent>
