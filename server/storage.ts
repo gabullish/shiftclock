@@ -39,6 +39,14 @@ export interface IStorage {
   deleteAgentLog(id: number): void;
   clearAllAgentLogs(): void;
 
+  // Atomic find-or-create for overtime opportunity (prevents P0 duplicate-slot race)
+  findOrCreateOpportunity(params: {
+    date: string; dayOfWeek: number | null; origin: string;
+    fromShiftId: number | null; coveredByAgentId: number | null;
+    coverStartUtc: number | null; coverEndUtc: number | null;
+    overtimeHours: number; toAgentId: number; nowIso: string;
+  }): { opportunity: OvertimeLog; isNew: boolean };
+
   // Overtime claims (multi-agent competing for same opportunity)
   getClaimsForOpportunity(opportunityId: number): OvertimeClaim[];
   getClaimsByAgent(agentId: number): OvertimeClaim[];
@@ -46,6 +54,7 @@ export interface IStorage {
   updateClaim(id: number, data: Partial<InsertOvertimeClaim>): OvertimeClaim | undefined;
   cancelClaim(id: number, agentId: number): OvertimeClaim | undefined;
   approveClaimAndRejectOthers(claimId: number, opportunityId: number): OvertimeClaim | undefined;
+  approveClaimAndUpdateOpportunity(claimId: number, opportunityId: number, agentId: number): OvertimeClaim | undefined;
   deleteClaimsByOpportunity(opportunityId: number): void;
 
   // Live break state
@@ -113,37 +122,39 @@ export const storage: IStorage = {
   },
 
   applyWeekTemplate(agentId, startUtc, endUtc, offWeekend) {
-    const offDays = offWeekend === 1 ? [0, 6] : [4, 5];
-    const workDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !offDays.includes(d));
+    return db.transaction(() => {
+      const offDays = offWeekend === 1 ? [0, 6] : [4, 5];
+      const workDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !offDays.includes(d));
 
-    for (const day of offDays) {
-      const existing = db.select().from(shifts)
-        .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
-        .get();
-      if (existing) {
-        db.delete(shifts).where(eq(shifts.id, existing.id)).run();
+      for (const day of offDays) {
+        const existing = db.select().from(shifts)
+          .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
+          .get();
+        if (existing) {
+          db.delete(shifts).where(eq(shifts.id, existing.id)).run();
+        }
       }
-    }
 
-    const result: Shift[] = [];
-    for (const day of workDays) {
-      const existing = db.select().from(shifts)
-        .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
-        .get();
-      if (existing) {
-        const updated = db.update(shifts)
-          .set({ startUtc, endUtc, activeStart: null, activeEnd: null })
-          .where(eq(shifts.id, existing.id))
-          .returning().get()!;
-        result.push(updated);
-      } else {
-        const created = db.insert(shifts)
-          .values({ agentId, dayOfWeek: day, startUtc, endUtc, activeStart: null, activeEnd: null, breakStart: null })
-          .returning().get();
-        result.push(created);
+      const result: Shift[] = [];
+      for (const day of workDays) {
+        const existing = db.select().from(shifts)
+          .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
+          .get();
+        if (existing) {
+          const updated = db.update(shifts)
+            .set({ startUtc, endUtc, activeStart: null, activeEnd: null })
+            .where(eq(shifts.id, existing.id))
+            .returning().get()!;
+          result.push(updated);
+        } else {
+          const created = db.insert(shifts)
+            .values({ agentId, dayOfWeek: day, startUtc, endUtc, activeStart: null, activeEnd: null, breakStart: null })
+            .returning().get();
+          result.push(created);
+        }
       }
-    }
-    return result;
+      return result;
+    });
   },
 
   getOvertimeLogs() {
@@ -185,34 +196,68 @@ export const storage: IStorage = {
     return db.insert(agentLogs).values(data).returning().get();
   },
   upsertRecentAgentLog(data, dedupeWindowMs = 5 * 60 * 1000) {
-    // If a log with the same agentId + actionType + date exists within the window, update it instead
-    if (data.actionType && data.date) {
-      const recent = db.select().from(agentLogs)
-        .where(and(
-          eq(agentLogs.agentId, data.agentId),
-          eq(agentLogs.actionType, data.actionType),
-          eq(agentLogs.date, data.date),
-        ))
-        .all()
-        .filter(l => {
-          const age = Date.now() - new Date(l.createdAt).getTime();
-          return age < dedupeWindowMs;
-        });
-      if (recent.length > 0) {
-        const latest = recent[recent.length - 1];
-        return db.update(agentLogs)
-          .set({ description: data.description, createdAt: new Date().toISOString() })
-          .where(eq(agentLogs.id, latest.id))
-          .returning().get()!;
+    return db.transaction(() => {
+      if (data.actionType && data.date) {
+        const recent = db.select().from(agentLogs)
+          .where(and(
+            eq(agentLogs.agentId, data.agentId),
+            eq(agentLogs.actionType, data.actionType),
+            eq(agentLogs.date, data.date),
+          ))
+          .all()
+          .filter(l => {
+            const age = Date.now() - new Date(l.createdAt).getTime();
+            return age < dedupeWindowMs;
+          });
+        if (recent.length > 0) {
+          const latest = recent[recent.length - 1];
+          return db.update(agentLogs)
+            .set({ description: data.description, createdAt: new Date().toISOString() })
+            .where(eq(agentLogs.id, latest.id))
+            .returning().get()!;
+        }
       }
-    }
-    return db.insert(agentLogs).values(data).returning().get();
+      return db.insert(agentLogs).values(data).returning().get();
+    });
   },
   deleteAgentLog(id) {
     db.delete(agentLogs).where(eq(agentLogs.id, id)).run();
   },
   clearAllAgentLogs() {
     db.delete(agentLogs).run();
+  },
+
+  findOrCreateOpportunity({ date, dayOfWeek, origin, fromShiftId, coveredByAgentId, coverStartUtc, coverEndUtc, overtimeHours, toAgentId, nowIso }) {
+    return db.transaction(() => {
+      const existing = db.select().from(overtimeLog).all().find(r =>
+        r.status === "pending" &&
+        r.date === date &&
+        r.dayOfWeek === dayOfWeek &&
+        r.origin === origin &&
+        r.fromShiftId === fromShiftId &&
+        r.coveredByAgentId === coveredByAgentId &&
+        r.coverStartUtc === coverStartUtc &&
+        r.coverEndUtc === coverEndUtc
+      );
+      if (existing) return { opportunity: existing, isNew: false };
+
+      const opp = db.insert(overtimeLog).values({
+        agentId: toAgentId, date, overtimeHours, origin: origin as any,
+        coveredByAgentId, status: "pending", statusUpdatedAt: nowIso,
+        fromShiftId, dayOfWeek, coverStartUtc, coverEndUtc, releasedHours: 0, note: null,
+      }).returning().get();
+
+      // First claim is created inside the same transaction
+      const claims = db.select().from(overtimeClaims)
+        .where(eq(overtimeClaims.opportunityId, opp.id)).all();
+      db.insert(overtimeClaims).values({
+        opportunityId: opp.id, agentId: toAgentId,
+        status: "pending", claimOrder: claims.length + 1,
+        note: null, createdAt: nowIso,
+      }).run();
+
+      return { opportunity: opp, isNew: true };
+    });
   },
 
   // --- Overtime claims ---
@@ -269,6 +314,27 @@ export const storage: IStorage = {
       return approved;
     });
   },
+  approveClaimAndUpdateOpportunity(claimId, opportunityId, agentId) {
+    return db.transaction(() => {
+      const approved = db.update(overtimeClaims)
+        .set({ status: "approved" })
+        .where(eq(overtimeClaims.id, claimId))
+        .returning().get();
+      const others = db.select().from(overtimeClaims)
+        .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")))
+        .all();
+      for (const other of others) {
+        if (other.id !== claimId) {
+          db.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id)).run();
+        }
+      }
+      db.update(overtimeLog)
+        .set({ agentId, status: "approved", statusUpdatedAt: new Date().toISOString() })
+        .where(eq(overtimeLog.id, opportunityId))
+        .run();
+      return approved;
+    });
+  },
   deleteClaimsByOpportunity(opportunityId) {
     db.delete(overtimeClaims).where(eq(overtimeClaims.opportunityId, opportunityId)).run();
   },
@@ -293,13 +359,13 @@ export const storage: IStorage = {
   },
 
   importAll(data) {
-    const currentAgents = db.select().from(agents).all();
-    for (const a of currentAgents) {
-      db.delete(shifts).where(eq(shifts.agentId, a.id)).run();
-      db.delete(overtimeLog).where(eq(overtimeLog.agentId, a.id)).run();
-      db.delete(agentLogs).where(eq(agentLogs.agentId, a.id)).run();
-      db.delete(agents).where(eq(agents.id, a.id)).run();
-    }
+    db.transaction(() => {
+    // Wipe all existing data atomically — rollback on any failure
+    db.delete(overtimeClaims).run();
+    db.delete(overtimeLog).run();
+    db.delete(agentLogs).run();
+    db.delete(shifts).run();
+    db.delete(agents).run();
 
     const oldToNewAgentId = new Map<number, number>();
     const agentNameToId = new Map<string, number>();
@@ -366,5 +432,6 @@ export const storage: IStorage = {
         }).run();
       }
     }
+    }); // end transaction
   },
 };

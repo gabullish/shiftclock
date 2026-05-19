@@ -36,7 +36,12 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey.join("/"));
+    const headers: Record<string, string> = {};
+    const adminToken = getEffectiveAdminToken();
+    const agentToken = getAgentToken();
+    if (adminToken) headers["x-admin-token"] = adminToken;
+    if (agentToken) headers["x-agent-session"] = agentToken;
+    const res = await fetch(queryKey.join("/"), { headers });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

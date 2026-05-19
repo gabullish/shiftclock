@@ -11,6 +11,11 @@ const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH
 
 const sqlite = new Database(dbPath);
 
+// WAL mode: allows concurrent readers + one writer without "database is locked" errors
+sqlite.pragma("journal_mode = WAL");
+// Flush WAL to main DB every 1000 pages (avoids unbounded WAL growth)
+sqlite.pragma("wal_autocheckpoint = 1000");
+
 // Auto-create tables if they don't exist (safe on existing DBs)
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS agents (

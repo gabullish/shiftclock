@@ -214,7 +214,8 @@ export default function Dashboard() {
     if (back.length === 1) toast({ title: `✓ ${back[0].name} is back`, duration: 3000 });
     else if (back.length > 1) toast({ title: `✓ ${back.map(a => a.name).join(", ")} are back`, duration: 3000 });
     prevBreakRef.current = new Map(agents.map(a => [a.id, a.breakActiveAt ?? null]));
-  }, [agents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, agentSession?.agentId]);
 
   useEffect(() => {
     const t = setInterval(() => setUtcHour(getUTCHour()), 1000);
@@ -443,20 +444,25 @@ export default function Dashboard() {
       if (record.coverStartUtc == null || record.coverEndUtc == null) return false;
 
       const end = normaliseEndUtc(record.coverStartUtc, record.coverEndUtc);
-      if (end <= 24) return utcHour >= record.coverStartUtc && utcHour <= end;
-      return utcHour >= record.coverStartUtc || utcHour <= (end - 24);
+      if (end <= 24) return utcHour >= record.coverStartUtc && utcHour < end;
+      return utcHour >= record.coverStartUtc || utcHour < (end - 24);
     });
   });
 
   // Agents whose break is within the next 30 min (but not yet started)
   const agentsBreakSoon = isSelectedDateToday ? onlineAgents.filter(agent => {
     if (agent.breakActiveAt) return false;
-    return todayShifts.some(s =>
-      s.agentId === agent.id &&
-      s.breakStart != null &&
-      utcHour >= s.breakStart - 0.5 &&
-      utcHour < s.breakStart + 0.5
-    );
+    return todayShifts.some(s => {
+      if (s.agentId !== agent.id || s.breakStart == null) return false;
+      const bStart = ((s.breakStart % 24) + 24) % 24;
+      const windowStart = (bStart - 0.5 + 24) % 24;
+      const windowEnd   = (bStart + 0.5) % 24;
+      // Handle midnight-straddling window (e.g. break at 00:15 → window 23:45–00:45)
+      if (windowStart > windowEnd) {
+        return utcHour >= windowStart || utcHour < windowEnd;
+      }
+      return utcHour >= windowStart && utcHour < windowEnd;
+    });
   }) : [];
 
   const hasShiftsToday = todayShifts.length > 0;

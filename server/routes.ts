@@ -418,7 +418,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!ADMIN_TOKEN) {
       return res.status(500).json({ message: "Server misconfigured: ADMIN_TOKEN is not set" });
     }
-    if (readAdminHeaderToken(req) !== ADMIN_TOKEN) {
+    if (!safeTokenEqual(readAdminHeaderToken(req), ADMIN_TOKEN)) {
       return res.status(401).json({ message: "Invalid admin token" });
     }
     return res.json({ ok: true });
@@ -584,6 +584,12 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   app.post("/api/shifts", requireAdmin, (req, res) => {
     const result = insertShiftSchema.safeParse(req.body);
     if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid shift data" });
+    const { startUtc, endUtc } = result.data;
+    // Prevent 0-hour shifts — endUtc === startUtc means zero duration
+    const normEnd = endUtc < startUtc ? endUtc + 24 : endUtc;
+    if (normEnd - startUtc < 0.5) {
+      return res.status(400).json({ message: "Shift duration must be at least 0.5 hours" });
+    }
     const shift = storage.upsertShift(result.data);
     res.json(shift);
   });
@@ -659,6 +665,20 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         return res.status(400).json({
           message: `Total active window cannot exceed base duration + 2h (max ${baseDuration + 2}h)`,
         });
+      }
+    }
+
+    // Validate breakStart is within shift window when set directly
+    if ("breakStart" in payload && payload.breakStart != null) {
+      const bs = Number(payload.breakStart);
+      if (!Number.isFinite(bs) || bs < 0 || bs >= 48) {
+        return res.status(400).json({ message: "breakStart out of range [0, 48)" });
+      }
+      const shiftStart = existing.startUtc;
+      const shiftEnd   = normaliseEndUtcServer(existing.startUtc, existing.endUtc);
+      const bsNorm = bs < shiftStart ? bs + 24 : bs;
+      if (bsNorm < shiftStart + 1.0 || bsNorm + 0.5 > shiftEnd - 1.0) {
+        return res.status(400).json({ message: "breakStart must be at least 1h from shift start/end with 30m duration" });
       }
     }
 
@@ -840,9 +860,13 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(403).json({ message: "Admin or agent session required" });
     }
 
-    const { fromShiftId, toAgentId, hours, date, dayOfWeek, coverStartUtc, coverEndUtc } = req.body;
+    const { fromShiftId, hours, date, dayOfWeek, coverStartUtc, coverEndUtc } = req.body;
+    const toAgentId = Number(req.body.toAgentId);
     if (!toAgentId || !date) {
       return res.status(400).json({ message: "toAgentId and date required" });
+    }
+    if (!Number.isFinite(toAgentId) || toAgentId <= 0) {
+      return res.status(400).json({ message: "Invalid toAgentId" });
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ message: "date must be YYYY-MM-DD" });
@@ -926,23 +950,25 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       }
     }
 
-    const sameCoverageOpportunity = storage
-      .getOvertimeLogs()
-      .find((record) => {
-        if (record.status !== "pending") return false;
-        if (record.date !== date) return false;
-        if (record.dayOfWeek !== resolvedDayOfWeek) return false;
-        if (record.origin !== origin) return false;
-        if (record.fromShiftId !== sourceShiftId) return false;
-        if (record.coveredByAgentId !== sourceAgentId) return false;
-        if (record.coverStartUtc !== slotStartUtc) return false;
-        if (record.coverEndUtc !== slotEndUtc) return false;
-        return true;
-      });
-
     const nowIso = new Date().toISOString();
 
-    if (sameCoverageOpportunity) {
+    // findOrCreateOpportunity is atomic — prevents duplicate opportunity rows
+    // when two agents submit for the same slot simultaneously (P0 race fix)
+    const { opportunity: sameCoverageOpportunity, isNew: isNewOpportunity } =
+      storage.findOrCreateOpportunity({
+        date,
+        dayOfWeek: resolvedDayOfWeek,
+        origin,
+        fromShiftId: sourceShiftId,
+        coveredByAgentId: sourceAgentId,
+        coverStartUtc: slotStartUtc,
+        coverEndUtc: slotEndUtc,
+        overtimeHours: assignedHours,
+        toAgentId,
+        nowIso,
+      });
+
+    if (!isNewOpportunity) {
       const existingPendingClaim = storage
         .getClaimsForOpportunity(sameCoverageOpportunity.id)
         .find((claim) => claim.agentId === toAgentId && claim.status === "pending");
@@ -980,27 +1006,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.json({ ok: true, reused: true, overtimeLog: sameCoverageOpportunity, claim: joinedClaim });
     }
 
-    // Create a single pending opportunity for this coverage slot.
-    const otLog = storage.createOvertimeLog(toAgentId, date, {
-      overtimeHours: assignedHours,
-      origin,
-      coveredByAgentId: sourceAgentId,
-      status: "pending",
-      statusUpdatedAt: nowIso,
-      fromShiftId: sourceShiftId,
-      dayOfWeek: resolvedDayOfWeek,
-      coverStartUtc: slotStartUtc,
-      coverEndUtc: slotEndUtc,
-    });
-
-    // First requester becomes #1 in line for this opportunity.
-    const firstClaim = storage.createClaim({
-      opportunityId: otLog.id,
-      agentId: toAgentId,
-      status: "pending",
-      note: null,
-      createdAt: nowIso,
-    });
+    // New opportunity — first requester is already #1 in line (created atomically in findOrCreateOpportunity)
+    const otLog = sameCoverageOpportunity;
+    const firstClaim = storage.getClaimsForOpportunity(otLog.id)[0];
 
     storage.createAgentLog({
       agentId: toAgentId,
@@ -1151,14 +1159,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const claim = storage.getClaimsForOpportunity(opportunityId).find(c => c.id === claimId);
     if (!claim) return res.status(404).json({ message: "Claim not found" });
 
-    const approved = storage.approveClaimAndRejectOthers(claimId, opportunityId);
-
-    // Approve the opportunity itself, assign ownership to approved agent
-    storage.updateOvertimeLog(opportunityId, {
-      agentId: claim.agentId,
-      status: "approved",
-      statusUpdatedAt: new Date().toISOString(),
-    });
+    // Both claim approval and opportunity update happen atomically
+    const approved = storage.approveClaimAndUpdateOpportunity(claimId, opportunityId, claim.agentId);
 
     const agent = storage.getAgent(claim.agentId);
     if (agent) {
@@ -1206,6 +1208,11 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ message: "date must be YYYY-MM-DD" });
+    }
+
+    const ALLOWED_LOG_TYPES = ["sick", "vacation", "partial", "overtime-taken", "shift-claim", "shift-claim-cancelled", "overtime-status", "schedule_change", "break-start", "break-end"] as const;
+    if (!ALLOWED_LOG_TYPES.includes(type)) {
+      return res.status(400).json({ message: `Invalid log type. Allowed: ${ALLOWED_LOG_TYPES.join(", ")}` });
     }
 
     const admin = isAdminRequest(req);
