@@ -5,39 +5,39 @@ import { eq, and, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Agents
-  getAgents(): Agent[];
-  getAgent(id: number): Agent | undefined;
-  createAgent(data: InsertAgent): Agent;
-  updateAgent(id: number, data: Partial<InsertAgent>): Agent | undefined;
-  deleteAgent(id: number): void;
+  getAgents(): Promise<Agent[]>;
+  getAgent(id: number): Promise<Agent | undefined>;
+  createAgent(data: InsertAgent): Promise<Agent>;
+  updateAgent(id: number, data: Partial<InsertAgent>): Promise<Agent | undefined>;
+  deleteAgent(id: number): Promise<void>;
 
   // Shifts
-  getShifts(): Shift[];
-  getShiftsByAgent(agentId: number): Shift[];
-  upsertShift(data: InsertShift): Shift;
-  updateShift(id: number, data: Partial<InsertShift>): Shift | undefined;
-  deleteShift(id: number): void;
+  getShifts(): Promise<Shift[]>;
+  getShiftsByAgent(agentId: number): Promise<Shift[]>;
+  upsertShift(data: InsertShift): Promise<Shift>;
+  updateShift(id: number, data: Partial<InsertShift>): Promise<Shift | undefined>;
+  deleteShift(id: number): Promise<void>;
 
   // Weekly template apply
-  applyWeekTemplate(agentId: number, startUtc: number, endUtc: number, offWeekend: number): Shift[];
+  applyWeekTemplate(agentId: number, startUtc: number, endUtc: number, offWeekend: number): Promise<Shift[]>;
 
   // Overtime
-  getOvertimeLogs(): OvertimeLog[];
-  getOvertimeByAgent(agentId: number): OvertimeLog[];
-  createOvertimeLog(agentId: number, date: string, data: Partial<InsertOvertimeLog>): OvertimeLog;
-  updateOvertimeLog(id: number, data: Partial<InsertOvertimeLog>): OvertimeLog | undefined;
-  deleteOvertimeLog(id: number): void;
-  bulkDeleteOvertimeLogs(ids: number[]): void;
-  clearAllOvertimeLogs(): void;
-  replaceOvertimeLogs(data: Array<Omit<OvertimeLog, "id">>): void;
+  getOvertimeLogs(): Promise<OvertimeLog[]>;
+  getOvertimeByAgent(agentId: number): Promise<OvertimeLog[]>;
+  createOvertimeLog(agentId: number, date: string, data: Partial<InsertOvertimeLog>): Promise<OvertimeLog>;
+  updateOvertimeLog(id: number, data: Partial<InsertOvertimeLog>): Promise<OvertimeLog | undefined>;
+  deleteOvertimeLog(id: number): Promise<void>;
+  bulkDeleteOvertimeLogs(ids: number[]): Promise<void>;
+  clearAllOvertimeLogs(): Promise<void>;
+  replaceOvertimeLogs(data: Array<Omit<OvertimeLog, "id">>): Promise<void>;
 
   // Agent logs
-  getAgentLogs(): AgentLog[];
-  getAgentLogsByAgent(agentId: number): AgentLog[];
-  createAgentLog(data: InsertAgentLog): AgentLog;
-  upsertRecentAgentLog(data: InsertAgentLog, dedupeWindowMs?: number): AgentLog;
-  deleteAgentLog(id: number): void;
-  clearAllAgentLogs(): void;
+  getAgentLogs(): Promise<AgentLog[]>;
+  getAgentLogsByAgent(agentId: number): Promise<AgentLog[]>;
+  createAgentLog(data: InsertAgentLog): Promise<AgentLog>;
+  upsertRecentAgentLog(data: InsertAgentLog, dedupeWindowMs?: number): Promise<AgentLog>;
+  deleteAgentLog(id: number): Promise<void>;
+  clearAllAgentLogs(): Promise<void>;
 
   // Atomic find-or-create for overtime opportunity (prevents P0 duplicate-slot race)
   findOrCreateOpportunity(params: {
@@ -45,24 +45,24 @@ export interface IStorage {
     fromShiftId: number | null; coveredByAgentId: number | null;
     coverStartUtc: number | null; coverEndUtc: number | null;
     overtimeHours: number; toAgentId: number; nowIso: string;
-  }): { opportunity: OvertimeLog; isNew: boolean };
+  }): Promise<{ opportunity: OvertimeLog; isNew: boolean }>;
 
   // Overtime claims (multi-agent competing for same opportunity)
-  getClaimsForOpportunity(opportunityId: number): OvertimeClaim[];
-  getClaimsByAgent(agentId: number): OvertimeClaim[];
-  createClaim(data: Omit<InsertOvertimeClaim, "claimOrder">): OvertimeClaim;
-  updateClaim(id: number, data: Partial<InsertOvertimeClaim>): OvertimeClaim | undefined;
-  cancelClaim(id: number, agentId: number): OvertimeClaim | undefined;
-  approveClaimAndRejectOthers(claimId: number, opportunityId: number): OvertimeClaim | undefined;
-  approveClaimAndUpdateOpportunity(claimId: number, opportunityId: number, agentId: number): OvertimeClaim | undefined;
-  deleteClaimsByOpportunity(opportunityId: number): void;
+  getClaimsForOpportunity(opportunityId: number): Promise<OvertimeClaim[]>;
+  getClaimsByAgent(agentId: number): Promise<OvertimeClaim[]>;
+  createClaim(data: Omit<InsertOvertimeClaim, "claimOrder">): Promise<OvertimeClaim>;
+  updateClaim(id: number, data: Partial<InsertOvertimeClaim>): Promise<OvertimeClaim | undefined>;
+  cancelClaim(id: number, agentId: number): Promise<OvertimeClaim | undefined>;
+  approveClaimAndRejectOthers(claimId: number, opportunityId: number): Promise<OvertimeClaim | undefined>;
+  approveClaimAndUpdateOpportunity(claimId: number, opportunityId: number, agentId: number): Promise<OvertimeClaim | undefined>;
+  deleteClaimsByOpportunity(opportunityId: number): Promise<void>;
 
   // Live break state
-  startLiveBreak(agentId: number): Agent | undefined;
-  endLiveBreak(agentId: number): Agent | undefined;
+  startLiveBreak(agentId: number): Promise<Agent | undefined>;
+  endLiveBreak(agentId: number): Promise<Agent | undefined>;
 
   // Backup / restore
-  exportAll(): { agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] };
+  exportAll(): Promise<{ agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] }>;
   importAll(data: {
     agents: Array<Omit<Agent, "id"> & {
       shifts: Array<Omit<Shift, "id" | "agentId">>;
@@ -70,86 +70,86 @@ export interface IStorage {
     }>;
     overtime?: Array<Omit<OvertimeLog, "id">>;
     logs?: Array<Omit<AgentLog, "id">>;
-  }): void;
+  }): Promise<void>;
 }
 
 export const storage: IStorage = {
-  getAgents() {
-    return db.select().from(agents).all();
+  async getAgents() {
+    return await db.select().from(agents);
   },
-  getAgent(id) {
-    return db.select().from(agents).where(eq(agents.id, id)).get();
+  async getAgent(id) {
+    return await db.select().from(agents).where(eq(agents.id, id)).then(r => r[0]);
   },
-  createAgent(data) {
-    return db.insert(agents).values(data).returning().get();
+  async createAgent(data) {
+    return await db.insert(agents).values(data).returning().then(r => r[0]);
   },
-  updateAgent(id, data) {
-    return db.update(agents).set(data).where(eq(agents.id, id)).returning().get();
+  async updateAgent(id, data) {
+    return await db.update(agents).set(data).where(eq(agents.id, id)).returning().then(r => r[0]);
   },
-  deleteAgent(id) {
+  async deleteAgent(id) {
     // Cascade: remove all related data atomically before deleting the agent
-    db.transaction(() => {
-      db.delete(overtimeClaims).where(eq(overtimeClaims.agentId, id)).run();
-      db.delete(shifts).where(eq(shifts.agentId, id)).run();
-      db.delete(overtimeLog).where(eq(overtimeLog.agentId, id)).run();
-      db.delete(agentLogs).where(eq(agentLogs.agentId, id)).run();
-      db.delete(agents).where(eq(agents.id, id)).run();
+    await db.transaction(async (tx) => {
+      await tx.delete(overtimeClaims).where(eq(overtimeClaims.agentId, id));
+      await tx.delete(shifts).where(eq(shifts.agentId, id));
+      await tx.delete(overtimeLog).where(eq(overtimeLog.agentId, id));
+      await tx.delete(agentLogs).where(eq(agentLogs.agentId, id));
+      await tx.delete(agents).where(eq(agents.id, id));
     });
   },
 
-  getShifts() {
-    return db.select().from(shifts).all();
+  async getShifts() {
+    return await db.select().from(shifts);
   },
-  getShiftsByAgent(agentId) {
-    return db.select().from(shifts).where(eq(shifts.agentId, agentId)).all();
+  async getShiftsByAgent(agentId) {
+    return await db.select().from(shifts).where(eq(shifts.agentId, agentId));
   },
-  upsertShift(data) {
-    return db.transaction(() => {
-      const existing = db.select().from(shifts)
+  async upsertShift(data) {
+    return await db.transaction(async (tx) => {
+      const existing = await tx.select().from(shifts)
         .where(and(eq(shifts.agentId, data.agentId), eq(shifts.dayOfWeek, data.dayOfWeek)))
-        .get();
+        .then(r => r[0]);
       if (existing) {
-        return db.update(shifts).set(data).where(eq(shifts.id, existing.id)).returning().get()!;
+        return await tx.update(shifts).set(data).where(eq(shifts.id, existing.id)).returning().then(r => r[0]!);
       }
-      return db.insert(shifts).values(data).returning().get();
+      return await tx.insert(shifts).values(data).returning().then(r => r[0]);
     });
   },
-  updateShift(id, data) {
-    return db.update(shifts).set(data).where(eq(shifts.id, id)).returning().get();
+  async updateShift(id, data) {
+    return await db.update(shifts).set(data).where(eq(shifts.id, id)).returning().then(r => r[0]);
   },
-  deleteShift(id) {
-    db.delete(shifts).where(eq(shifts.id, id)).run();
+  async deleteShift(id) {
+    await db.delete(shifts).where(eq(shifts.id, id));
   },
 
-  applyWeekTemplate(agentId, startUtc, endUtc, offWeekend) {
-    return db.transaction(() => {
+  async applyWeekTemplate(agentId, startUtc, endUtc, offWeekend) {
+    return await db.transaction(async (tx) => {
       const offDays = offWeekend === 1 ? [0, 6] : [4, 5];
       const workDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !offDays.includes(d));
 
       for (const day of offDays) {
-        const existing = db.select().from(shifts)
+        const existing = await tx.select().from(shifts)
           .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
-          .get();
+          .then(r => r[0]);
         if (existing) {
-          db.delete(shifts).where(eq(shifts.id, existing.id)).run();
+          await tx.delete(shifts).where(eq(shifts.id, existing.id));
         }
       }
 
       const result: Shift[] = [];
       for (const day of workDays) {
-        const existing = db.select().from(shifts)
+        const existing = await tx.select().from(shifts)
           .where(and(eq(shifts.agentId, agentId), eq(shifts.dayOfWeek, day)))
-          .get();
+          .then(r => r[0]);
         if (existing) {
-          const updated = db.update(shifts)
+          const updated = await tx.update(shifts)
             .set({ startUtc, endUtc, activeStart: null, activeEnd: null })
             .where(eq(shifts.id, existing.id))
-            .returning().get()!;
+            .returning().then(r => r[0]!);
           result.push(updated);
         } else {
-          const created = db.insert(shifts)
+          const created = await tx.insert(shifts)
             .values({ agentId, dayOfWeek: day, startUtc, endUtc, activeStart: null, activeEnd: null, breakStart: null })
-            .returning().get();
+            .returning().then(r => r[0]);
           result.push(created);
         }
       }
@@ -157,79 +157,81 @@ export const storage: IStorage = {
     });
   },
 
-  getOvertimeLogs() {
-    return db.select().from(overtimeLog).all();
+  async getOvertimeLogs() {
+    return await db.select().from(overtimeLog);
   },
-  getOvertimeByAgent(agentId) {
-    return db.select().from(overtimeLog).where(eq(overtimeLog.agentId, agentId)).all();
+  async getOvertimeByAgent(agentId) {
+    return await db.select().from(overtimeLog).where(eq(overtimeLog.agentId, agentId));
   },
-  createOvertimeLog(agentId, date, data) {
-    return db.insert(overtimeLog).values({ agentId, date, overtimeHours: 0, releasedHours: 0, ...data }).returning().get();
+  async createOvertimeLog(agentId, date, data) {
+    return await db.insert(overtimeLog).values({ agentId, date, overtimeHours: 0, releasedHours: 0, ...data }).returning().then(r => r[0]);
   },
-  updateOvertimeLog(id, data) {
-    return db.update(overtimeLog).set(data).where(eq(overtimeLog.id, id)).returning().get();
+  async updateOvertimeLog(id, data) {
+    return await db.update(overtimeLog).set(data).where(eq(overtimeLog.id, id)).returning().then(r => r[0]);
   },
-  deleteOvertimeLog(id) {
-    db.delete(overtimeLog).where(eq(overtimeLog.id, id)).run();
+  async deleteOvertimeLog(id) {
+    await db.delete(overtimeLog).where(eq(overtimeLog.id, id));
   },
-  bulkDeleteOvertimeLogs(ids) {
+  async bulkDeleteOvertimeLogs(ids) {
     if (ids.length === 0) return;
-    db.delete(overtimeLog).where(inArray(overtimeLog.id, ids)).run();
+    await db.delete(overtimeLog).where(inArray(overtimeLog.id, ids));
   },
-  clearAllOvertimeLogs() {
-    db.delete(overtimeLog).run();
+  async clearAllOvertimeLogs() {
+    await db.delete(overtimeLog);
   },
-  replaceOvertimeLogs(data) {
-    db.delete(overtimeLog).run();
-    for (const record of data) {
-      db.insert(overtimeLog).values(record).run();
-    }
+  async replaceOvertimeLogs(data) {
+    await db.transaction(async (tx) => {
+      await tx.delete(overtimeLog);
+      for (const record of data) {
+        await tx.insert(overtimeLog).values(record);
+      }
+    });
   },
 
-  getAgentLogs() {
-    return db.select().from(agentLogs).all();
+  async getAgentLogs() {
+    return await db.select().from(agentLogs);
   },
-  getAgentLogsByAgent(agentId) {
-    return db.select().from(agentLogs).where(eq(agentLogs.agentId, agentId)).all();
+  async getAgentLogsByAgent(agentId) {
+    return await db.select().from(agentLogs).where(eq(agentLogs.agentId, agentId));
   },
-  createAgentLog(data) {
-    return db.insert(agentLogs).values(data).returning().get();
+  async createAgentLog(data) {
+    return await db.insert(agentLogs).values(data).returning().then(r => r[0]);
   },
-  upsertRecentAgentLog(data, dedupeWindowMs = 5 * 60 * 1000) {
-    return db.transaction(() => {
+  async upsertRecentAgentLog(data, dedupeWindowMs = 5 * 60 * 1000) {
+    return await db.transaction(async (tx) => {
       if (data.actionType && data.date) {
-        const recent = db.select().from(agentLogs)
+        const recent = (await tx.select().from(agentLogs)
           .where(and(
             eq(agentLogs.agentId, data.agentId),
             eq(agentLogs.actionType, data.actionType),
             eq(agentLogs.date, data.date),
-          ))
-          .all()
+          )))
           .filter(l => {
             const age = Date.now() - new Date(l.createdAt).getTime();
             return age < dedupeWindowMs;
           });
         if (recent.length > 0) {
           const latest = recent[recent.length - 1];
-          return db.update(agentLogs)
+          return await tx.update(agentLogs)
             .set({ description: data.description, createdAt: new Date().toISOString() })
             .where(eq(agentLogs.id, latest.id))
-            .returning().get()!;
+            .returning().then(r => r[0]!);
         }
       }
-      return db.insert(agentLogs).values(data).returning().get();
+      return await tx.insert(agentLogs).values(data).returning().then(r => r[0]);
     });
   },
-  deleteAgentLog(id) {
-    db.delete(agentLogs).where(eq(agentLogs.id, id)).run();
+  async deleteAgentLog(id) {
+    await db.delete(agentLogs).where(eq(agentLogs.id, id));
   },
-  clearAllAgentLogs() {
-    db.delete(agentLogs).run();
+  async clearAllAgentLogs() {
+    await db.delete(agentLogs);
   },
 
-  findOrCreateOpportunity({ date, dayOfWeek, origin, fromShiftId, coveredByAgentId, coverStartUtc, coverEndUtc, overtimeHours, toAgentId, nowIso }) {
-    return db.transaction(() => {
-      const existing = db.select().from(overtimeLog).all().find(r =>
+  async findOrCreateOpportunity({ date, dayOfWeek, origin, fromShiftId, coveredByAgentId, coverStartUtc, coverEndUtc, overtimeHours, toAgentId, nowIso }) {
+    return await db.transaction(async (tx) => {
+      const allRows = await tx.select().from(overtimeLog);
+      const existing = allRows.find(r =>
         r.status === "pending" &&
         r.date === date &&
         r.dayOfWeek === dayOfWeek &&
@@ -241,197 +243,190 @@ export const storage: IStorage = {
       );
       if (existing) return { opportunity: existing, isNew: false };
 
-      const opp = db.insert(overtimeLog).values({
+      const opp = await tx.insert(overtimeLog).values({
         agentId: toAgentId, date, overtimeHours, origin: origin as any,
         coveredByAgentId, status: "pending", statusUpdatedAt: nowIso,
         fromShiftId, dayOfWeek, coverStartUtc, coverEndUtc, releasedHours: 0, note: null,
-      }).returning().get();
+      }).returning().then(r => r[0]);
 
       // First claim is created inside the same transaction
-      const claims = db.select().from(overtimeClaims)
-        .where(eq(overtimeClaims.opportunityId, opp.id)).all();
-      db.insert(overtimeClaims).values({
+      const claims = await tx.select().from(overtimeClaims)
+        .where(eq(overtimeClaims.opportunityId, opp.id));
+      await tx.insert(overtimeClaims).values({
         opportunityId: opp.id, agentId: toAgentId,
         status: "pending", claimOrder: claims.length + 1,
         note: null, createdAt: nowIso,
-      }).run();
+      });
 
       return { opportunity: opp, isNew: true };
     });
   },
 
   // --- Overtime claims ---
-  getClaimsForOpportunity(opportunityId) {
-    return db.select().from(overtimeClaims)
-      .where(eq(overtimeClaims.opportunityId, opportunityId))
-      .all()
+  async getClaimsForOpportunity(opportunityId) {
+    return (await db.select().from(overtimeClaims)
+      .where(eq(overtimeClaims.opportunityId, opportunityId)))
       .sort((a, b) => a.claimOrder - b.claimOrder);
   },
-  getClaimsByAgent(agentId) {
-    return db.select().from(overtimeClaims)
-      .where(eq(overtimeClaims.agentId, agentId))
-      .all();
+  async getClaimsByAgent(agentId) {
+    return await db.select().from(overtimeClaims)
+      .where(eq(overtimeClaims.agentId, agentId));
   },
-  createClaim(data) {
-    return db.transaction(() => {
-      const existing = db.select().from(overtimeClaims)
-        .where(eq(overtimeClaims.opportunityId, data.opportunityId))
-        .all();
+  async createClaim(data) {
+    return await db.transaction(async (tx) => {
+      const existing = await tx.select().from(overtimeClaims)
+        .where(eq(overtimeClaims.opportunityId, data.opportunityId));
       const nextOrder = existing.length + 1;
-      return db.insert(overtimeClaims)
+      return await tx.insert(overtimeClaims)
         .values({ ...data, claimOrder: nextOrder })
-        .returning().get();
+        .returning().then(r => r[0]);
     });
   },
-  updateClaim(id, data) {
-    return db.update(overtimeClaims).set(data).where(eq(overtimeClaims.id, id)).returning().get();
+  async updateClaim(id, data) {
+    return await db.update(overtimeClaims).set(data).where(eq(overtimeClaims.id, id)).returning().then(r => r[0]);
   },
-  cancelClaim(id, agentId) {
-    const claim = db.select().from(overtimeClaims)
+  async cancelClaim(id, agentId) {
+    const claim = await db.select().from(overtimeClaims)
       .where(and(eq(overtimeClaims.id, id), eq(overtimeClaims.agentId, agentId)))
-      .get();
+      .then(r => r[0]);
     if (!claim) return undefined;
-    return db.update(overtimeClaims)
+    return await db.update(overtimeClaims)
       .set({ status: "cancelled" })
       .where(eq(overtimeClaims.id, id))
-      .returning().get();
+      .returning().then(r => r[0]);
   },
-  approveClaimAndRejectOthers(claimId, opportunityId) {
-    return db.transaction(() => {
-      const approved = db.update(overtimeClaims)
+  async approveClaimAndRejectOthers(claimId, opportunityId) {
+    return await db.transaction(async (tx) => {
+      const approved = await tx.update(overtimeClaims)
         .set({ status: "approved" })
         .where(eq(overtimeClaims.id, claimId))
-        .returning().get();
+        .returning().then(r => r[0]);
       // Atomically reject all other pending claims for this opportunity
-      const others = db.select().from(overtimeClaims)
-        .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")))
-        .all();
+      const others = await tx.select().from(overtimeClaims)
+        .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")));
       for (const other of others) {
         if (other.id !== claimId) {
-          db.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id)).run();
+          await tx.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id));
         }
       }
       return approved;
     });
   },
-  approveClaimAndUpdateOpportunity(claimId, opportunityId, agentId) {
-    return db.transaction(() => {
-      const approved = db.update(overtimeClaims)
+  async approveClaimAndUpdateOpportunity(claimId, opportunityId, agentId) {
+    return await db.transaction(async (tx) => {
+      const approved = await tx.update(overtimeClaims)
         .set({ status: "approved" })
         .where(eq(overtimeClaims.id, claimId))
-        .returning().get();
-      const others = db.select().from(overtimeClaims)
-        .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")))
-        .all();
+        .returning().then(r => r[0]);
+      const others = await tx.select().from(overtimeClaims)
+        .where(and(eq(overtimeClaims.opportunityId, opportunityId), eq(overtimeClaims.status, "pending")));
       for (const other of others) {
         if (other.id !== claimId) {
-          db.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id)).run();
+          await tx.update(overtimeClaims).set({ status: "rejected" }).where(eq(overtimeClaims.id, other.id));
         }
       }
-      db.update(overtimeLog)
+      await tx.update(overtimeLog)
         .set({ agentId, status: "approved", statusUpdatedAt: new Date().toISOString() })
-        .where(eq(overtimeLog.id, opportunityId))
-        .run();
+        .where(eq(overtimeLog.id, opportunityId));
       return approved;
     });
   },
-  deleteClaimsByOpportunity(opportunityId) {
-    db.delete(overtimeClaims).where(eq(overtimeClaims.opportunityId, opportunityId)).run();
+  async deleteClaimsByOpportunity(opportunityId) {
+    await db.delete(overtimeClaims).where(eq(overtimeClaims.opportunityId, opportunityId));
   },
 
-  startLiveBreak(agentId) {
-    return db.update(agents).set({ breakActiveAt: new Date().toISOString() })
-      .where(eq(agents.id, agentId)).returning().get();
+  async startLiveBreak(agentId) {
+    return await db.update(agents).set({ breakActiveAt: new Date().toISOString() })
+      .where(eq(agents.id, agentId)).returning().then(r => r[0]);
   },
-  endLiveBreak(agentId) {
-    return db.update(agents).set({ breakActiveAt: null })
-      .where(eq(agents.id, agentId)).returning().get();
+  async endLiveBreak(agentId) {
+    return await db.update(agents).set({ breakActiveAt: null })
+      .where(eq(agents.id, agentId)).returning().then(r => r[0]);
   },
 
-  exportAll() {
+  async exportAll() {
     return {
-      agents: db.select().from(agents).all(),
-      shifts: db.select().from(shifts).all(),
-      overtime: db.select().from(overtimeLog).all(),
-      logs: db.select().from(agentLogs).all(),
-      claims: db.select().from(overtimeClaims).all(),
-    };
+      agents: await db.select().from(agents),
+      shifts: await db.select().from(shifts),
+      overtime: await db.select().from(overtimeLog),
+      logs: await db.select().from(agentLogs),
+      claims: await db.select().from(overtimeClaims),
+    } as any;
   },
 
-  importAll(data) {
-    db.transaction(() => {
-    // Wipe all existing data atomically — rollback on any failure
-    db.delete(overtimeClaims).run();
-    db.delete(overtimeLog).run();
-    db.delete(agentLogs).run();
-    db.delete(shifts).run();
-    db.delete(agents).run();
+  async importAll(data) {
+    await db.transaction(async (tx) => {
+      // Wipe all existing data atomically — rollback on any failure
+      await tx.delete(overtimeClaims);
+      await tx.delete(overtimeLog);
+      await tx.delete(agentLogs);
+      await tx.delete(shifts);
+      await tx.delete(agents);
 
-    const oldToNewAgentId = new Map<number, number>();
-    const agentNameToId = new Map<string, number>();
+      const oldToNewAgentId = new Map<number, number>();
+      const agentNameToId = new Map<string, number>();
 
-    for (const agentData of data.agents) {
-      const { shifts: agentShifts, historicalShifts, id: oldAgentId, ...agentFields } = agentData as any;
-      const newAgent = db.insert(agents).values(agentFields).returning().get();
-      if (typeof oldAgentId === "number") {
-        oldToNewAgentId.set(oldAgentId, newAgent.id);
-      }
-      agentNameToId.set((agentFields as any).name, newAgent.id);
+      for (const agentData of data.agents) {
+        const { shifts: agentShifts, historicalShifts, id: oldAgentId, ...agentFields } = agentData as any;
+        const newAgent = await tx.insert(agents).values(agentFields).returning().then(r => r[0]);
+        if (typeof oldAgentId === "number") {
+          oldToNewAgentId.set(oldAgentId, newAgent.id);
+        }
+        agentNameToId.set((agentFields as any).name, newAgent.id);
 
-      for (const s of (agentShifts ?? [])) {
-        db.insert(shifts)
-          .values({ ...s, agentId: newAgent.id, activeStart: null, activeEnd: null })
-          .run();
-      }
+        for (const s of (agentShifts ?? [])) {
+          await tx.insert(shifts)
+            .values({ ...s, agentId: newAgent.id, activeStart: null, activeEnd: null });
+        }
 
-      // Convert historical shifts to agent logs
-      if (Array.isArray(historicalShifts)) {
-        for (const hs of historicalShifts) {
-          db.insert(agentLogs).values({
-            agentId: newAgent.id,
-            date: hs.date,
-            type: "schedule_change",
-            description: `Imported retroactive shift: ${hs.note || "Weekly pattern"}`,
-            notes: hs.note || null,
-            actionType: "admin_import",
-            createdAt: new Date().toISOString(),
-          }).run();
+        // Convert historical shifts to agent logs
+        if (Array.isArray(historicalShifts)) {
+          for (const hs of historicalShifts) {
+            await tx.insert(agentLogs).values({
+              agentId: newAgent.id,
+              date: hs.date,
+              type: "schedule_change",
+              description: `Imported retroactive shift: ${hs.note || "Weekly pattern"}`,
+              notes: hs.note || null,
+              actionType: "admin_import",
+              createdAt: new Date().toISOString(),
+            });
+          }
         }
       }
-    }
 
-    if (Array.isArray(data.overtime)) {
-      for (const row of data.overtime) {
-        const mappedAgentId = oldToNewAgentId.get(row.agentId);
-        if (!mappedAgentId) continue;
-        const mappedCoveredById = row.coveredByAgentId == null
-          ? null
-          : (oldToNewAgentId.get(row.coveredByAgentId) ?? null);
+      if (Array.isArray(data.overtime)) {
+        for (const row of data.overtime) {
+          const mappedAgentId = oldToNewAgentId.get(row.agentId);
+          if (!mappedAgentId) continue;
+          const mappedCoveredById = row.coveredByAgentId == null
+            ? null
+            : (oldToNewAgentId.get(row.coveredByAgentId) ?? null);
 
-        db.insert(overtimeLog).values({
-          ...row,
-          agentId: mappedAgentId,
-          coveredByAgentId: mappedCoveredById,
-          fromShiftId: null,
-        }).run();
+          await tx.insert(overtimeLog).values({
+            ...row,
+            agentId: mappedAgentId,
+            coveredByAgentId: mappedCoveredById,
+            fromShiftId: null,
+          });
+        }
       }
-    }
 
-    if (Array.isArray(data.logs)) {
-      for (const row of data.logs) {
-        const mappedAgentId = oldToNewAgentId.get(row.agentId);
-        if (!mappedAgentId) continue;
-        const mappedCoveredById = row.coveredByAgentId == null
-          ? null
-          : (oldToNewAgentId.get(row.coveredByAgentId) ?? null);
+      if (Array.isArray(data.logs)) {
+        for (const row of data.logs) {
+          const mappedAgentId = oldToNewAgentId.get(row.agentId);
+          if (!mappedAgentId) continue;
+          const mappedCoveredById = row.coveredByAgentId == null
+            ? null
+            : (oldToNewAgentId.get(row.coveredByAgentId) ?? null);
 
-        db.insert(agentLogs).values({
-          ...row,
-          agentId: mappedAgentId,
-          coveredByAgentId: mappedCoveredById,
-        }).run();
+          await tx.insert(agentLogs).values({
+            ...row,
+            agentId: mappedAgentId,
+            coveredByAgentId: mappedCoveredById,
+          });
+        }
       }
-    }
-    }); // end transaction
+    });
   },
 };

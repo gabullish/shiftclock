@@ -4,8 +4,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { storage } from "./storage";
-import { db } from "./db";
-import { agents, shifts, insertAgentSchema, insertShiftSchema } from "@shared/schema";
+import { insertAgentSchema, insertShiftSchema } from "@shared/schema";
 
 type NormalizedBackup = {
   agents: Array<Record<string, unknown> & { id?: number; shifts: Array<Record<string, unknown>>; historicalShifts?: Array<Record<string, unknown>> }>;
@@ -146,12 +145,12 @@ const TIMEZONES = [
 ];
 
 async function seedDefaultData() {
-  const existing = storage.getAgents();
+  const existing = await storage.getAgents();
   if (existing.length > 0) return;
 
   const createdAgents = [];
   for (let i = 1; i <= 13; i++) {
-    const agent = storage.createAgent({
+    const agent = await storage.createAgent({
       name: `Agent ${i}`,
       color: DEFAULT_COLORS[(i - 1) % DEFAULT_COLORS.length],
       avatarUrl: null,
@@ -169,7 +168,7 @@ async function seedDefaultData() {
     // endUtc values >24 are intentional overnight markers — store as-is
     const endUtc = shiftTemplate.endUtc;
     for (let day = shiftTemplate.dayRange[0]; day <= shiftTemplate.dayRange[1]; day++) {
-      storage.upsertShift({
+      await storage.upsertShift({
         agentId: agent.id,
         dayOfWeek: day,
         startUtc: shiftTemplate.startUtc,
@@ -180,59 +179,6 @@ async function seedDefaultData() {
       });
     }
   }
-}
-
-function runMigrations() {
-  const safeAlter = (sql: string) => { try { db.run(sql); } catch { /* already exists */ } };
-  safeAlter("ALTER TABLE shifts ADD COLUMN break_start REAL");
-  safeAlter("ALTER TABLE agents ADD COLUMN off_weekend INTEGER NOT NULL DEFAULT 1");
-  safeAlter("ALTER TABLE agents ADD COLUMN off_cycle_start TEXT");
-  safeAlter(`
-    CREATE TABLE IF NOT EXISTS agent_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id INTEGER NOT NULL,
-      date TEXT NOT NULL,
-      type TEXT NOT NULL,
-      cover_pct REAL,
-      covered_by_agent_id INTEGER,
-      notes TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-  // New columns for overtime approval flow
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN origin TEXT");
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN covered_by_agent_id INTEGER");
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN status_updated_at TEXT");
-  // New columns for activity log
-  safeAlter("ALTER TABLE agent_logs ADD COLUMN action_type TEXT");
-  safeAlter("ALTER TABLE agent_logs ADD COLUMN description TEXT");
-  // New columns for approval-gated assignment
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN from_shift_id INTEGER");
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN day_of_week INTEGER");
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN cover_start_utc REAL");
-  safeAlter("ALTER TABLE overtime_log ADD COLUMN cover_end_utc REAL");
-
-  // Hot-path indexes for dashboard and overtime workflows.
-  safeAlter("CREATE INDEX IF NOT EXISTS idx_shifts_agent_day ON shifts(agent_id, day_of_week)");
-  safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_agent_date_status ON overtime_log(agent_id, date, status)");
-  safeAlter("CREATE INDEX IF NOT EXISTS idx_overtime_from_shift_status ON overtime_log(from_shift_id, status)");
-  // Multi-agent competing claims
-  safeAlter(`
-    CREATE TABLE IF NOT EXISTS overtime_claims (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      opportunity_id INTEGER NOT NULL,
-      agent_id INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      claim_order INTEGER NOT NULL,
-      note TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-  safeAlter("CREATE INDEX IF NOT EXISTS idx_claims_opportunity ON overtime_claims(opportunity_id, status)");
-  safeAlter("CREATE INDEX IF NOT EXISTS idx_claims_agent ON overtime_claims(agent_id, status)");
-  // Live break state
-  safeAlter("ALTER TABLE agents ADD COLUMN break_active_at TEXT");
 }
 
 function normaliseEndUtcServer(startUtc: number, endUtc: number): number {
@@ -378,11 +324,10 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   if (!AGENT_PASSWORD) {
     console.warn("[routes] AGENT_PASSWORD is not configured. Agent mode will be disabled.");
   }
-  runMigrations();
   await seedDefaultData();
 
   // --- Agent session auth ---
-  app.post("/api/auth/agent-session", authLimiter, (req, res) => {
+  app.post("/api/auth/agent-session", authLimiter, async (req, res) => {
     if (!AGENT_PASSWORD) {
       return res.status(503).json({ message: "Agent mode is not configured on this server." });
     }
@@ -393,18 +338,18 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!agentId || typeof agentId !== "number") {
       return res.status(400).json({ message: "agentId required" });
     }
-    const agent = storage.getAgent(agentId);
+    const agent = await storage.getAgent(agentId);
     if (!agent) return res.status(404).json({ message: "Agent not found" });
     const token = makeAgentToken(agentId);
     return res.json({ token, agentId, agentName: agent.name });
   });
 
-  app.get("/api/auth/agent-session", (req, res) => {
+  app.get("/api/auth/agent-session", async (req, res) => {
     const token = readAgentSessionToken(req);
     if (!token) return res.status(401).json({ message: "No session token" });
     const result = verifyAgentToken(token);
     if (!result) return res.status(401).json({ message: "Invalid or expired session" });
-    const agent = storage.getAgent(result.agentId);
+    const agent = await storage.getAgent(result.agentId);
     if (!agent) return res.status(404).json({ message: "Agent not found" });
     return res.json({ agentId: result.agentId, agentName: agent.name });
   });
@@ -424,7 +369,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     return res.json({ ok: true });
   });
 
-  app.get("/api/agents", (_req, res) => {
+  app.get("/api/agents", async (_req, res) => {
     // Auto-manage scheduled breaks on every poll:
     //   • Auto-START: breakStart has arrived and agent isn't on break yet
     //   • Auto-END:   break window (breakStart + 30 min) has passed
@@ -432,14 +377,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const dow  = now.getUTCDay();
     const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
     const BREAK_DURATION_H = 0.5; // standard 30-minute break
-    const allShifts = storage.getShifts();
+    const allShifts = await storage.getShifts();
 
     const fmtUTC = (ms: number) => {
       const d = new Date(ms);
       return `${d.getUTCHours().toString().padStart(2,"0")}:${d.getUTCMinutes().toString().padStart(2,"0")}`;
     };
 
-    for (const agent of storage.getAgents()) {
+    for (const agent of await storage.getAgents()) {
       const todayShift = allShifts.find(
         s => s.agentId === agent.id && s.dayOfWeek === dow && s.breakStart != null,
       );
@@ -453,8 +398,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         if (elapsedH >= BREAK_DURATION_H) {
           const durationMins = Math.round(elapsedH * 60);
           const description = `${agent.name} was on break · ${durationMins} min  (${fmtUTC(startMs)} – ${fmtUTC(now.getTime())} UTC)`;
-          storage.endLiveBreak(agent.id);
-          storage.createAgentLog({
+          await storage.endLiveBreak(agent.id);
+          await storage.createAgentLog({
             agentId: agent.id,
             date: now.toISOString().slice(0, 10),
             type: "break",
@@ -470,22 +415,22 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         // Auto-start: only trigger inside the [breakStart, breakStart + 30 min]
         // window. Outside that window, the break is considered skipped.
         if (utcH >= todayShift.breakStart && utcH < todayShift.breakStart + BREAK_DURATION_H) {
-          storage.startLiveBreak(agent.id);
+          await storage.startLiveBreak(agent.id);
         }
       }
     }
 
-    res.json(storage.getAgents());
+    res.json(await storage.getAgents());
   });
 
-  app.post("/api/agents", requireAdmin, (req, res) => {
+  app.post("/api/agents", requireAdmin, async (req, res) => {
     const result = insertAgentSchema.safeParse(req.body);
     if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid agent data" });
-    const agent = storage.createAgent(result.data);
+    const agent = await storage.createAgent(result.data);
     res.json(agent);
   });
 
-  app.patch("/api/agents/:id", (req, res) => {
+  app.patch("/api/agents/:id", async (req, res) => {
     const targetId = Number(req.params.id);
     const admin = isAdminRequest(req);
     const sessionAgentId = getAgentSession(req);
@@ -503,37 +448,37 @@ export async function registerRoutes(httpServer: Server, app: Express) {
           ),
         );
 
-    const agent = storage.updateAgent(targetId, payload);
+    const agent = await storage.updateAgent(targetId, payload);
     if (!agent) return res.status(404).json({ message: "Not found" });
     res.json(agent);
   });
 
-  app.delete("/api/agents/:id", requireAdmin, (req, res) => {
-    storage.deleteAgent(Number(req.params.id));
+  app.delete("/api/agents/:id", requireAdmin, async (req, res) => {
+    await storage.deleteAgent(Number(req.params.id));
     res.json({ ok: true });
   });
 
   // --- Live break state ---
-  app.post("/api/agents/:id/break/start", (req, res) => {
+  app.post("/api/agents/:id/break/start", async (req, res) => {
     const id = Number(req.params.id);
     if (!isAdminRequest(req) && getAgentSession(req) !== id) {
       return res.status(403).json({ message: "You can only manage your own break" });
     }
-    const agent = storage.startLiveBreak(id);
+    const agent = await storage.startLiveBreak(id);
     if (!agent) return res.status(404).json({ message: "Not found" });
     // No log on start — the live toast + audio handles teammate communication.
     // The completed break entry (logged on /break/end) keeps the log clean.
     res.json(agent);
   });
 
-  app.post("/api/agents/:id/break/end", (req, res) => {
+  app.post("/api/agents/:id/break/end", async (req, res) => {
     const id = Number(req.params.id);
     if (!isAdminRequest(req) && getAgentSession(req) !== id) {
       return res.status(403).json({ message: "You can only manage your own break" });
     }
     // Capture start time before clearing it
-    const breakStartedAt = storage.getAgents().find(a => a.id === id)?.breakActiveAt ?? null;
-    const agent = storage.endLiveBreak(id);
+    const breakStartedAt = (await storage.getAgents()).find(a => a.id === id)?.breakActiveAt ?? null;
+    const agent = await storage.endLiveBreak(id);
     if (!agent) return res.status(404).json({ message: "Not found" });
     const date = new Date().toISOString().slice(0, 10);
 
@@ -552,7 +497,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       ? `${agent.name} was on break · ${durationMins} min${timeRange}`
       : `${agent.name} returned from break.`;
 
-    storage.createAgentLog({
+    await storage.createAgentLog({
       agentId: id, date, type: "break", coverPct: null, coveredByAgentId: null,
       notes: null, createdAt: new Date().toISOString(),
       actionType: "break-completed",
@@ -562,9 +507,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // --- Apply week template ---
-  app.post("/api/agents/:id/apply-week", requireAdmin, (req, res) => {
+  app.post("/api/agents/:id/apply-week", requireAdmin, async (req, res) => {
     const agentId = Number(req.params.id);
-    const agent = storage.getAgent(agentId);
+    const agent = await storage.getAgent(agentId);
     if (!agent) return res.status(404).json({ message: "Not found" });
     const { startUtc, endUtc } = req.body;
     if (typeof startUtc !== "number" || typeof endUtc !== "number") {
@@ -572,16 +517,16 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     }
     // Normalize overnight: if end <= start, add 24 to represent next-day end
     const normEnd = endUtc <= startUtc ? endUtc + 24 : endUtc;
-    const updatedShifts = storage.applyWeekTemplate(agentId, startUtc, normEnd, agent.offWeekend ?? 1);
+    const updatedShifts = await storage.applyWeekTemplate(agentId, startUtc, normEnd, agent.offWeekend ?? 1);
     res.json(updatedShifts);
   });
 
   // --- Shifts ---
-  app.get("/api/shifts", (_req, res) => {
-    res.json(storage.getShifts());
+  app.get("/api/shifts", async (_req, res) => {
+    res.json(await storage.getShifts());
   });
 
-  app.post("/api/shifts", requireAdmin, (req, res) => {
+  app.post("/api/shifts", requireAdmin, async (req, res) => {
     const result = insertShiftSchema.safeParse(req.body);
     if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid shift data" });
     const { startUtc, endUtc } = result.data;
@@ -590,12 +535,12 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (normEnd - startUtc < 0.5) {
       return res.status(400).json({ message: "Shift duration must be at least 0.5 hours" });
     }
-    const shift = storage.upsertShift(result.data);
+    const shift = await storage.upsertShift(result.data);
     res.json(shift);
   });
 
   // BUG-03: Reset all lever adjustments + pending OT for a given day
-  app.post("/api/shifts/reset-day", requireAdmin, (req, res) => {
+  app.post("/api/shifts/reset-day", requireAdmin, async (req, res) => {
     const { date, dayOfWeek } = req.body;
     if (!date || typeof dayOfWeek !== "number") {
       return res.status(400).json({ message: "date and dayOfWeek required" });
@@ -603,20 +548,20 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (dayOfWeek < 0 || dayOfWeek > 6) {
       return res.status(400).json({ message: "dayOfWeek must be 0–6" });
     }
-    const dayShifts = storage.getShifts().filter(s => s.dayOfWeek === dayOfWeek);
+    const dayShifts = (await storage.getShifts()).filter(s => s.dayOfWeek === dayOfWeek);
     for (const s of dayShifts) {
-      storage.updateShift(s.id, { activeStart: null, activeEnd: null, breakStart: null });
+      await storage.updateShift(s.id, { activeStart: null, activeEnd: null, breakStart: null });
     }
-    const pending = storage.getOvertimeLogs().filter(r => r.date === date && r.status === "pending");
+    const pending = (await storage.getOvertimeLogs()).filter(r => r.date === date && r.status === "pending");
     for (const r of pending) {
-      storage.deleteOvertimeLog(r.id);
+      await storage.deleteOvertimeLog(r.id);
     }
     res.json({ ok: true });
   });
 
-  app.patch("/api/shifts/:id", (req, res) => {
+  app.patch("/api/shifts/:id", async (req, res) => {
     const shiftId = Number(req.params.id);
-    const existing = storage.getShifts().find((s) => s.id === shiftId);
+    const existing = (await storage.getShifts()).find((s) => s.id === shiftId);
     if (!existing) return res.status(404).json({ message: "Not found" });
 
     const admin = isAdminRequest(req);
@@ -698,7 +643,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const dateStr = (admin && typeof req.body.date === "string") ? req.body.date : null;
     if (admin && dateStr) {
       const effEnd = (("activeEnd" in payload ? payload.activeEnd : existing.activeEnd) ?? normEnd) as number;
-      const existingOT = storage.getOvertimeLogs().find(r =>
+      const existingOT = (await storage.getOvertimeLogs()).find(r =>
         r.fromShiftId === existing.id && r.date === dateStr &&
         r.origin === "manager-extended" && r.status === "pending"
       );
@@ -713,31 +658,31 @@ export async function registerRoutes(httpServer: Server, app: Express) {
           statusUpdatedAt: new Date().toISOString(),
         };
         if (existingOT) {
-          storage.updateOvertimeLog(existingOT.id, otData);
+          await storage.updateOvertimeLog(existingOT.id, otData);
         } else {
-          storage.createOvertimeLog(existing.agentId, dateStr, { ...otData, status: "pending" });
+          await storage.createOvertimeLog(existing.agentId, dateStr, { ...otData, status: "pending" });
         }
       } else if (existingOT) {
-        storage.deleteOvertimeLog(existingOT.id);
+        await storage.deleteOvertimeLog(existingOT.id);
       }
     }
 
     // Strip the date field before passing to updateShift (not a shift column)
     const { date: _date, ...shiftPayload } = payload as Record<string, unknown>;
 
-    const shift = storage.updateShift(shiftId, shiftPayload);
+    const shift = await storage.updateShift(shiftId, shiftPayload);
     if (!shift) return res.status(404).json({ message: "Not found" });
     res.json(shift);
   });
 
-  app.delete("/api/shifts/:id", requireAdmin, (req, res) => {
-    storage.deleteShift(Number(req.params.id));
+  app.delete("/api/shifts/:id", requireAdmin, async (req, res) => {
+    await storage.deleteShift(Number(req.params.id));
     res.json({ ok: true });
   });
 
   // --- Overtime ---
-  app.get("/api/overtime", (_req, res) => {
-    res.json(storage.getOvertimeLogs());
+  app.get("/api/overtime", async (_req, res) => {
+    res.json(await storage.getOvertimeLogs());
   });
 
   const overtimeCreateSchema = z.object({
@@ -745,25 +690,25 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
   }).passthrough();
 
-  app.post("/api/overtime", requireAdmin, (req, res) => {
+  app.post("/api/overtime", requireAdmin, async (req, res) => {
     const result = overtimeCreateSchema.safeParse(req.body);
     if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid overtime data" });
     const { agentId, date, ...rest } = result.data;
-    const log = storage.createOvertimeLog(agentId, date, rest);
+    const log = await storage.createOvertimeLog(agentId, date, rest);
     res.json(log);
   });
 
   // Update overtime record status (approve / deny / paid)
-  app.patch("/api/overtime/:id", requireAdmin, (req, res) => {
+  app.patch("/api/overtime/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     const { status } = req.body;
     if (!status || !["pending", "approved", "denied", "paid"].includes(status)) {
       return res.status(400).json({ message: "Valid status required: pending|approved|denied|paid" });
     }
     // Get current record to know old status before updating
-    const existing = storage.getOvertimeLogs().find(r => r.id === id);
+    const existing = (await storage.getOvertimeLogs()).find(r => r.id === id);
     if (!existing) return res.status(404).json({ message: "Not found" });
-    const updated = storage.updateOvertimeLog(id, { status, statusUpdatedAt: new Date().toISOString() });
+    const updated = await storage.updateOvertimeLog(id, { status, statusUpdatedAt: new Date().toISOString() });
     if (!updated) return res.status(404).json({ message: "Not found" });
 
     // When a claimed-from-agent record is approved (and wasn't already), no shift extension needed.
@@ -774,10 +719,10 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     // Coverage is rendered from the OT record's status, not from shift activeEnd.
 
     // Log the status change (deduped — rapid clicks collapse into one entry)
-    const agents = storage.getAgents();
-    const agent = agents.find(a => a.id === updated.agentId);
+    const allAgents = await storage.getAgents();
+    const agent = allAgents.find(a => a.id === updated.agentId);
     if (agent) {
-      storage.upsertRecentAgentLog({
+      await storage.upsertRecentAgentLog({
         agentId: updated.agentId,
         date: updated.date,
         type: "overtime-status",
@@ -793,32 +738,32 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Clear all overtime records — must be registered before /:id to avoid "all" being treated as an id
-  app.delete("/api/overtime/all", requireAdmin, (_req, res) => {
-    storage.clearAllOvertimeLogs();
+  app.delete("/api/overtime/all", requireAdmin, async (_req, res) => {
+    await storage.clearAllOvertimeLogs();
     res.json({ ok: true });
   });
 
   // Bulk delete overtime records by id list
-  app.delete("/api/overtime", requireAdmin, (req, res) => {
+  app.delete("/api/overtime", requireAdmin, async (req, res) => {
     const { ids } = req.body as { ids?: unknown };
     if (!Array.isArray(ids) || ids.some(i => typeof i !== "number")) {
       return res.status(400).json({ message: "ids must be an array of numbers" });
     }
-    storage.bulkDeleteOvertimeLogs(ids as number[]);
+    await storage.bulkDeleteOvertimeLogs(ids as number[]);
     res.json({ ok: true });
   });
 
   // Delete a single overtime record (undo a demo/test assignment)
-  app.delete("/api/overtime/:id", requireAdmin, (req, res) => {
+  app.delete("/api/overtime/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
-    const existing = storage.getOvertimeLogs().find(r => r.id === id);
+    const existing = (await storage.getOvertimeLogs()).find(r => r.id === id);
     if (!existing) return res.status(404).json({ message: "Not found" });
-    storage.deleteOvertimeLog(id);
+    await storage.deleteOvertimeLog(id);
     res.json({ ok: true });
   });
 
   // Replace overtime records from uploaded JSON
-  app.post("/api/overtime/import", requireAdmin, (req, res) => {
+  app.post("/api/overtime/import", requireAdmin, async (req, res) => {
     const { records } = req.body as { records?: unknown };
     if (!Array.isArray(records)) {
       return res.status(400).json({ message: "records array required" });
@@ -848,12 +793,12 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         };
       });
 
-    storage.replaceOvertimeLogs(cleaned as any);
+    await storage.replaceOvertimeLogs(cleaned as any);
     res.json({ ok: true, count: cleaned.length });
   });
 
   // Assign freed overtime from one agent to another
-  app.post("/api/overtime/assign", (req, res) => {
+  app.post("/api/overtime/assign", async (req, res) => {
     const admin = isAdminRequest(req);
     const sessionAgentId = getAgentSession(req);
     if (!admin && !sessionAgentId) {
@@ -879,7 +824,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(403).json({ message: "Agents can only submit requests for themselves" });
     }
 
-    const allAgents = storage.getAgents();
+    const allAgents = await storage.getAgents();
     const toAgent = allAgents.find(a => a.id === toAgentId);
     if (!toAgent) return res.status(404).json({ message: "Agent not found" });
 
@@ -892,7 +837,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     let origin: "claimed-from-agent" | "claimed-open-gap" = "claimed-open-gap";
 
     if (typeof fromShiftId === "number") {
-      const fromShift = storage.getShifts().find(s => s.id === fromShiftId);
+      const fromShift = (await storage.getShifts()).find(s => s.id === fromShiftId);
       if (!fromShift) return res.status(404).json({ message: "Source shift not found" });
 
       const fromAgent = allAgents.find(a => a.id === fromShift.agentId);
@@ -937,7 +882,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     // Safeguard: agent cannot claim coverage that overlaps their own active shift hours
     if (!admin && sessionAgentId) {
-      const claimingShifts = storage.getShifts().filter(
+      const claimingShifts = (await storage.getShifts()).filter(
         s => s.agentId === toAgentId && s.dayOfWeek === resolvedDayOfWeek
       );
       for (const s of claimingShifts) {
@@ -955,7 +900,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     // findOrCreateOpportunity is atomic — prevents duplicate opportunity rows
     // when two agents submit for the same slot simultaneously (P0 race fix)
     const { opportunity: sameCoverageOpportunity, isNew: isNewOpportunity } =
-      storage.findOrCreateOpportunity({
+      await storage.findOrCreateOpportunity({
         date,
         dayOfWeek: resolvedDayOfWeek,
         origin,
@@ -969,8 +914,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       });
 
     if (!isNewOpportunity) {
-      const existingPendingClaim = storage
-        .getClaimsForOpportunity(sameCoverageOpportunity.id)
+      const existingPendingClaim = (await storage.getClaimsForOpportunity(sameCoverageOpportunity.id))
         .find((claim) => claim.agentId === toAgentId && claim.status === "pending");
 
       if (existingPendingClaim) {
@@ -981,7 +925,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         });
       }
 
-      const joinedClaim = storage.createClaim({
+      const joinedClaim = await storage.createClaim({
         opportunityId: sameCoverageOpportunity.id,
         agentId: toAgentId,
         status: "pending",
@@ -989,7 +933,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         createdAt: nowIso,
       });
 
-      storage.createAgentLog({
+      await storage.createAgentLog({
         agentId: toAgentId,
         date,
         type: "shift-claim",
@@ -1008,9 +952,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     // New opportunity — first requester is already #1 in line (created atomically in findOrCreateOpportunity)
     const otLog = sameCoverageOpportunity;
-    const firstClaim = storage.getClaimsForOpportunity(otLog.id)[0];
+    const firstClaim = (await storage.getClaimsForOpportunity(otLog.id))[0];
 
-    storage.createAgentLog({
+    await storage.createAgentLog({
       agentId: toAgentId,
       date,
       type: "shift-claim",
@@ -1030,13 +974,13 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   // --- Overtime Claims (multi-agent competing) ---
 
   // Get all claims for a specific overtime opportunity
-  app.get("/api/overtime/:id/claims", (_req, res) => {
-    const claims = storage.getClaimsForOpportunity(Number(_req.params.id));
+  app.get("/api/overtime/:id/claims", async (_req, res) => {
+    const claims = await storage.getClaimsForOpportunity(Number(_req.params.id));
     res.json(claims);
   });
 
   // Agent submits a claim for an overtime opportunity (requires agent session)
-  app.post("/api/overtime/:id/claim", (req: Request & { agentId?: number }, res) => {
+  app.post("/api/overtime/:id/claim", async (req: Request & { agentId?: number }, res) => {
     // Accept either agent session or admin token
     const adminToken = readAdminHeaderToken(req);
     const isAdmin = ADMIN_TOKEN && adminToken === ADMIN_TOKEN;
@@ -1045,7 +989,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!agentId) return res.status(401).json({ message: "Agent session or admin token required" });
 
     const opportunityId = Number(req.params.id);
-    const opportunity = storage.getOvertimeLogs().find(r => r.id === opportunityId);
+    const opportunity = (await storage.getOvertimeLogs()).find(r => r.id === opportunityId);
     if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
     if (opportunity.status !== "pending") {
       return res.status(409).json({ message: "This line is no longer open" });
@@ -1060,7 +1004,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       const overlaps   = (aStart: number, aEnd: number, sStart: number, sEnd: number) =>
         aStart < sEnd && aEnd > sStart;
 
-      const claimingShifts = storage.getShifts().filter(s => s.agentId === agentId);
+      const claimingShifts = (await storage.getShifts()).filter(s => s.agentId === agentId);
       for (const s of claimingShifts) {
         const sNormEnd = normaliseEndUtcServer(s.startUtc, s.endUtc);
         const effStart = s.activeStart ?? s.startUtc;
@@ -1084,14 +1028,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     }
 
     // Prevent duplicate pending claims from same agent for same opportunity
-    const existing = storage.getClaimsForOpportunity(opportunityId)
+    const existing = (await storage.getClaimsForOpportunity(opportunityId))
       .find(c => c.agentId === agentId && c.status === "pending");
     if (existing) return res.status(409).json({ message: "You already have a pending claim for this opportunity" });
 
-    const agent = storage.getAgent(agentId);
+    const agent = await storage.getAgent(agentId);
     if (!agent) return res.status(404).json({ message: "Agent not found" });
 
-    const claim = storage.createClaim({
+    const claim = await storage.createClaim({
       opportunityId,
       agentId,
       status: "pending",
@@ -1099,7 +1043,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       createdAt: new Date().toISOString(),
     });
 
-    storage.createAgentLog({
+    await storage.createAgentLog({
       agentId,
       date: opportunity.date,
       type: "shift-claim",
@@ -1115,7 +1059,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Agent cancels (undo) their own pending claim
-  app.delete("/api/overtime/:id/claim", (req: Request & { agentId?: number }, res) => {
+  app.delete("/api/overtime/:id/claim", async (req: Request & { agentId?: number }, res) => {
     const adminToken = readAdminHeaderToken(req);
     const isAdmin = ADMIN_TOKEN && adminToken === ADMIN_TOKEN;
     const agentId = isAdmin ? (req.body.agentId as number | undefined) : getAgentSession(req);
@@ -1123,16 +1067,16 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!agentId) return res.status(401).json({ message: "Agent session or admin token required" });
 
     const opportunityId = Number(req.params.id);
-    const claims = storage.getClaimsForOpportunity(opportunityId);
+    const claims = await storage.getClaimsForOpportunity(opportunityId);
     const ownClaim = claims.find(c => c.agentId === agentId && c.status === "pending");
     if (!ownClaim) return res.status(404).json({ message: "No pending claim found for this agent" });
 
-    const cancelled = storage.cancelClaim(ownClaim.id, agentId);
+    const cancelled = await storage.cancelClaim(ownClaim.id, agentId);
 
-    const agent = storage.getAgent(agentId);
-    const opportunity = storage.getOvertimeLogs().find(r => r.id === opportunityId);
+    const agent = await storage.getAgent(agentId);
+    const opportunity = (await storage.getOvertimeLogs()).find(r => r.id === opportunityId);
     if (agent && opportunity) {
-      storage.createAgentLog({
+      await storage.createAgentLog({
         agentId,
         date: opportunity.date,
         type: "shift-claim-cancelled",
@@ -1149,22 +1093,22 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Manager approves a specific claim (and rejects all others for same opportunity)
-  app.post("/api/overtime/:id/approve-claim/:claimId", requireAdmin, (req, res) => {
+  app.post("/api/overtime/:id/approve-claim/:claimId", requireAdmin, async (req, res) => {
     const opportunityId = Number(req.params.id);
     const claimId = Number(req.params.claimId);
 
-    const opportunity = storage.getOvertimeLogs().find(r => r.id === opportunityId);
+    const opportunity = (await storage.getOvertimeLogs()).find(r => r.id === opportunityId);
     if (!opportunity) return res.status(404).json({ message: "Opportunity not found" });
 
-    const claim = storage.getClaimsForOpportunity(opportunityId).find(c => c.id === claimId);
+    const claim = (await storage.getClaimsForOpportunity(opportunityId)).find(c => c.id === claimId);
     if (!claim) return res.status(404).json({ message: "Claim not found" });
 
     // Both claim approval and opportunity update happen atomically
-    const approved = storage.approveClaimAndUpdateOpportunity(claimId, opportunityId, claim.agentId);
+    const approved = await storage.approveClaimAndUpdateOpportunity(claimId, opportunityId, claim.agentId);
 
-    const agent = storage.getAgent(claim.agentId);
+    const agent = await storage.getAgent(claim.agentId);
     if (agent) {
-      storage.upsertRecentAgentLog({
+      await storage.upsertRecentAgentLog({
         agentId: claim.agentId,
         date: opportunity.date,
         type: "overtime-status",
@@ -1181,21 +1125,21 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // --- Agent Logs ---
-  app.get("/api/agent-logs", (_req, res) => {
-    res.json(storage.getAgentLogs());
+  app.get("/api/agent-logs", async (_req, res) => {
+    res.json(await storage.getAgentLogs());
   });
 
     // Clear all agent logs
-    app.delete("/api/agent-logs", requireAdmin, (_req, res) => {
-      storage.clearAllAgentLogs();
+    app.delete("/api/agent-logs", requireAdmin, async (_req, res) => {
+      await storage.clearAllAgentLogs();
       res.json({ ok: true });
     });
 
-  app.get("/api/agent-logs/:agentId", (req, res) => {
-    res.json(storage.getAgentLogsByAgent(Number(req.params.agentId)));
+  app.get("/api/agent-logs/:agentId", async (req, res) => {
+    res.json(await storage.getAgentLogsByAgent(Number(req.params.agentId)));
   });
 
-  app.post("/api/agent-logs", (req, res) => {
+  app.post("/api/agent-logs", async (req, res) => {
     const { agentId, date, type, coverPct, coveredByAgentId, notes, actionType, description } = req.body;
     if (!agentId || !date || !type) {
       return res.status(400).json({ message: "agentId, date and type are required" });
@@ -1221,7 +1165,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(403).json({ message: "You can only write logs for your own agent session" });
     }
 
-    const log = storage.upsertRecentAgentLog({
+    const log = await storage.upsertRecentAgentLog({
       agentId: targetAgentId,
       date,
       type,
@@ -1235,21 +1179,21 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json(log);
   });
 
-  app.delete("/api/agent-logs/:id", requireAdmin, (req, res) => {
-    storage.deleteAgentLog(Number(req.params.id));
+  app.delete("/api/agent-logs/:id", requireAdmin, async (req, res) => {
+    await storage.deleteAgentLog(Number(req.params.id));
     res.json({ ok: true });
   });
 
     // --- Backup / Restore ---
-    app.get("/api/export", requireAdmin, (_req, res) => {
-      const data = storage.exportAll();
+    app.get("/api/export", requireAdmin, async (_req, res) => {
+      const data = await storage.exportAll();
       res.json({ ...data, exportedAt: new Date().toISOString(), version: 1 });
     });
 
-  app.post("/api/import", requireAdmin, (req, res) => {
+  app.post("/api/import", requireAdmin, async (req, res) => {
     try {
       const normalized = normalizeImportPayload(req.body);
-      storage.importAll({
+      await storage.importAll({
         agents: normalized.agents as any,
         overtime: normalized.overtime as any,
         logs: normalized.logs as any,
