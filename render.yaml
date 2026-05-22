@@ -2,7 +2,7 @@ services:
   - type: web
     name: shiftclock
     runtime: node
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm install --omit=dev
     startCommand: npm start
     envVars:
       - key: NODE_ENV
