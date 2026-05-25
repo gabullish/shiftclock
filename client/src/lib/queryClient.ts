@@ -65,3 +65,36 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+// ─── SSE live-push listener ───────────────────────────────────────────────────
+// Connects to /api/events once, receives invalidation signals from the server,
+// and immediately refetches the affected query keys — giving instant cross-tab sync.
+let _sseSource: EventSource | null = null;
+
+export function connectSSE() {
+  if (_sseSource) return;
+
+  const connect = () => {
+    const es = new EventSource("/api/events");
+    _sseSource = es;
+
+    es.onmessage = (e) => {
+      if (!e.data || e.data === "connected") return;
+      try {
+        const { invalidate } = JSON.parse(e.data) as { invalidate: string[] };
+        for (const key of invalidate) {
+          queryClient.invalidateQueries({ queryKey: [`/api/${key}`] });
+        }
+      } catch { /* ignore malformed frames */ }
+    };
+
+    es.onerror = () => {
+      es.close();
+      _sseSource = null;
+      // Reconnect after 5 s — handles server restarts / Render cold starts
+      setTimeout(connect, 5_000);
+    };
+  };
+
+  connect();
+}

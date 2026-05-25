@@ -517,6 +517,7 @@ export default function Dashboard() {
         startUtc: number;
         endUtc: number;
         freedHours: number;
+        isPast?: boolean;
       }
     | null
   >(null);
@@ -619,7 +620,16 @@ export default function Dashboard() {
     if (assignOvertimeMutation.isPending) return;
     playSoftClick();
 
+    // Detect if this gap is entirely in the past
+    const isPast = isSelectedDateToday && endUtc <= utcHour;
+
     if (!isAdmin && agentSession) {
+      if (isPast) {
+        toast({
+          title: "⚠️ Retroactive coverage",
+          description: "This gap is in the past. Logging it anyway for your records.",
+        });
+      }
       assignOvertimeMutation.mutate({
         toAgentId: agentSession.agentId,
         hours: endUtc - startUtc,
@@ -638,6 +648,7 @@ export default function Dashboard() {
       startUtc,
       endUtc,
       freedHours: endUtc - startUtc,
+      isPast,
     });
   };
 
@@ -745,23 +756,25 @@ export default function Dashboard() {
                   const breakElapsed = agentOnBreak && agent.breakActiveAt
                     ? Math.floor((Date.now() - Date.parse(agent.breakActiveAt)) / 60000)
                     : null;
+                  const isOwnPill = agentSession?.agentId === agent.id;
+                  const canClickPill = isAdmin || isOwnPill;
                   const pill = (
                     <div key={agent.id}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all duration-300",
                         agentOnBreak && "ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.25)]",
-                        isAdmin && "cursor-pointer hover:brightness-125"
+                        canClickPill && "cursor-pointer hover:brightness-125"
                       )}
                       style={{
                         backgroundColor: agentOnBreak ? "rgba(251,191,36,0.12)" : agent.color + "20",
                         border: `1px solid ${agentOnBreak ? "rgba(251,191,36,0.4)" : agent.color + "40"}`,
                         color: agentOnBreak ? "rgb(252,211,77)" : agent.color,
                       }}
-                      onClick={isAdmin ? () => {
+                      onClick={canClickPill ? () => {
                         if (agentOnBreak) breakEndMutation.mutate(agent.id);
                         else breakStartMutation.mutate(agent.id);
                       } : undefined}
-                      title={isAdmin ? (agentOnBreak ? "Click to end break" : "Click to start break") : undefined}
+                      title={canClickPill ? (agentOnBreak ? "Click to end break" : "Click to start break") : undefined}
                     >
                       <span className="w-1.5 h-1.5 rounded-full animate-pulse"
                         style={{ backgroundColor: agentOnBreak ? "rgb(251,191,36)" : agent.color }} />
@@ -788,10 +801,10 @@ export default function Dashboard() {
                     <div key={agent.id}
                       className={cn(
                         "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-400 animate-pulse",
-                        isAdmin && "cursor-pointer hover:bg-amber-500/20"
+                        (isAdmin || agentSession?.agentId === agent.id) && "cursor-pointer hover:bg-amber-500/20"
                       )}
-                      onClick={isAdmin ? () => breakStartMutation.mutate(agent.id) : undefined}
-                      title={isAdmin ? "Click to start break now" : undefined}
+                      onClick={(isAdmin || agentSession?.agentId === agent.id) ? () => breakStartMutation.mutate(agent.id) : undefined}
+                      title={(isAdmin || agentSession?.agentId === agent.id) ? "Click to start break now" : undefined}
                     >
                       <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: agent.color }} />
                       {agent.name}

@@ -317,6 +317,19 @@ const authLimiter = rateLimit({
   message: { message: "Too many login attempts. Please wait 15 minutes." },
 });
 
+// ─── SSE live-push ────────────────────────────────────────────────────────────
+// Clients subscribe to /api/events and receive lightweight invalidation signals.
+// No data is sent — clients re-fetch via their existing auth'd query layer.
+const sseClients = new Set<Response>();
+
+function broadcast(keys: string[]) {
+  const payload = `data: ${JSON.stringify({ invalidate: keys })}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(payload); } catch { sseClients.delete(client); }
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 export async function registerRoutes(httpServer: Server, app: Express) {
   if (!ADMIN_TOKEN) {
     console.warn("[routes] ADMIN_TOKEN is not configured. Mutating admin routes will return 500.");
@@ -325,6 +338,23 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     console.warn("[routes] AGENT_PASSWORD is not configured. Agent mode will be disabled.");
   }
   await seedDefaultData();
+
+  // SSE endpoint — no auth needed (signals only, no data)
+  app.get("/api/events", (_req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.write("data: connected\n\n");
+    sseClients.add(res);
+    // Heartbeat every 25 s to keep the connection alive through Render's idle timeout
+    const heartbeat = setInterval(() => {
+      try { res.write(":heartbeat\n\n"); } catch { clearInterval(heartbeat); sseClients.delete(res); }
+    }, 25_000);
+    _req.on("close", () => { sseClients.delete(res); clearInterval(heartbeat); });
+  });
 
   // --- Agent session auth ---
   app.post("/api/auth/agent-session", authLimiter, async (req, res) => {
@@ -427,6 +457,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const result = insertAgentSchema.safeParse(req.body);
     if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid agent data" });
     const agent = await storage.createAgent(result.data);
+    broadcast(["agents"]);
     res.json(agent);
   });
 
@@ -450,11 +481,13 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     const agent = await storage.updateAgent(targetId, payload);
     if (!agent) return res.status(404).json({ message: "Not found" });
+    broadcast(["agents"]);
     res.json(agent);
   });
 
   app.delete("/api/agents/:id", requireAdmin, async (req, res) => {
     await storage.deleteAgent(Number(req.params.id));
+    broadcast(["agents", "shifts"]);
     res.json({ ok: true });
   });
 
@@ -468,6 +501,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!agent) return res.status(404).json({ message: "Not found" });
     // No log on start — the live toast + audio handles teammate communication.
     // The completed break entry (logged on /break/end) keeps the log clean.
+    broadcast(["agents"]);
     res.json(agent);
   });
 
@@ -503,6 +537,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       actionType: "break-completed",
       description,
     });
+    broadcast(["agents", "agent-logs"]);
     res.json(agent);
   });
 
@@ -518,6 +553,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     // Normalize overnight: if end <= start, add 24 to represent next-day end
     const normEnd = endUtc <= startUtc ? endUtc + 24 : endUtc;
     const updatedShifts = await storage.applyWeekTemplate(agentId, startUtc, normEnd, agent.offWeekend ?? 1);
+    broadcast(["shifts"]);
     res.json(updatedShifts);
   });
 
@@ -536,6 +572,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(400).json({ message: "Shift duration must be at least 0.5 hours" });
     }
     const shift = await storage.upsertShift(result.data);
+    broadcast(["shifts"]);
     res.json(shift);
   });
 
@@ -556,6 +593,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     for (const r of pending) {
       await storage.deleteOvertimeLog(r.id);
     }
+    broadcast(["shifts", "overtime"]);
     res.json({ ok: true });
   });
 
@@ -672,11 +710,13 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     const shift = await storage.updateShift(shiftId, shiftPayload);
     if (!shift) return res.status(404).json({ message: "Not found" });
+    broadcast(["shifts", "overtime"]);
     res.json(shift);
   });
 
   app.delete("/api/shifts/:id", requireAdmin, async (req, res) => {
     await storage.deleteShift(Number(req.params.id));
+    broadcast(["shifts"]);
     res.json({ ok: true });
   });
 
@@ -695,6 +735,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid overtime data" });
     const { agentId, date, ...rest } = result.data;
     const log = await storage.createOvertimeLog(agentId, date, rest);
+    broadcast(["overtime"]);
     res.json(log);
   });
 
@@ -734,12 +775,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         description: `Manager ${status} ${agent.name}'s overtime for ${updated.date} shift (${updated.overtimeHours.toFixed(1)}h).`,
       });
     }
+    broadcast(["overtime", "agent-logs"]);
     res.json(updated);
   });
 
   // Clear all overtime records — must be registered before /:id to avoid "all" being treated as an id
   app.delete("/api/overtime/all", requireAdmin, async (_req, res) => {
     await storage.clearAllOvertimeLogs();
+    broadcast(["overtime", "overtime-claims"]);
     res.json({ ok: true });
   });
 
@@ -750,6 +793,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(400).json({ message: "ids must be an array of numbers" });
     }
     await storage.bulkDeleteOvertimeLogs(ids as number[]);
+    broadcast(["overtime", "overtime-claims"]);
     res.json({ ok: true });
   });
 
@@ -759,6 +803,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     const existing = (await storage.getOvertimeLogs()).find(r => r.id === id);
     if (!existing) return res.status(404).json({ message: "Not found" });
     await storage.deleteOvertimeLog(id);
+    broadcast(["overtime", "overtime-claims"]);
     res.json({ ok: true });
   });
 
@@ -947,7 +992,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
           : `${toAgent.name} joined line for ${assignedHours.toFixed(1)}h open-gap coverage on ${date}.`,
       });
 
-      return res.json({ ok: true, reused: true, overtimeLog: sameCoverageOpportunity, claim: joinedClaim });
+      broadcast(["overtime", "overtime-claims", "agent-logs"]);
+    return res.json({ ok: true, reused: true, overtimeLog: sameCoverageOpportunity, claim: joinedClaim });
     }
 
     // New opportunity — first requester is already #1 in line (created atomically in findOrCreateOpportunity)
@@ -968,6 +1014,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         : `${toAgent.name} opened line for ${assignedHours.toFixed(1)}h open-gap coverage on ${date}.`,
     });
 
+    broadcast(["overtime", "overtime-claims", "agent-logs"]);
     res.json({ ok: true, overtimeLog: otLog, claim: firstClaim });
   });
 
@@ -1055,6 +1102,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       description: `${agent.name} submitted a claim for the ${opportunity.date} overtime opportunity.`,
     });
 
+    broadcast(["overtime-claims", "agent-logs"]);
     res.json(claim);
   });
 
@@ -1089,6 +1137,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       });
     }
 
+    broadcast(["overtime-claims", "agent-logs"]);
     res.json(cancelled);
   });
 
@@ -1121,6 +1170,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       });
     }
 
+    broadcast(["overtime", "overtime-claims", "agent-logs"]);
     res.json({ ok: true, approved, opportunityId });
   });
 
@@ -1132,6 +1182,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     // Clear all agent logs
     app.delete("/api/agent-logs", requireAdmin, async (_req, res) => {
       await storage.clearAllAgentLogs();
+      broadcast(["agent-logs"]);
       res.json({ ok: true });
     });
 
@@ -1176,11 +1227,13 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       actionType: actionType ?? null,
       description: description ?? null,
     });
+    broadcast(["agent-logs"]);
     res.json(log);
   });
 
   app.delete("/api/agent-logs/:id", requireAdmin, async (req, res) => {
     await storage.deleteAgentLog(Number(req.params.id));
+    broadcast(["agent-logs"]);
     res.json({ ok: true });
   });
 

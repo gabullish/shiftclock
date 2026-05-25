@@ -28,6 +28,7 @@ import {
 } from "@/lib/agentAccess";
 import type { Agent } from "@shared/schema";
 import { useQuery } from "@tanstack/react-query";
+import { connectSSE } from "@/lib/queryClient";
 
 // Re-export so legacy imports (e.g. `from "@/App"`) keep working during migration.
 // TODO: remove once all consumers point to @/hooks/use-agent-session
@@ -236,6 +237,11 @@ export default function App() {
       setAccessMode("agent");
     }
   }, []);
+
+  // Connect SSE live-push once the user is authenticated
+  useEffect(() => {
+    if (accessMode !== null) connectSSE();
+  }, [accessMode]);
 
   // Backward compatibility: convert old hash deeplinks like #/overtime?... to ?...#/overtime
   useEffect(() => {

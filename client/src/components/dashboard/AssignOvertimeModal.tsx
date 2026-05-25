@@ -23,6 +23,7 @@ type OvertimeSource =
       startUtc: number;
       endUtc: number;
       freedHours: number;
+      isPast?: boolean;
     };
 
 export function AssignOvertimeModal({ source, agents, onAssign, onClose }: {
@@ -63,6 +64,14 @@ export function AssignOvertimeModal({ source, agents, onAssign, onClose }: {
           </button>
         </div>
 
+        {source.kind === "gap" && source.isPast && (
+          <div className="mx-3 mt-3 mb-1 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/25 px-3 py-2">
+            <span className="text-amber-400 text-sm">⚠️</span>
+            <p className="text-[11px] text-amber-400/90">
+              This gap is in the past — logging retroactive coverage.
+            </p>
+          </div>
+        )}
         <div className="p-2 max-h-64 overflow-y-auto">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider px-2 pb-1.5">
             Select an agent to receive this overtime
