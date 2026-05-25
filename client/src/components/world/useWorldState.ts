@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, Shift } from "@shared/schema";
 import type { RoomId } from "./rooms.config";
+import { getAgentOffDays } from "@/lib/dashboardUtils";
 
 export interface AgentWorldData {
   agent: Agent;
@@ -12,7 +13,7 @@ function isOnShift(agent: Agent, shifts: Shift[]): boolean {
   const dayOfWeek = nowUtc.getUTCDay();
   const utcHour = nowUtc.getUTCHours() + nowUtc.getUTCMinutes() / 60;
 
-  const offDays = agent.offWeekend === 1 ? [0, 6] : [4, 5];
+  const offDays = getAgentOffDays(agent, nowUtc);
   if (offDays.includes(dayOfWeek)) return false;
 
   const todayShifts = shifts.filter(s => s.agentId === agent.id && s.dayOfWeek === dayOfWeek);

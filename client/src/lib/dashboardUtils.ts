@@ -46,6 +46,51 @@ export type AgentSummary = {
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
+/**
+ * Returns the UTC Monday of the week containing `date`.
+ */
+function getMondayOf(date: Date): Date {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dow = d.getUTCDay(); // 0=Sun
+  const diff = dow === 0 ? -6 : 1 - dow;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d;
+}
+
+/**
+ * Returns true if `forDate` falls in a "working weekend" week for this agent.
+ * offCycleStart: ISO date string (e.g. "2026-05-25") of the Monday of the
+ * agent's first WEEKEND-working week. Even weeks from that anchor = weekend work,
+ * odd weeks = M-F work. Falls back to offWeekend flag if no cycle start is set.
+ */
+export function isWeekendWorkWeek(
+  offCycleStart: string | null | undefined,
+  offWeekend: number | null | undefined,
+  forDate: Date = new Date(),
+): boolean {
+  if (offCycleStart) {
+    const anchor  = new Date(`${offCycleStart}T00:00:00Z`);
+    const current = getMondayOf(forDate);
+    const weeks   = Math.round((current.getTime() - anchor.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    return weeks % 2 === 0;
+  }
+  // Legacy fallback: offWeekend=0 means they work weekends (off Thu/Fri)
+  return (offWeekend ?? 1) === 0;
+}
+
+/**
+ * Returns the days-of-week ([0..6]) that `agent` has off for a given date.
+ * 0=Sun, 1=Mon, …, 4=Thu, 5=Fri, 6=Sat
+ */
+export function getAgentOffDays(
+  agent: { offWeekend: number | null; offCycleStart?: string | null },
+  forDate: Date = new Date(),
+): number[] {
+  return isWeekendWorkWeek(agent.offCycleStart, agent.offWeekend, forDate)
+    ? [4, 5]   // working weekend → Thu/Fri off
+    : [0, 6];  // M-F week → Sat/Sun off
+}
+
 export function getUTCDay():  number { return new Date().getUTCDay(); }
 export function getUTCHour(): number {
   const now = new Date();

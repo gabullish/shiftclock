@@ -27,6 +27,7 @@ import {
   parseIsoDate, resolveDateForWeekday,
   formatWeekdayWithDate, buildWeekCycleDays,
   findGapRanges, expandGapRangesToSlices,
+  getAgentOffDays,
   errorMessageFromUnknown,
   type LeverState, type TooltipInfo,
 } from "@/lib/dashboardUtils";
@@ -421,8 +422,8 @@ export default function Dashboard() {
 
   const onlineAgents = agents.filter(agent => {
     if (!isSelectedDateToday) return false;
-    // Respect off-day schedule — same logic as useWorldState
-    const offDays = (agent.offWeekend ?? 1) === 1 ? [0, 6] : [4, 5];
+    // Respect off-day schedule — rotates based on offCycleStart (2-week pattern)
+    const offDays = getAgentOffDays(agent, selectedDate ? parseIsoDate(selectedDate) : new Date());
     if (offDays.includes(selectedDay)) return false;
 
     const isOnShift = todayShifts.some(s => {
