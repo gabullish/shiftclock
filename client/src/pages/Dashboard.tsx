@@ -620,8 +620,9 @@ export default function Dashboard() {
     if (assignOvertimeMutation.isPending) return;
     playSoftClick();
 
-    // Detect if this gap is entirely in the past
-    const isPast = isSelectedDateToday && endUtc <= utcHour;
+    // Detect if this gap is entirely in the past:
+    // - any date before today, OR today with the gap end already passed
+    const isPast = date < todayDateStr || (isSelectedDateToday && endUtc <= utcHour);
 
     if (!isAdmin && agentSession) {
       if (isPast) {
