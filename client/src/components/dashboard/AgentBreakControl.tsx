@@ -3,11 +3,13 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 
-export function AgentBreakControl({ isOnBreak, startedAt, onBreakStart, onBreakEnd }: {
+export function AgentBreakControl({ isOnBreak, startedAt, onBreakStart, onBreakEnd, onLogSick, onLogVacation }: {
   isOnBreak: boolean;
   startedAt: number | null;
   onBreakStart: () => void;
   onBreakEnd: () => void;
+  onLogSick: () => void;
+  onLogVacation: () => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
 
@@ -20,7 +22,7 @@ export function AgentBreakControl({ isOnBreak, startedAt, onBreakStart, onBreakE
   }, [startedAt]);
 
   return (
-    <div className="mb-3">
+    <div className="mb-3 flex flex-col gap-1">
       <button
         onClick={isOnBreak ? onBreakEnd : onBreakStart}
         className={cn(
@@ -32,6 +34,22 @@ export function AgentBreakControl({ isOnBreak, startedAt, onBreakStart, onBreakE
       >
         {isOnBreak ? `☕ ${elapsed}m · I'm back` : "☕ Take break"}
       </button>
+      {!isOnBreak && (
+        <>
+          <button
+            onClick={onLogSick}
+            className="text-[10px] text-muted-foreground hover:text-foreground border border-border rounded px-2 py-1 transition-colors w-full"
+          >
+            🤒 Log sick day
+          </button>
+          <button
+            onClick={onLogVacation}
+            className="text-[10px] text-muted-foreground hover:text-foreground border border-border rounded px-2 py-1 transition-colors w-full"
+          >
+            🏖️ Log vacation
+          </button>
+        </>
+      )}
     </div>
   );
 }

@@ -61,6 +61,13 @@ interface AgentSprite {
   walkFrameTimer: number;
   isWalking: boolean;
   isSpecialState: boolean;  // clinic or beach → char_states sprite
+  // Custom sprite textures (optional — set when agent has a custom PNG upload)
+  customTextures?: {
+    front: Texture;
+    side: Texture;
+    back: Texture;
+    rest: Texture;
+  };
 }
 
 // ── Sprite texture helpers ─────────────────────────────────────────────────────
@@ -96,6 +103,29 @@ function stateTex(states: Texture, room: RoomId, tick: number): Texture {
 
 const isSpecial = (r: RoomId) => r === "clinic" || r === "beach";
 
+// ── Custom sprite support ─────────────────────────────────────────────────────
+
+const CUSTOM_SPRITE = {
+  cellW: 128,
+  cellH: 128,
+  baseScale: 0.42,   // renders ~54px tall, same as default
+  stateScale: 0.63,  // renders ~81px for special states
+} as const;
+
+function makeCustomTextures(dataUrl: string): { front: Texture; side: Texture; back: Texture; rest: Texture } {
+  const base = Texture.from(dataUrl);
+  const cell = (col: number, row: number) => new Texture({
+    source: base.source,
+    frame: new Rectangle(col * CUSTOM_SPRITE.cellW, row * CUSTOM_SPRITE.cellH, CUSTOM_SPRITE.cellW, CUSTOM_SPRITE.cellH),
+  });
+  return {
+    front: cell(0, 0),
+    side:  cell(1, 0),
+    back:  cell(0, 1),
+    rest:  cell(1, 1),
+  };
+}
+
 // ── Agent sprite factory ───────────────────────────────────────────────────────
 
 function makeAgentSprite(
@@ -103,13 +133,25 @@ function makeAgentSprite(
   idx: number,
   base: Texture,
   states: Texture,
+  customSpriteUrl?: string,
 ): Omit<AgentSprite, "x" | "y"> {
   const container = new Container();
   const variant   = idx % CHAR_BASE.variants;
   const special   = isSpecial(d.state);
+  const custom    = customSpriteUrl ? makeCustomTextures(customSpriteUrl) : undefined;
 
-  const body = new Sprite(special ? stateTex(states, d.state, 0) : idleTex(base, variant));
-  body.scale.set(special ? CHAR_STATES.renderScale : CHAR_BASE.renderScale);
+  let initTex: Texture;
+  if (custom) {
+    initTex = special ? custom.rest : custom.front;
+  } else {
+    initTex = special ? stateTex(states, d.state, 0) : idleTex(base, variant);
+  }
+
+  const body = new Sprite(initTex);
+  body.scale.set(
+    custom ? (special ? CUSTOM_SPRITE.stateScale : CUSTOM_SPRITE.baseScale)
+           : (special ? CHAR_STATES.renderScale   : CHAR_BASE.renderScale)
+  );
   body.anchor.set(0.5, special ? 0.85 : 1);
 
   const label = new Text({ text: d.agent.name, style: LABEL_STYLE });
@@ -132,6 +174,7 @@ function makeAgentSprite(
     walkFrameTimer:  0,
     isWalking:       false,
     isSpecialState:  special,
+    customTextures:  custom,
   };
 }
 
@@ -146,6 +189,16 @@ function direction(from: WorldPoint, to: WorldPoint): "left" | "right" | "up" | 
 }
 
 function applyWalkDirection(sprite: AgentSprite, base: Texture, dir: "left" | "right" | "up" | "down") {
+  if (sprite.customTextures) {
+    const isHoriz = dir === "left" || dir === "right";
+    sprite.body.texture = isHoriz
+      ? sprite.customTextures.side
+      : (dir === "down" ? sprite.customTextures.front : sprite.customTextures.back);
+    sprite.body.scale.set(CUSTOM_SPRITE.baseScale);
+    sprite.body.anchor.set(0.5, 1);
+    sprite.body.scale.x = dir === "left" ? -CUSTOM_SPRITE.baseScale : CUSTOM_SPRITE.baseScale;
+    return;
+  }
   const isHoriz = dir === "left" || dir === "right";
   const row = isHoriz ? CHAR_BASE.rowWalkRight : CHAR_BASE.rowWalkDown;
   sprite.body.texture = walkTex(base, sprite.variant, sprite.walkFrame, row);
@@ -230,7 +283,7 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
       const idx = roomCounts[d.state] ?? 0;
       roomCounts[d.state] = idx + 1;
       const slot = getSlot(d.state, idx);
-      const sd   = makeAgentSprite(d, idx, base, states);
+      const sd   = makeAgentSprite(d, idx, base, states, d.agent.customSprite ?? undefined);
       const sp: AgentSprite = { ...sd, x: slot.x, y: slot.y };
       sp.container.x = slot.x;
       sp.container.y = slot.y;
@@ -292,16 +345,16 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
 
               // Switch to correct idle sprite for new room
               if (sp.isSpecialState) {
-                sp.body.texture = stateTex(sheets.states, sp.currentRoom, 0);
-                sp.body.scale.set(CHAR_STATES.renderScale);
+                sp.body.texture = sp.customTextures ? sp.customTextures.rest : stateTex(sheets.states, sp.currentRoom, 0);
+                sp.body.scale.set(sp.customTextures ? CUSTOM_SPRITE.stateScale : CHAR_STATES.renderScale);
                 sp.body.anchor.set(0.5, 0.85);
-                sp.body.scale.x = CHAR_STATES.renderScale; // reset mirror
+                sp.body.scale.x = sp.customTextures ? CUSTOM_SPRITE.stateScale : CHAR_STATES.renderScale; // reset mirror
                 sp.label.y = Math.ceil(CHAR_STATES.cellH * CHAR_STATES.renderScale * 0.15) + 4;
               } else {
-                sp.body.texture = idleTex(sheets.base, sp.variant);
-                sp.body.scale.set(CHAR_BASE.renderScale);
+                sp.body.texture = sp.customTextures ? sp.customTextures.front : idleTex(sheets.base, sp.variant);
+                sp.body.scale.set(sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale);
                 sp.body.anchor.set(0.5, 1);
-                sp.body.scale.x = CHAR_BASE.renderScale; // reset mirror
+                sp.body.scale.x = sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale; // reset mirror
                 sp.label.y = 4;
               }
             }
@@ -311,13 +364,16 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
           sp.isWalking = false;
 
           if (sp.isSpecialState) {
-            // Animate clinic/beach frames
-            sp.body.texture = stateTex(sheets.states, sp.currentRoom, sp.animTick);
+            // Animate clinic/beach frames (custom sprites use static rest texture)
+            if (!sp.customTextures) {
+              sp.body.texture = stateTex(sheets.states, sp.currentRoom, sp.animTick);
+            }
           } else {
             // Gentle scale breath
+            const baseScale = sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale;
             const bob = 1 + Math.sin(sp.animTick * 1.8 + sp.agentIndex * 0.7) * 0.025;
-            sp.body.scale.x = CHAR_BASE.renderScale * bob;
-            sp.body.scale.y = CHAR_BASE.renderScale * bob;
+            sp.body.scale.x = baseScale * bob;
+            sp.body.scale.y = baseScale * bob;
           }
           // Vertical float
           sp.container.x = sp.x;
@@ -426,10 +482,10 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
         );
 
         // Switch immediately to walk sprite (direction set in ticker on first frame)
-        sp.body.texture  = walkTex(sheets.base, sp.variant, 0);
-        sp.body.scale.set(CHAR_BASE.renderScale);
+        sp.body.texture  = sp.customTextures ? sp.customTextures.front : walkTex(sheets.base, sp.variant, 0);
+        sp.body.scale.set(sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale);
         sp.body.anchor.set(0.5, 1);
-        sp.body.scale.x  = CHAR_BASE.renderScale;
+        sp.body.scale.x  = sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale;
         sp.label.y       = 4;
       }
     });

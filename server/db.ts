@@ -20,7 +20,8 @@ export async function initDb() {
       role TEXT NOT NULL DEFAULT 'Agent',
       off_weekend INTEGER NOT NULL DEFAULT 1,
       off_cycle_start TEXT,
-      break_active_at TEXT
+      break_active_at TEXT,
+      custom_sprite TEXT
     );
 
     CREATE TABLE IF NOT EXISTS shifts (
@@ -80,4 +81,11 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_claims_opportunity ON overtime_claims(opportunity_id, status);
     CREATE INDEX IF NOT EXISTS idx_claims_agent ON overtime_claims(agent_id, status);
   `);
+
+  // Idempotent column additions for existing databases
+  try {
+    await client.execute("ALTER TABLE agents ADD COLUMN custom_sprite TEXT");
+  } catch {
+    // Column already exists — safe to ignore
+  }
 }

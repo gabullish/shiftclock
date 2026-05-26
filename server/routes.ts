@@ -322,6 +322,14 @@ const authLimiter = rateLimit({
 // No data is sent — clients re-fetch via their existing auth'd query layer.
 const sseClients = new Set<Response>();
 
+function getNextMondayUtc(): string {
+  const today = new Date();
+  const dayOfWeek = today.getUTCDay(); // 0=Sun
+  const daysToNextMonday = dayOfWeek === 0 ? 1 : dayOfWeek === 1 ? 7 : 8 - dayOfWeek;
+  const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + daysToNextMonday));
+  return d.toISOString().slice(0, 10);
+}
+
 function broadcast(keys: string[]) {
   const payload = `data: ${JSON.stringify({ invalidate: keys })}\n\n`;
   for (const client of sseClients) {
@@ -456,7 +464,8 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   app.post("/api/agents", requireAdmin, async (req, res) => {
     const result = insertAgentSchema.safeParse(req.body);
     if (!result.success) return res.status(400).json({ message: result.error.issues[0]?.message ?? "Invalid agent data" });
-    const agent = await storage.createAgent(result.data);
+    const agentData = { ...result.data, offCycleStart: result.data.offCycleStart ?? getNextMondayUtc() };
+    const agent = await storage.createAgent(agentData);
     broadcast(["agents"]);
     res.json(agent);
   });
@@ -489,6 +498,56 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     await storage.deleteAgent(Number(req.params.id));
     broadcast(["agents", "shifts"]);
     res.json({ ok: true });
+  });
+
+  // --- Sprite template download ---
+  app.get("/api/sprites/template", (_req, res) => {
+    res.redirect("/sprite-template.svg");
+  });
+
+  // --- Custom sprite upload ---
+  app.post("/api/agents/:id/sprite", async (req, res) => {
+    const targetId = Number(req.params.id);
+    const admin = isAdminRequest(req);
+    const sessionAgentId = getAgentSession(req);
+
+    if (!admin && sessionAgentId !== targetId) {
+      return res.status(403).json({ message: "You can only upload your own sprite" });
+    }
+
+    const { spriteData } = req.body as { spriteData?: string };
+    if (!spriteData) {
+      return res.status(400).json({ message: "spriteData required" });
+    }
+
+    if (!spriteData.startsWith("data:image/png;base64,")) {
+      return res.status(400).json({ message: "Must be a PNG image" });
+    }
+
+    if (spriteData.length > 2_800_000) {
+      return res.status(413).json({ message: "Image too large (max ~2MB)" });
+    }
+
+    const agent = await storage.updateAgent(targetId, { customSprite: spriteData });
+    if (!agent) return res.status(404).json({ message: "Not found" });
+    broadcast(["agents"]);
+    res.json(agent);
+  });
+
+  // --- Clear custom sprite ---
+  app.delete("/api/agents/:id/sprite", async (req, res) => {
+    const targetId = Number(req.params.id);
+    const admin = isAdminRequest(req);
+    const sessionAgentId = getAgentSession(req);
+
+    if (!admin && sessionAgentId !== targetId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const agent = await storage.updateAgent(targetId, { customSprite: null });
+    if (!agent) return res.status(404).json({ message: "Not found" });
+    broadcast(["agents"]);
+    res.json(agent);
   });
 
   // --- Live break state ---

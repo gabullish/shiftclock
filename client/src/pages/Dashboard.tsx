@@ -423,7 +423,7 @@ export default function Dashboard() {
   const onlineAgents = agents.filter(agent => {
     if (!isSelectedDateToday) return false;
     // Respect off-day schedule — rotates based on offCycleStart (2-week pattern)
-    const offDays = getAgentOffDays(agent, selectedDate ? parseIsoDate(selectedDate) : new Date());
+    const offDays = getAgentOffDays(agent, new Date());
     if (offDays.includes(selectedDay)) return false;
 
     const isOnShift = todayShifts.some(s => {
@@ -509,6 +509,7 @@ export default function Dashboard() {
         startUtc: number;
         endUtc: number;
         freedHours: number;
+        isPast?: boolean;
       }
     | {
         kind: "gap";
@@ -590,7 +591,15 @@ export default function Dashboard() {
       return d.toISOString().slice(0, 10);
     })() : selectedDate;
 
+    const isPast = claimDate < todayDateStr || (claimDate === todayDateStr && slotEnd <= utcHour);
+
     if (!isAdmin && agentSession) {
+      if (isPast) {
+        toast({
+          title: "⚠️ Retroactive coverage",
+          description: "This slot is in the past. Logging it anyway for your records.",
+        });
+      }
       assignOvertimeMutation.mutate({
         fromShiftId: shift.id,
         toAgentId: agentSession.agentId,
@@ -612,6 +621,7 @@ export default function Dashboard() {
       startUtc: slotStart,
       endUtc: slotEnd,
       freedHours,
+      isPast,
     });
   };
 
@@ -966,6 +976,20 @@ export default function Dashboard() {
                           startedAt={startedAt}
                           onBreakStart={() => breakStartMutation.mutate(agentSession.agentId)}
                           onBreakEnd={() => breakEndMutation.mutate(agentSession.agentId)}
+                          onLogSick={() => logActivityMutation.mutate({
+                            agentId: agentSession.agentId,
+                            date: selectedDate,
+                            type: "sick",
+                            actionType: "sick-day",
+                            description: `${own?.name ?? "Agent"} logged a sick day on ${selectedDate}.`,
+                          })}
+                          onLogVacation={() => logActivityMutation.mutate({
+                            agentId: agentSession.agentId,
+                            date: selectedDate,
+                            type: "vacation",
+                            actionType: "vacation-day",
+                            description: `${own?.name ?? "Agent"} logged vacation on ${selectedDate}.`,
+                          })}
                         />
                       );
                     })()}

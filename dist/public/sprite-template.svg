@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" fill="#0a0e1a"/>
+
+  <!-- Cell backgrounds -->
+  <rect x="2" y="2" width="124" height="124" fill="#111827" stroke="#2d3748" stroke-width="1"/>
+  <rect x="130" y="2" width="124" height="124" fill="#0f1f1f" stroke="#2d3748" stroke-width="1"/>
+  <rect x="2" y="130" width="124" height="124" fill="#131020" stroke="#2d3748" stroke-width="1"/>
+  <rect x="130" y="130" width="124" height="124" fill="#1a0f0f" stroke="#2d3748" stroke-width="1"/>
+
+  <!-- Center dividers -->
+  <line x1="128" y1="0" x2="128" y2="256" stroke="#2d3748" stroke-width="4"/>
+  <line x1="0" y1="128" x2="256" y2="128" stroke="#2d3748" stroke-width="4"/>
+
+  <!-- Labels -->
+  <text x="8" y="16" fill="#4a5568" font-family="monospace" font-size="9">FRONT</text>
+  <text x="136" y="16" fill="#4a5568" font-family="monospace" font-size="9">SIDE</text>
+  <text x="8" y="144" fill="#4a5568" font-family="monospace" font-size="9">BACK</text>
+  <text x="136" y="144" fill="#4a5568" font-family="monospace" font-size="9">REST</text>
+
+  <!-- Silhouette guides -->
+  <!-- FRONT: head + body + legs -->
+  <circle cx="64" cy="44" r="14" fill="none" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="64" y1="58" x2="64" y2="88" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="44" y1="70" x2="84" y2="70" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="64" y1="88" x2="52" y2="110" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="64" y1="88" x2="76" y2="110" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- SIDE: profile -->
+  <circle cx="192" cy="44" r="14" fill="none" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="192" y1="58" x2="192" y2="88" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="178" y1="70" x2="206" y2="70" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="192" y1="88" x2="182" y2="110" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="192" y1="88" x2="200" y2="110" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- BACK: back of head -->
+  <circle cx="64" cy="172" r="14" fill="none" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="64" y1="186" x2="64" y2="216" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="44" y1="198" x2="84" y2="198" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="64" y1="216" x2="52" y2="238" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="64" y1="216" x2="76" y2="238" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- REST: sitting/lying -->
+  <circle cx="192" cy="172" r="14" fill="none" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="192" y1="186" x2="192" y2="210" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="172" y1="196" x2="212" y2="196" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="192" y1="210" x2="172" y2="230" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="192" y1="210" x2="212" y2="225" stroke="#2a4060" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Sublabels -->
+  <text x="8" y="122" fill="#374151" font-family="monospace" font-size="7">idle · walking toward</text>
+  <text x="136" y="122" fill="#374151" font-family="monospace" font-size="7">walking left/right</text>
+  <text x="8" y="250" fill="#374151" font-family="monospace" font-size="7">walking away</text>
+  <text x="136" y="250" fill="#374151" font-family="monospace" font-size="7">sleep · break · clinic</text>
+</svg>

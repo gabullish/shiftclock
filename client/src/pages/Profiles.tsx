@@ -15,12 +15,10 @@ import { useAgentSession } from "@/hooks/use-agent-session";
 import { AgentForm, AgentFormData, DEFAULT_COLORS } from "@/components/profiles/AgentForm";
 import { ShiftPill } from "@/components/profiles/ShiftPill";
 import { ApplyWeekRow } from "@/components/profiles/ApplyWeekRow";
+import { getAgentOffDays } from "@/lib/dashboardUtils";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function getOffDays(offWeekend: number): number[] {
-  return offWeekend === 1 ? [0, 6] : [4, 5];
-}
 
 function seedFromShifts(shifts: Shift[]): { start: number; end: number } {
   const s = shifts.find(sh => sh.startUtc != null && sh.endUtc != null);
@@ -139,10 +137,19 @@ export default function Profiles() {
     mutationFn: ({ id, offWeekend }: { id: number; offWeekend: number }) => {
       const today = new Date();
       const dayOfWeek = today.getUTCDay();
-      const daysToMonday = (dayOfWeek === 0 ? -6 : 1 - dayOfWeek);
-      const monday = new Date(today);
-      monday.setUTCDate(today.getUTCDate() + daysToMonday);
-      const offCycleStart = monday.toISOString().split("T")[0];
+      const daysToThisMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const thisMonday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + daysToThisMonday));
+
+      let offCycleStart: string;
+      if (offWeekend === 0) {
+        // Working weekends this week → anchor = this Monday
+        offCycleStart = thisMonday.toISOString().slice(0, 10);
+      } else {
+        // M-F this week → weekends start next week
+        const nextMonday = new Date(thisMonday);
+        nextMonday.setUTCDate(thisMonday.getUTCDate() + 7);
+        offCycleStart = nextMonday.toISOString().slice(0, 10);
+      }
       return apiRequest("PATCH", `/api/agents/${id}`, { offWeekend, offCycleStart });
     },
     onSuccess: (_, variables) => {
@@ -153,6 +160,49 @@ export default function Profiles() {
   });
 
   const [offTogglePending, setOffTogglePending] = useState<Set<number>>(new Set());
+
+  const spriteUploadMutation = useMutation({
+    mutationFn: ({ id, spriteData }: { id: number; spriteData: string }) =>
+      apiRequest("POST", `/api/agents/${id}/sprite`, { spriteData }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      toast({ title: "Character sprite updated!" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Upload failed", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
+  });
+
+  const spriteDeleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/agents/${id}/sprite`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      toast({ title: "Sprite removed" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to remove sprite", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
+  });
+
+  function downloadTemplate() {
+    const a = document.createElement("a");
+    a.href = "/sprite-template.svg";
+    a.download = "shiftclock-sprite-template.svg";
+    a.click();
+  }
+
+  function handleSpriteUpload(agentId: number, file: File) {
+    if (!file.type.includes("png")) {
+      toast({ title: "PNG only please", variant: "destructive" });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      spriteUploadMutation.mutate({ id: agentId, spriteData: dataUrl });
+    };
+    reader.readAsDataURL(file);
+  }
 
   const applyWeekMutation = useMutation({
     mutationFn: ({ id, startUtc, endUtc }: { id: number; startUtc: number; endUtc: number }) =>
@@ -424,7 +474,7 @@ export default function Profiles() {
         <div className="space-y-3 sm:space-y-4">
           {agents.map(agent => {
             const agentShifts = allShifts.filter(s => s.agentId === agent.id);
-            const offDays = getOffDays(agent.offWeekend ?? 1);
+            const offDays = getAgentOffDays(agent, new Date());
             return (
               <div
                 key={agent.id}
@@ -556,6 +606,41 @@ export default function Profiles() {
                     );
                   })}
                 </div>
+
+                {(isAdmin || agentSession?.agentId === agent.id) && (
+                  <div className="mt-2 flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={downloadTemplate}
+                      className="text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Download size={10} /> Template
+                    </button>
+                    <label className="text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
+                      <Upload size={10} /> Upload sprite
+                      <input
+                        type="file"
+                        accept="image/png"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleSpriteUpload(agent.id, f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    {agent.customSprite && (
+                      <>
+                        <span className="text-[10px] text-green-500">✓ Custom sprite active</span>
+                        <button
+                          onClick={() => spriteDeleteMutation.mutate(agent.id)}
+                          className="text-[10px] text-muted-foreground hover:text-destructive transition-colors"
+                        >
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
