@@ -108,8 +108,8 @@ const isSpecial = (r: RoomId) => r === "clinic" || r === "beach";
 const CUSTOM_SPRITE = {
   cellW: 128,
   cellH: 128,
-  baseScale: 0.42,   // renders ~54px tall, same as default
-  stateScale: 0.63,  // renders ~81px for special states
+  baseScale: 0.65,   // renders ~83px tall — custom sprites rarely fill the full cell
+  stateScale: 0.90,  // renders ~115px for special states
 } as const;
 
 async function makeCustomTextures(dataUrl: string): Promise<{ front: Texture; side: Texture; back: Texture; rest: Texture }> {
