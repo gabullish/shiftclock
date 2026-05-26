@@ -48,7 +48,8 @@ export default function WorldView() {
     staleTime: 60 * 1000,
   });
 
-  const backgroundImageUrl = bgData?.imageData ?? null;
+  // DB image takes priority; fall back to the static pre-shipped map
+  const backgroundImageUrl = bgData?.imageData ?? "/map-background.png";
 
   // Upload mutation
   const uploadMutation = useMutation({
