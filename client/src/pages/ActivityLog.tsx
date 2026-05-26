@@ -17,13 +17,14 @@ export default function ActivityLog() {
   const [location] = useLocation();
   const pathOnly = location.split("?")[0];
   const isOvertimeRoute = pathOnly === "/overtime";
-  const availableTabs = isAdmin ? TABS : (["Overtime"] as const);
-  const [tab, setTab] = useState<Tab>(isAdmin && !isOvertimeRoute ? "Activity Log" : "Overtime");
+  const canSeeActivity = isAdmin || isAgent;
+  const availableTabs = canSeeActivity ? TABS : (["Overtime"] as const);
+  const [tab, setTab] = useState<Tab>(!isOvertimeRoute && canSeeActivity ? "Activity Log" : "Overtime");
 
   // Keep tab in sync with the URL whenever the route changes
   useEffect(() => {
-    setTab(isAdmin && !isOvertimeRoute ? "Activity Log" : "Overtime");
-  }, [isAdmin, isOvertimeRoute]);
+    setTab(!isOvertimeRoute && canSeeActivity ? "Activity Log" : "Overtime");
+  }, [canSeeActivity, isOvertimeRoute]);
 
   if (!isAdmin && !isAgent) {
     return (
@@ -58,7 +59,7 @@ export default function ActivityLog() {
       </header>
 
       <div className="flex-1 min-h-0 overflow-hidden">
-        {tab === "Activity Log" && isAdmin ? (
+        {tab === "Activity Log" ? (
           <ActivityFeed />
         ) : (
           <OvertimePanel canManage={isAdmin} agentSession={agentSession ?? null} />
