@@ -5,7 +5,7 @@ import * as schema from "@shared/schema";
 const url = process.env.TURSO_DATABASE_URL ?? "file:./data.db";
 const authToken = process.env.TURSO_AUTH_TOKEN;
 
-const client = createClient({ url, authToken });
+export const client = createClient({ url, authToken });
 export const db = drizzle(client, { schema });
 
 // Run table migrations on startup — idempotent, safe on existing DBs
@@ -88,4 +88,8 @@ export async function initDb() {
   } catch {
     // Column already exists — safe to ignore
   }
+
+  try {
+    await client.execute(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  } catch { /* already exists */ }
 }

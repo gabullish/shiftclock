@@ -211,10 +211,11 @@ function applyWalkDirection(sprite: AgentSprite, base: Texture, dir: "left" | "r
 
 export interface WorldStageProps {
   agentData: AgentWorldData[];
+  backgroundImageUrl?: string;
   onCameraChange?: (x: number, y: number) => void;
 }
 
-export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
+export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: WorldStageProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const appRef         = useRef<Application | null>(null);
   const worldRef       = useRef<Container | null>(null);
@@ -258,23 +259,35 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
     sheetsRef.current = { base, states };
 
     // ── Layer stack — order matters for z-index ──────────────────────────────
-    const floorLayer     = new Container();
-    const wallLayer      = new Container();
-    const slotFurnLayer  = new Container();
-    const decorLayer     = new Container();
-    const agentLayer     = new Container();
+    const agentLayer = new Container();
 
-    world.addChild(floorLayer);    // 1. floor tiles
-    world.addChild(wallLayer);     // 2. walls + corridors + labels
-    world.addChild(slotFurnLayer); // 3. permanent beds + desks (below agents)
-    world.addChild(decorLayer);    // 4. corner decorations (below agents)
-    world.addChild(agentLayer);    // 5. agents always on top
+    if (backgroundImageUrl) {
+      // Custom background replaces procedural floor/wall/furniture/decor layers
+      const bgTex = await Assets.load(backgroundImageUrl);
+      const bg = new Sprite(bgTex);
+      bg.width = WORLD_W;
+      bg.height = WORLD_H;
+      world.addChild(bg);
+    } else {
+      // Procedural environment layers
+      const floorLayer     = new Container();
+      const wallLayer      = new Container();
+      const slotFurnLayer  = new Container();
+      const decorLayer     = new Container();
 
-    // Populate layers (floor + walls are sync-safe, furniture is async)
-    buildWallLayer(wallLayer);
-    buildFloorLayer(floorLayer).catch(console.error);
-    buildSlotFurniture(slotFurnLayer, agentDataRef.current.length).catch(console.error);
-    buildDecorLayer(decorLayer).catch(console.error);
+      world.addChild(floorLayer);    // 1. floor tiles
+      world.addChild(wallLayer);     // 2. walls + corridors + labels
+      world.addChild(slotFurnLayer); // 3. permanent beds + desks (below agents)
+      world.addChild(decorLayer);    // 4. corner decorations (below agents)
+
+      // Populate layers (floor + walls are sync-safe, furniture is async)
+      buildWallLayer(wallLayer);
+      buildFloorLayer(floorLayer).catch(console.error);
+      buildSlotFurniture(slotFurnLayer, agentDataRef.current.length).catch(console.error);
+      buildDecorLayer(decorLayer).catch(console.error);
+    }
+
+    world.addChild(agentLayer);    // agents always on top
 
     // ── Spawn agent sprites ──────────────────────────────────────────────────
     // Pre-load any custom sprites async (with fallback on error) before spawning
@@ -429,7 +442,7 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
     });
     if (mountRef.current) ro.observe(mountRef.current);
 
-  }, []); // eslint-disable-line
+  }, [backgroundImageUrl]); // eslint-disable-line
 
   useEffect(() => {
     init();

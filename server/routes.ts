@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { storage } from "./storage";
+import { client } from "./db";
 import { insertAgentSchema, insertShiftSchema } from "@shared/schema";
 
 type NormalizedBackup = {
@@ -548,6 +549,37 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     if (!agent) return res.status(404).json({ message: "Not found" });
     broadcast(["agents"]);
     res.json(agent);
+  });
+
+  // ── World background image ──────────────────────────────────────────────────
+  app.get("/api/world/background", async (_req, res) => {
+    try {
+      const result = await client.execute("SELECT value FROM settings WHERE key = 'world_background'");
+      const row = result.rows[0];
+      if (!row) return res.status(404).json({ message: "No background set" });
+      res.json({ imageData: row.value as string });
+    } catch {
+      res.status(404).json({ message: "No background set" });
+    }
+  });
+
+  app.post("/api/world/background", requireAdmin, async (req, res) => {
+    const { imageData } = req.body as { imageData?: string };
+    if (!imageData || !imageData.startsWith("data:image/png;base64,")) {
+      return res.status(400).json({ message: "PNG data URL required" });
+    }
+    if (imageData.length > 8_000_000) {
+      return res.status(413).json({ message: "Image too large (max ~6MB)" });
+    }
+    await client.execute({ sql: "INSERT OR REPLACE INTO settings (key, value) VALUES ('world_background', ?)", args: [imageData] });
+    broadcast(["world/background"]);
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/world/background", requireAdmin, async (_req, res) => {
+    await client.execute("DELETE FROM settings WHERE key = 'world_background'");
+    broadcast(["world/background"]);
+    res.json({ ok: true });
   });
 
   // --- Live break state ---

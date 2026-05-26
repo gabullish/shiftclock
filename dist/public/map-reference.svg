@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="1090" style="font-family:monospace">
+  <!-- Background -->
+  <rect width="1320" height="1090" fill="#0c0f17"/>
+
+  <!-- Coordinate grid every 100px -->
+  <g stroke="#ffffff" stroke-opacity="0.06" stroke-width="1">
+    <line x1="100" y1="0" x2="100" y2="1090"/>
+    <line x1="200" y1="0" x2="200" y2="1090"/>
+    <line x1="300" y1="0" x2="300" y2="1090"/>
+    <line x1="400" y1="0" x2="400" y2="1090"/>
+    <line x1="500" y1="0" x2="500" y2="1090"/>
+    <line x1="600" y1="0" x2="600" y2="1090"/>
+    <line x1="700" y1="0" x2="700" y2="1090"/>
+    <line x1="800" y1="0" x2="800" y2="1090"/>
+    <line x1="900" y1="0" x2="900" y2="1090"/>
+    <line x1="1000" y1="0" x2="1000" y2="1090"/>
+    <line x1="1100" y1="0" x2="1100" y2="1090"/>
+    <line x1="1200" y1="0" x2="1200" y2="1090"/>
+    <line x1="0" y1="100" x2="1320" y2="100"/>
+    <line x1="0" y1="200" x2="1320" y2="200"/>
+    <line x1="0" y1="300" x2="1320" y2="300"/>
+    <line x1="0" y1="400" x2="1320" y2="400"/>
+    <line x1="0" y1="500" x2="1320" y2="500"/>
+    <line x1="0" y1="600" x2="1320" y2="600"/>
+    <line x1="0" y1="700" x2="1320" y2="700"/>
+    <line x1="0" y1="800" x2="1320" y2="800"/>
+    <line x1="0" y1="900" x2="1320" y2="900"/>
+    <line x1="0" y1="1000" x2="1320" y2="1000"/>
+  </g>
+
+  <!-- ROOMS -->
+
+  <!-- Bedroom -->
+  <rect x="30" y="30" width="600" height="400" fill="#1e1e38" stroke="#7b5ea7" stroke-width="2"/>
+  <text x="240" y="52" fill="white" font-size="12" font-family="monospace" font-weight="bold">BEDROOM</text>
+
+  <!-- Office -->
+  <rect x="690" y="30" width="600" height="400" fill="#1e2d42" stroke="#3a7bd5" stroke-width="2"/>
+  <text x="920" y="52" fill="white" font-size="12" font-family="monospace" font-weight="bold">OFFICE</text>
+
+  <!-- Clinic -->
+  <rect x="30" y="490" width="400" height="220" fill="#1a2e24" stroke="#4ecba1" stroke-width="2"/>
+  <text x="150" y="512" fill="white" font-size="12" font-family="monospace" font-weight="bold">CLINIC</text>
+
+  <!-- Break Room -->
+  <rect x="490" y="490" width="800" height="290" fill="#2a1e1a" stroke="#e07b54" stroke-width="2"/>
+  <text x="790" y="512" fill="white" font-size="12" font-family="monospace" font-weight="bold">BREAK ROOM</text>
+
+  <!-- Beach -->
+  <rect x="30" y="840" width="1260" height="210" fill="#1a4a5e" stroke="#f4d03f" stroke-width="2"/>
+  <text x="560" y="862" fill="white" font-size="12" font-family="monospace" font-weight="bold">BEACH / VACATION</text>
+
+  <!-- CORRIDORS -->
+  <rect x="630" y="218" width="60" height="24" fill="#1e2535"/>
+  <rect x="218" y="430" width="24" height="60" fill="#1e1e35"/>
+  <rect x="978" y="430" width="24" height="60" fill="#1e2535"/>
+  <rect x="430" y="588" width="60" height="24" fill="#281a18"/>
+  <rect x="208" y="710" width="24" height="130" fill="#1a2e24"/>
+  <rect x="868" y="780" width="24" height="60" fill="#2a1e1a"/>
+
+  <!-- FURNITURE: Bedroom beds -->
+  <!-- Row 1 -->
+  <rect x="90" y="107" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="110" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="230" y="107" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="250" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="370" y="107" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="390" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="510" y="107" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="530" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <!-- Row 2 -->
+  <rect x="90" y="222" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="110" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="230" y="222" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="250" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="370" y="222" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="390" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="510" y="222" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="530" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <!-- Row 3 -->
+  <rect x="90" y="337" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="110" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="230" y="337" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="250" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="370" y="337" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="390" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="510" y="337" width="40" height="25" fill="#3a2a5a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="530" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+
+  <!-- FURNITURE: Office desks -->
+  <!-- Row 1 -->
+  <rect x="750" y="107" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="770" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="890" y="107" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="910" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="1030" y="107" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="1050" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="1170" y="107" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="1190" y="123" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <!-- Row 2 -->
+  <rect x="750" y="222" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="770" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="890" y="222" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="910" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="1030" y="222" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="1050" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="1170" y="222" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="1190" y="238" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <!-- Row 3 -->
+  <rect x="750" y="337" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="770" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="890" y="337" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="910" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="1030" y="337" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="1050" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+  <rect x="1170" y="337" width="40" height="25" fill="#1a3a5a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="1190" y="353" fill="white" font-size="7" font-family="monospace" text-anchor="middle">DESK</text>
+
+  <!-- FURNITURE: Clinic beds -->
+  <rect x="92" y="590" width="35" height="20" fill="#0a3a2a" stroke="#4ecba1" stroke-width="1"/>
+  <text x="109" y="603" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="222" y="590" width="35" height="20" fill="#0a3a2a" stroke="#4ecba1" stroke-width="1"/>
+  <text x="239" y="603" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+  <rect x="352" y="590" width="35" height="20" fill="#0a3a2a" stroke="#4ecba1" stroke-width="1"/>
+  <text x="369" y="603" fill="white" font-size="7" font-family="monospace" text-anchor="middle">BED</text>
+
+  <!-- FURNITURE: Break room sofas -->
+  <!-- Row 1 -->
+  <rect x="550" y="552" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="570" y="568" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+  <rect x="745" y="552" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="765" y="568" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+  <rect x="940" y="552" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="960" y="568" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+  <rect x="1135" y="552" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="1155" y="568" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+  <!-- Row 2 -->
+  <rect x="550" y="692" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="570" y="708" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+  <rect x="745" y="692" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="765" y="708" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+  <rect x="940" y="692" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="960" y="708" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+  <rect x="1135" y="692" width="40" height="25" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="1155" y="708" fill="white" font-size="7" font-family="monospace" text-anchor="middle">SOFA</text>
+
+  <!-- FURNITURE: Beach loungers -->
+  <rect x="125" y="955" width="50" height="20" fill="#0a2a3a" stroke="#f4d03f" stroke-width="1"/>
+  <text x="150" y="968" fill="white" font-size="7" font-family="monospace" text-anchor="middle">LOUNGER</text>
+  <rect x="325" y="955" width="50" height="20" fill="#0a2a3a" stroke="#f4d03f" stroke-width="1"/>
+  <text x="350" y="968" fill="white" font-size="7" font-family="monospace" text-anchor="middle">LOUNGER</text>
+  <rect x="525" y="955" width="50" height="20" fill="#0a2a3a" stroke="#f4d03f" stroke-width="1"/>
+  <text x="550" y="968" fill="white" font-size="7" font-family="monospace" text-anchor="middle">LOUNGER</text>
+  <rect x="725" y="955" width="50" height="20" fill="#0a2a3a" stroke="#f4d03f" stroke-width="1"/>
+  <text x="750" y="968" fill="white" font-size="7" font-family="monospace" text-anchor="middle">LOUNGER</text>
+  <rect x="925" y="955" width="50" height="20" fill="#0a2a3a" stroke="#f4d03f" stroke-width="1"/>
+  <text x="950" y="968" fill="white" font-size="7" font-family="monospace" text-anchor="middle">LOUNGER</text>
+  <rect x="1125" y="955" width="50" height="20" fill="#0a2a3a" stroke="#f4d03f" stroke-width="1"/>
+  <text x="1150" y="968" fill="white" font-size="7" font-family="monospace" text-anchor="middle">LOUNGER</text>
+
+  <!-- DECOR PROPS -->
+
+  <!-- Bedroom rug -->
+  <ellipse cx="330" cy="210" rx="50" ry="30" fill="#2a1a4a"/>
+  <text x="330" y="214" fill="white" font-size="7" font-family="monospace" text-anchor="middle">RUG</text>
+
+  <!-- Bedroom wardrobe -->
+  <rect x="575" y="45" width="25" height="50" fill="#2a1a3a" stroke="#7b5ea7" stroke-width="1"/>
+  <text x="587" y="73" fill="white" font-size="6" font-family="monospace" text-anchor="middle">WRD</text>
+
+  <!-- Office whiteboard -->
+  <rect x="890" y="57" width="60" height="18" fill="#1a2a4a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="920" y="69" fill="white" font-size="6" font-family="monospace" text-anchor="middle">WHITEBOARD</text>
+
+  <!-- Office bookshelf -->
+  <rect x="725" y="53" width="25" height="50" fill="#1a2a4a" stroke="#3a7bd5" stroke-width="1"/>
+  <text x="737" y="81" fill="white" font-size="6" font-family="monospace" text-anchor="middle">SHELF</text>
+
+  <!-- Break room table -->
+  <ellipse cx="890" cy="635" rx="55" ry="28" fill="#3a1a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="890" y="639" fill="white" font-size="7" font-family="monospace" text-anchor="middle">TABLE</text>
+
+  <!-- Break room coffee machine -->
+  <rect x="523" y="523" width="18" height="18" fill="#2a0a0a" stroke="#e07b54" stroke-width="1"/>
+  <text x="532" y="535" fill="white" font-size="9" font-family="monospace" text-anchor="middle">☕</text>
+
+  <!-- Break room fridge -->
+  <rect x="1236" y="516" width="18" height="32" fill="#2a2a3a" stroke="#e07b54" stroke-width="1"/>
+  <text x="1245" y="535" fill="white" font-size="9" font-family="monospace" text-anchor="middle">❄</text>
+
+  <!-- Clinic desk -->
+  <rect x="50" y="521" width="40" height="18" fill="#0a2a1a" stroke="#4ecba1" stroke-width="1"/>
+  <text x="70" y="533" fill="white" font-size="6" font-family="monospace" text-anchor="middle">DESK</text>
+
+  <!-- Beach palm trees -->
+  <circle cx="80" cy="870" r="14" fill="#1a4a0a"/>
+  <text x="80" y="874" fill="white" font-size="10" font-family="monospace" text-anchor="middle">🌴</text>
+  <circle cx="280" cy="870" r="14" fill="#1a4a0a"/>
+  <text x="280" y="874" fill="white" font-size="10" font-family="monospace" text-anchor="middle">🌴</text>
+  <circle cx="480" cy="870" r="14" fill="#1a4a0a"/>
+  <text x="480" y="874" fill="white" font-size="10" font-family="monospace" text-anchor="middle">🌴</text>
+  <circle cx="680" cy="870" r="14" fill="#1a4a0a"/>
+  <text x="680" y="874" fill="white" font-size="10" font-family="monospace" text-anchor="middle">🌴</text>
+  <circle cx="880" cy="870" r="14" fill="#1a4a0a"/>
+  <text x="880" y="874" fill="white" font-size="10" font-family="monospace" text-anchor="middle">🌴</text>
+  <circle cx="1080" cy="870" r="14" fill="#1a4a0a"/>
+  <text x="1080" y="874" fill="white" font-size="10" font-family="monospace" text-anchor="middle">🌴</text>
+  <circle cx="1240" cy="870" r="14" fill="#1a4a0a"/>
+  <text x="1240" y="874" fill="white" font-size="10" font-family="monospace" text-anchor="middle">🌴</text>
+
+  <!-- Title -->
+  <text x="20" y="16" fill="white" font-size="12" font-family="monospace" font-weight="bold">ShiftClock World Map — Reference Layout (1320×1090)</text>
+
+  <!-- Footer -->
+  <text x="20" y="1080" fill="#888888" font-size="10" font-family="monospace">Draw pixel art inside each room. Keep character agent slots clear. Export as 1320×1090 PNG.</text>
+</svg>
