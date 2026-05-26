@@ -112,8 +112,8 @@ const CUSTOM_SPRITE = {
   stateScale: 0.63,  // renders ~81px for special states
 } as const;
 
-function makeCustomTextures(dataUrl: string): { front: Texture; side: Texture; back: Texture; rest: Texture } {
-  const base = Texture.from(dataUrl);
+async function makeCustomTextures(dataUrl: string): Promise<{ front: Texture; side: Texture; back: Texture; rest: Texture }> {
+  const base = await Assets.load(dataUrl);
   const cell = (col: number, row: number) => new Texture({
     source: base.source,
     frame: new Rectangle(col * CUSTOM_SPRITE.cellW, row * CUSTOM_SPRITE.cellH, CUSTOM_SPRITE.cellW, CUSTOM_SPRITE.cellH),
@@ -133,12 +133,11 @@ function makeAgentSprite(
   idx: number,
   base: Texture,
   states: Texture,
-  customSpriteUrl?: string,
+  custom?: { front: Texture; side: Texture; back: Texture; rest: Texture },
 ): Omit<AgentSprite, "x" | "y"> {
   const container = new Container();
   const variant   = idx % CHAR_BASE.variants;
   const special   = isSpecial(d.state);
-  const custom    = customSpriteUrl ? makeCustomTextures(customSpriteUrl) : undefined;
 
   let initTex: Texture;
   if (custom) {
@@ -278,12 +277,25 @@ export function WorldStage({ agentData, onCameraChange }: WorldStageProps) {
     buildDecorLayer(decorLayer).catch(console.error);
 
     // ── Spawn agent sprites ──────────────────────────────────────────────────
+    // Pre-load any custom sprites async (with fallback on error) before spawning
+    const customTextureMap = new Map<number, { front: Texture; side: Texture; back: Texture; rest: Texture }>();
+    await Promise.all(agentDataRef.current.map(async (d) => {
+      if (d.agent.customSprite) {
+        try {
+          const textures = await makeCustomTextures(d.agent.customSprite);
+          customTextureMap.set(d.agent.id, textures);
+        } catch (err) {
+          console.warn(`Failed to load custom sprite for agent ${d.agent.id}:`, err);
+        }
+      }
+    }));
+
     const roomCounts: Partial<Record<RoomId, number>> = {};
     agentDataRef.current.forEach(d => {
       const idx = roomCounts[d.state] ?? 0;
       roomCounts[d.state] = idx + 1;
       const slot = getSlot(d.state, idx);
-      const sd   = makeAgentSprite(d, idx, base, states, d.agent.customSprite ?? undefined);
+      const sd   = makeAgentSprite(d, idx, base, states, customTextureMap.get(d.agent.id));
       const sp: AgentSprite = { ...sd, x: slot.x, y: slot.y };
       sp.container.x = slot.x;
       sp.container.y = slot.y;
