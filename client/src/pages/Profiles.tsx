@@ -608,37 +608,40 @@ export default function Profiles() {
                 </div>
 
                 {(isAdmin || agentSession?.agentId === agent.id) && (
-                  <div className="mt-2 flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={downloadTemplate}
-                      className="text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <Download size={10} /> Template
-                    </button>
-                    <label className="text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
-                      <Upload size={10} /> Upload sprite
-                      <input
-                        type="file"
-                        accept="image/png"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) handleSpriteUpload(agent.id, f);
-                          e.target.value = "";
-                        }}
-                      />
-                    </label>
-                    {agent.customSprite && (
-                      <>
-                        <span className="text-[10px] text-green-500">✓ Custom sprite active</span>
-                        <button
-                          onClick={() => spriteDeleteMutation.mutate(agent.id)}
-                          className="text-[10px] text-muted-foreground hover:text-destructive transition-colors"
-                        >
-                          Remove
-                        </button>
-                      </>
-                    )}
+                  <div className="mt-3 pt-3 border-t border-border/40">
+                    <p className="text-[9px] text-muted-foreground uppercase tracking-wider mb-2">Character sprite</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={downloadTemplate}
+                        className="text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Download size={10} /> Download template
+                      </button>
+                      <label className="text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
+                        <Upload size={10} /> Upload PNG
+                        <input
+                          type="file"
+                          accept="image/png"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleSpriteUpload(agent.id, f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                      {agent.customSprite && (
+                        <>
+                          <span className="text-[10px] text-green-500">✓ Custom sprite active</span>
+                          <button
+                            onClick={() => spriteDeleteMutation.mutate(agent.id)}
+                            className="text-[10px] text-muted-foreground hover:text-destructive transition-colors"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
