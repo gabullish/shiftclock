@@ -238,11 +238,10 @@ export function ClockVisualizer({
                           onMouseEnter={(e) => {
                             const rect = svgRef.current?.getBoundingClientRect();
                             setHighlighted(agent.id);
-                            if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
+                            setTooltipInfo({ agent, shift, x: e.clientX, y: e.clientY, pct, otPct });
                           }}
                           onMouseMove={(e) => {
-                            const rect = svgRef.current?.getBoundingClientRect();
-                            if (rect) setTooltipInfo({ agent, shift, x: e.clientX - rect.left, y: e.clientY - rect.top, pct, otPct });
+                            setTooltipInfo({ agent, shift, x: e.clientX, y: e.clientY, pct, otPct });
                           }}
                           onMouseLeave={() => {
                             setTooltipInfo(null);
@@ -446,8 +445,11 @@ export function ClockVisualizer({
 
       {tooltipInfo && (
         <div
-          className="absolute pointer-events-none z-50 px-2.5 py-1.5 rounded-md bg-card border border-border shadow-lg text-xs"
-          style={{ left: tooltipInfo.x + 14, top: tooltipInfo.y - 10 }}
+          className="fixed pointer-events-none z-[9999] px-2.5 py-1.5 rounded-md bg-card border border-border shadow-lg text-xs"
+          style={{
+            left: Math.min(tooltipInfo.x + 14, window.innerWidth - 180),
+            top: Math.max(8, Math.min(tooltipInfo.y - 10, window.innerHeight - 120)),
+          }}
         >
           <div className="flex items-center gap-1.5 font-medium" style={{ color: tooltipInfo.agent.color }}>
             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tooltipInfo.agent.color }} />
