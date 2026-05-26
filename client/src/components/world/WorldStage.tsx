@@ -108,8 +108,10 @@ const isSpecial = (r: RoomId) => r === "clinic" || r === "beach";
 const CUSTOM_SPRITE = {
   cellW: 128,
   cellH: 128,
-  baseScale: 0.65,   // renders ~83px tall — custom sprites rarely fill the full cell
-  stateScale: 0.90,  // renders ~115px for special states
+  baseScale: 0.65,    // renders ~83px tall — custom sprites rarely fill the full cell
+  stateScale: 0.90,   // renders ~115px for special states
+  anchorY: 0.82,      // feet land at ~82% of cell height in the template
+  anchorYState: 0.85, // for special states (lying/resting)
 } as const;
 
 async function makeCustomTextures(dataUrl: string): Promise<{ front: Texture; side: Texture; back: Texture; rest: Texture }> {
@@ -151,7 +153,12 @@ function makeAgentSprite(
     custom ? (special ? CUSTOM_SPRITE.stateScale : CUSTOM_SPRITE.baseScale)
            : (special ? CHAR_STATES.renderScale   : CHAR_BASE.renderScale)
   );
-  body.anchor.set(0.5, special ? 0.85 : 1);
+  body.anchor.set(
+    0.5,
+    custom
+      ? (special ? CUSTOM_SPRITE.anchorYState : CUSTOM_SPRITE.anchorY)
+      : (special ? 0.85 : 1)
+  );
 
   const label = new Text({ text: d.agent.name, style: LABEL_STYLE });
   label.anchor.set(0.5, 0);
@@ -194,7 +201,7 @@ function applyWalkDirection(sprite: AgentSprite, base: Texture, dir: "left" | "r
       ? sprite.customTextures.side
       : (dir === "down" ? sprite.customTextures.front : sprite.customTextures.back);
     sprite.body.scale.set(CUSTOM_SPRITE.baseScale);
-    sprite.body.anchor.set(0.5, 1);
+    sprite.body.anchor.set(0.5, CUSTOM_SPRITE.anchorY);
     sprite.body.scale.x = dir === "left" ? -CUSTOM_SPRITE.baseScale : CUSTOM_SPRITE.baseScale;
     return;
   }
