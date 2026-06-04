@@ -339,7 +339,7 @@ function getNextMondayUtc(): string {
 
 function broadcast(keys: string[]) {
   const payload = `data: ${JSON.stringify({ invalidate: keys })}\n\n`;
-  for (const client of sseClients) {
+  for (const client of Array.from(sseClients)) {
     try { client.write(payload); } catch { sseClients.delete(client); }
   }
 }
