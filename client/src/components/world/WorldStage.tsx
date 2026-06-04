@@ -235,6 +235,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
   const tickerFnRef    = useRef<((t: Ticker) => void) | null>(null);
   const roRef          = useRef<ResizeObserver | null>(null);
   const loadedAssetsRef = useRef<Set<string>>(new Set());
+  const initGenRef     = useRef(0);   // bumped on every init/cleanup to cancel stale async inits
 
   agentDataRef.current = agentData;
 
@@ -242,6 +243,10 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
 
   const init = useCallback(async () => {
     if (!mountRef.current || appRef.current) return;
+
+    // Capture this init's generation. If cleanup or another init runs while we
+    // await below, the generation changes and we abort + tear down what we built.
+    const myGen = ++initGenRef.current;
 
     const app = new Application();
     await app.init({
@@ -252,6 +257,10 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
       autoDensity:     true,
       antialias:       false, // crisp pixel art
     });
+    if (myGen !== initGenRef.current || !mountRef.current) {
+      app.destroy(true); // superseded while initializing — discard this app
+      return;
+    }
     appRef.current = app;
     mountRef.current.appendChild(app.canvas);
     app.canvas.style.display = "block";
@@ -267,6 +276,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
       Assets.load(CHAR_BASE.url),
       Assets.load(CHAR_STATES.url),
     ]);
+    if (myGen !== initGenRef.current) return; // superseded during load
     sheetsRef.current = { base, states };
 
     // ── Layer stack — order matters for z-index ──────────────────────────────
@@ -315,6 +325,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
         }
       }
     }));
+    if (myGen !== initGenRef.current) return; // superseded during sprite preload
 
     const roomCounts: Partial<Record<RoomId, number>> = {};
     agentDataRef.current.forEach(d => {
@@ -462,6 +473,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
   useEffect(() => {
     init();
     return () => {
+      initGenRef.current++; // cancel any in-flight async init
       roRef.current?.disconnect();
       roRef.current = null;
       if (appRef.current && tickerFnRef.current) {
