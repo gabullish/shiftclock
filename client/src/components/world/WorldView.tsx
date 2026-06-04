@@ -143,7 +143,7 @@ export default function WorldView() {
             >
               📥 Reference
             </a>
-            {backgroundImageUrl && (
+            {bgData?.imageData && (
               <button
                 onClick={() => removeMutation.mutate()}
                 disabled={removeMutation.isPending}

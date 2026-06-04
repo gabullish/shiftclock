@@ -1,6 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac, createHash, timingSafeEqual } from "crypto";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { storage } from "./storage";
@@ -103,6 +103,12 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   }
   if (safeTokenEqual(readAdminHeaderToken(req), ADMIN_TOKEN)) return next();
   res.status(403).json({ message: "Admin access required" });
+}
+
+/** Middleware: allow either an authenticated agent session or an admin token */
+function requireAgentOrAdmin(req: Request, res: Response, next: NextFunction) {
+  if (isAdminRequest(req) || getAgentSession(req)) return next();
+  res.status(401).json({ message: "Sign in as agent or manager" });
 }
 
 // Solflare-inspired agent default colors (yellow + dark accents)
@@ -552,12 +558,18 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // ── World background image ──────────────────────────────────────────────────
-  app.get("/api/world/background", async (_req, res) => {
+  app.get("/api/world/background", async (req, res) => {
     try {
       const result = await client.execute("SELECT value FROM settings WHERE key = 'world_background'");
       const row = result.rows[0];
       if (!row) return res.status(404).json({ message: "No background set" });
-      res.json({ imageData: row.value as string });
+      const value = row.value as string;
+      // ETag lets clients skip re-downloading the (large) blob when unchanged.
+      const etag = `"${createHash("sha1").update(value).digest("hex")}"`;
+      res.set("Cache-Control", "private, max-age=60");
+      res.set("ETag", etag);
+      if (req.headers["if-none-match"] === etag) return res.status(304).end();
+      res.json({ imageData: value });
     } catch {
       res.status(404).json({ message: "No background set" });
     }
@@ -1266,7 +1278,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // --- Agent Logs ---
-  app.get("/api/agent-logs", async (_req, res) => {
+  app.get("/api/agent-logs", requireAgentOrAdmin, async (_req, res) => {
     res.json(await storage.getAgentLogs());
   });
 
@@ -1277,7 +1289,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       res.json({ ok: true });
     });
 
-  app.get("/api/agent-logs/:agentId", async (req, res) => {
+  app.get("/api/agent-logs/:agentId", requireAgentOrAdmin, async (req, res) => {
     res.json(await storage.getAgentLogsByAgent(Number(req.params.agentId)));
   });
 

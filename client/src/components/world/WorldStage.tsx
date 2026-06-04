@@ -68,6 +68,8 @@ interface AgentSprite {
     back: Texture;
     rest: Texture;
   };
+  // Source data URL of the loaded custom sprite — used to detect live changes
+  customSpriteSrc?: string;
 }
 
 // ── Sprite texture helpers ─────────────────────────────────────────────────────
@@ -231,6 +233,8 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
   const cameraRef      = useRef({ x: -100, y: -50, dragging: false, lastX: 0, lastY: 0 });
   const agentDataRef   = useRef<AgentWorldData[]>(agentData);
   const tickerFnRef    = useRef<((t: Ticker) => void) | null>(null);
+  const roRef          = useRef<ResizeObserver | null>(null);
+  const loadedAssetsRef = useRef<Set<string>>(new Set());
 
   agentDataRef.current = agentData;
 
@@ -271,6 +275,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
     if (backgroundImageUrl) {
       // Custom background replaces procedural floor/wall/furniture/decor layers
       const bgTex = await Assets.load(backgroundImageUrl);
+      if (backgroundImageUrl.startsWith("data:")) loadedAssetsRef.current.add(backgroundImageUrl);
       const bg = new Sprite(bgTex);
       bg.width = WORLD_W;
       bg.height = WORLD_H;
@@ -303,6 +308,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
       if (d.agent.customSprite) {
         try {
           const textures = await makeCustomTextures(d.agent.customSprite);
+          loadedAssetsRef.current.add(d.agent.customSprite);
           customTextureMap.set(d.agent.id, textures);
         } catch (err) {
           console.warn(`Failed to load custom sprite for agent ${d.agent.id}:`, err);
@@ -316,7 +322,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
       roomCounts[d.state] = idx + 1;
       const slot = getSlot(d.state, idx);
       const sd   = makeAgentSprite(d, idx, base, states, customTextureMap.get(d.agent.id));
-      const sp: AgentSprite = { ...sd, x: slot.x, y: slot.y };
+      const sp: AgentSprite = { ...sd, x: slot.x, y: slot.y, customSpriteSrc: d.agent.customSprite ?? undefined };
       sp.container.x = slot.x;
       sp.container.y = slot.y;
       agentLayer.addChild(sp.container);
@@ -385,7 +391,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
               } else {
                 sp.body.texture = sp.customTextures ? sp.customTextures.front : idleTex(sheets.base, sp.variant);
                 sp.body.scale.set(sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale);
-                sp.body.anchor.set(0.5, 1);
+                sp.body.anchor.set(0.5, sp.customTextures ? CUSTOM_SPRITE.anchorY : 1);
                 sp.body.scale.x = sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale; // reset mirror
                 sp.label.y = 4;
               }
@@ -448,18 +454,26 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
       }
     });
     if (mountRef.current) ro.observe(mountRef.current);
+    roRef.current?.disconnect(); // disconnect any stale observer from a prior init
+    roRef.current = ro;
 
   }, [backgroundImageUrl]); // eslint-disable-line
 
   useEffect(() => {
     init();
     return () => {
+      roRef.current?.disconnect();
+      roRef.current = null;
       if (appRef.current && tickerFnRef.current) {
         appRef.current.ticker.remove(tickerFnRef.current);
       }
       appRef.current?.destroy(true);
       appRef.current = null;
+      sheetsRef.current = null;
       spritesRef.current.clear();
+      // Release any custom-sprite / background textures loaded from data URLs
+      loadedAssetsRef.current.forEach(url => { Assets.unload(url).catch(() => {}); });
+      loadedAssetsRef.current.clear();
     };
   }, [init]);
 
@@ -493,6 +507,34 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
       const sp = sprites.get(d.agent.id);
       if (!sp) return;
 
+      // ── Custom sprite changed live (upload / removal via SSE or poll) ────────
+      const incomingSrc = d.agent.customSprite ?? undefined;
+      if (incomingSrc !== sp.customSpriteSrc) {
+        sp.customSpriteSrc = incomingSrc;
+        if (incomingSrc) {
+          // Load new custom textures, then swap in (async, fire-and-forget)
+          makeCustomTextures(incomingSrc)
+            .then(tex => {
+              loadedAssetsRef.current.add(incomingSrc);
+              // Guard: agent may have changed again while loading
+              if (sp.customSpriteSrc !== incomingSrc) return;
+              sp.customTextures = tex;
+              const special = sp.isSpecialState;
+              sp.body.texture = special ? tex.rest : tex.front;
+              sp.body.scale.set(special ? CUSTOM_SPRITE.stateScale : CUSTOM_SPRITE.baseScale);
+              sp.body.anchor.set(0.5, special ? CUSTOM_SPRITE.anchorYState : CUSTOM_SPRITE.anchorY);
+            })
+            .catch(err => console.warn(`Failed to load custom sprite for agent ${d.agent.id}:`, err));
+        } else {
+          // Reverted to default procedural character
+          sp.customTextures = undefined;
+          const special = sp.isSpecialState;
+          sp.body.texture = special ? stateTex(sheets.states, sp.currentRoom, 0) : idleTex(sheets.base, sp.variant);
+          sp.body.scale.set(special ? CHAR_STATES.renderScale : CHAR_BASE.renderScale);
+          sp.body.anchor.set(0.5, special ? 0.85 : 1);
+        }
+      }
+
       const newRoom = d.state;
 
       // Needs to move? (not already walking, not already in target room)
@@ -516,7 +558,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
         // Switch immediately to walk sprite (direction set in ticker on first frame)
         sp.body.texture  = sp.customTextures ? sp.customTextures.front : walkTex(sheets.base, sp.variant, 0);
         sp.body.scale.set(sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale);
-        sp.body.anchor.set(0.5, 1);
+        sp.body.anchor.set(0.5, sp.customTextures ? CUSTOM_SPRITE.anchorY : 1);
         sp.body.scale.x  = sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale;
         sp.label.y       = 4;
       }
