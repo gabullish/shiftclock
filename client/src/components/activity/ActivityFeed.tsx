@@ -35,6 +35,13 @@ export function ActivityFeed() {
       setConfirmClear(false);
       toast({ title: "Activity log cleared" });
     },
+    onError: (err) => {
+      toast({
+        title: "Couldn't clear activity log",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
   });
 
   const sorted = useMemo(

@@ -254,11 +254,18 @@ export function shiftProgress(
   const actDur   = shiftDuration(activeStart, normActiveEnd);
   if (baseDur <= 0) return { pct: 0, otPct: 0 };
 
-  // Compute elapsed hours within the active window
+  // Compute elapsed hours within the active window. utcHour is the current
+  // hour-of-day (0–24); map it into the shift's frame so progress is monotonic:
+  //   • activeStart < 0  → shift was pulled into the previous day. The pre-midnight
+  //     hours (utcHour ≥ 24+activeStart) belong to the negative part of the frame.
+  //   • overnight tail    → after midnight on an end>24 shift, shift utcHour up a day.
   let elapsed = 0;
-  const normHour = utcHour < activeStart && normActiveEnd > 24
-    ? utcHour + 24  // we're in the next-day tail
-    : utcHour;
+  let normHour = utcHour;
+  if (activeStart < 0 && utcHour >= 24 + activeStart) {
+    normHour = utcHour - 24; // pre-midnight portion of a previous-day-extended shift
+  } else if (utcHour < activeStart && normActiveEnd > 24) {
+    normHour = utcHour + 24; // next-day tail of an overnight shift
+  }
 
   const normAS  = activeStart;
   const normAE  = normActiveEnd;

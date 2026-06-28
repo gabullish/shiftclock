@@ -15,7 +15,7 @@
  *   sprites.config.ts / rooms.config.ts — data definitions
  */
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import {
   Application, Container, Sprite, Text, Texture, Rectangle, Assets, Ticker,
 } from "pixi.js";
@@ -236,6 +236,7 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
   const roRef          = useRef<ResizeObserver | null>(null);
   const loadedAssetsRef = useRef<Set<string>>(new Set());
   const initGenRef     = useRef(0);   // bumped on every init/cleanup to cancel stale async inits
+  const [initFailed, setInitFailed] = useState(false);
 
   agentDataRef.current = agentData;
 
@@ -247,16 +248,26 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
     // Capture this init's generation. If cleanup or another init runs while we
     // await below, the generation changes and we abort + tear down what we built.
     const myGen = ++initGenRef.current;
+    setInitFailed(false);
 
     const app = new Application();
-    await app.init({
-      width:           mountRef.current.clientWidth || 800,
-      height:          mountRef.current.clientHeight || 600,
-      backgroundColor: 0x0c0f17,
-      resolution:      window.devicePixelRatio || 1,
-      autoDensity:     true,
-      antialias:       false, // crisp pixel art
-    });
+    try {
+      await app.init({
+        width:           mountRef.current.clientWidth || 800,
+        height:          mountRef.current.clientHeight || 600,
+        backgroundColor: 0x0c0f17,
+        resolution:      window.devicePixelRatio || 1,
+        autoDensity:     true,
+        antialias:       false, // crisp pixel art
+      });
+    } catch (err) {
+      // No WebGL/WebGPU context (headless, blocklisted GPU, too many contexts).
+      // Show a friendly fallback instead of an unhandled rejection + blank canvas.
+      console.error("WorldStage: renderer init failed", err);
+      app.destroy(true);
+      if (myGen === initGenRef.current) setInitFailed(true);
+      return;
+    }
     if (myGen !== initGenRef.current || !mountRef.current) {
       app.destroy(true); // superseded while initializing — discard this app
       return;
@@ -576,6 +587,20 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
       }
     });
   }, [agentData]);
+
+  if (initFailed) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-background px-6 text-center">
+        <div className="max-w-sm">
+          <p className="text-sm font-medium text-foreground">World view unavailable</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            This device or browser couldn't start the graphics canvas. The rest of ShiftClock works normally —
+            use the Command, Overtime, or Agents views.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 export const useSoothingSounds = () => {
   const ctx = useRef<AudioContext | null>(null);
@@ -7,8 +7,24 @@ export const useSoothingSounds = () => {
     if (!ctx.current) {
       ctx.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
+    // Browsers start the context "suspended" until a user gesture and may
+    // auto-suspend it later. Resume so sounds triggered outside a direct click
+    // (e.g. the break-start beep fired from a setTimeout) aren't silently dropped.
+    if (ctx.current.state === 'suspended') {
+      void ctx.current.resume();
+    }
     return ctx.current;
   };
+
+  // Release the AudioContext on unmount — browsers cap concurrent contexts (~6),
+  // and each page mounting this hook would otherwise leak one until page reload.
+  useEffect(() => {
+    return () => {
+      const c = ctx.current;
+      ctx.current = null;
+      if (c && c.state !== 'closed') void c.close();
+    };
+  }, []);
 
   const playSoftClick = () => {
     const c = getCtx();

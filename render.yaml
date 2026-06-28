@@ -2,8 +2,24 @@ services:
   - type: web
     name: shiftclock
     runtime: node
-    buildCommand: npm install --omit=dev
+    # --include=dev forces build-only deps (vite, tailwind plugins, esbuild config)
+    # to install even though NODE_ENV=production would normally skip them, then
+    # builds the client + server bundle fresh so deploys never serve a stale dist.
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
+      # Required: password for manager (admin) mode. Set the value in the Render dashboard.
+      - key: ADMIN_TOKEN
+        sync: false
+      # Optional: enables agent login mode. Omit to disable agent accounts.
+      - key: AGENT_PASSWORD
+        sync: false
+      # Persistent database (Turso / libSQL). REQUIRED for data to survive deploys
+      # and restarts — Render's local disk is ephemeral, so without these the DB
+      # resets (and re-seeds default agents) on every redeploy. Set both in the dashboard.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false

@@ -157,6 +157,9 @@ export default function Profiles() {
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       toast({ title: "Days off updated — click Apply to reassign shifts" });
     },
+    onError: (err: any) => {
+      toast({ title: "Failed to update days off", description: err?.message ?? "Unknown error", variant: "destructive" });
+    },
   });
 
   const [offTogglePending, setOffTogglePending] = useState<Set<number>>(new Set());
@@ -215,6 +218,9 @@ export default function Profiles() {
       });
       queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
       toast({ title: "Week template applied" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to apply week template", description: err?.message ?? "Unknown error", variant: "destructive" });
     },
   });
 

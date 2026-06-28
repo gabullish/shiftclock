@@ -30,8 +30,8 @@ Real-time shift management for 24/7 operations teams. Live 24h clock, horizontal
 
 ```
 Frontend: React 18, TypeScript, Vite, TailwindCSS, TanStack Query v5, Radix UI, Wouter
-Backend:  Express 5, SQLite (better-sqlite3), Drizzle ORM, Zod
-Deploy:   Railway (auto-deploy from main)
+Backend:  Express 5, libSQL/SQLite, Drizzle ORM, Zod
+Deploy:   Render (auto-deploy from main)
 ```
 
 ---
@@ -40,13 +40,13 @@ Deploy:   Railway (auto-deploy from main)
 
 | Variable | Required | Description |
 |---|---|---|
-| `ADMIN_PASSWORD` | Yes | Password for admin mode. Set on Railway or in `.env`. |
-| `AGENT_PASSWORD` | No | Enables agent login mode. Omit to disable agent accounts. |
-| `DATABASE_URL` | No | SQLite file path. Defaults to `./data/shiftclock.db`. |
-| `SESSION_SECRET` | No | Express session secret. Defaults to a random value (sessions reset on restart). |
+| `ADMIN_TOKEN` | Yes | Password for manager (admin) mode. Mutating admin endpoints return 500 until set. |
+| `AGENT_PASSWORD` | No | Enables agent login mode. Omit to disable agent accounts (view-only + admin still work). |
+| `TURSO_DATABASE_URL` | Prod | libSQL/Turso database URL. If unset, falls back to a local file (`file:./data.db`). **Required in production** on hosts with ephemeral disk (e.g. Render) so data survives restarts. |
+| `TURSO_AUTH_TOKEN` | Prod | Auth token for the Turso database. Required alongside `TURSO_DATABASE_URL`. |
 | `PORT` | No | HTTP port. Defaults to `5000`. |
 
-Copy `.env.example` to `.env` and fill in at minimum `ADMIN_PASSWORD`.
+Copy `.env.example` to `.env` and fill in at minimum `ADMIN_TOKEN`.
 
 ---
 
@@ -71,7 +71,7 @@ npm run db:push             # push schema changes to SQLite
 
 ## Auth flow
 
-1. **Admin** — enters `ADMIN_PASSWORD` on the lock screen. A hashed token is stored in `localStorage`. No sessions, no server state. Clears on sign-out.
+1. **Admin** — enters `ADMIN_TOKEN` on the lock screen. The token is stored in `sessionStorage` (cleared when the tab closes) and sent as an `x-admin-token` header. No server-side sessions. Sign out from the sidebar to drop back to the lock screen.
 
 2. **Agent** — enters `AGENT_PASSWORD` + selects their name. Server validates and returns a short-lived token (`x-agent-session` header). Token is stored in `sessionStorage` and expires after 4 minutes of inactivity. Agents can only edit their own shift lane and toggle their own break.
 
@@ -79,13 +79,23 @@ npm run db:push             # push schema changes to SQLite
 
 ---
 
-## Railway deployment
+## Deployment (Render)
 
-ShiftClock stores its SQLite database at the path set by `DATABASE_URL` (default `./data/shiftclock.db`).
+`render.yaml` builds the app fresh on every deploy (`npm run build`) and runs `npm start`. The build output (`dist/`) is **not** committed — the platform regenerates it, so a stale checked-in bundle can never silently override the source.
 
-**To persist data across deploys**, attach a Railway Volume and mount it at `/app/data`. Set `DATABASE_URL=/app/data/shiftclock.db` in Railway environment variables.
+### Make data persist (important)
 
-Without a volume, the database resets on every redeploy (fine for testing, bad for production).
+Render's local disk is **ephemeral** — anything written to `file:./data.db` is wiped on every redeploy and restart, and the app re-seeds 13 default agents. For real data, point ShiftClock at a free hosted [Turso](https://turso.tech) database:
+
+1. Create a free Turso database (one-time, via Turso's dashboard or CLI). You'll get a URL like `libsql://your-db.turso.io` and an auth token.
+2. In the Render dashboard → your service → **Environment**, set:
+   - `TURSO_DATABASE_URL` = the `libsql://…` URL
+   - `TURSO_AUTH_TOKEN` = the auth token
+   - `ADMIN_TOKEN` = your chosen manager password
+   - `AGENT_PASSWORD` = (optional) agent-mode password
+3. Redeploy. The app creates its tables automatically on first boot (`initDb`).
+
+> Alternative: a Render **persistent disk** (paid) mounted as the working dir also works with the default local-file DB — but Turso is free and survives across restarts with no disk to manage.
 
 ---
 

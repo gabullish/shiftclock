@@ -30,10 +30,6 @@ import type { Agent } from "@shared/schema";
 import { useQuery } from "@tanstack/react-query";
 import { connectSSE } from "@/lib/queryClient";
 
-// Re-export so legacy imports (e.g. `from "@/App"`) keep working during migration.
-// TODO: remove once all consumers point to @/hooks/use-agent-session
-export { AgentSessionContext, useAgentSession } from "@/hooks/use-agent-session";
-
 const IDLE_TIMEOUT_MS = 4 * 60 * 1000;
 const IDLE_EVENTS: Array<keyof WindowEventMap> = ["click", "keydown", "pointerdown", "scroll", "input"];
 
@@ -169,7 +165,7 @@ function AgentSelectorPopup({
   onSelected: (session: AgentSession) => void;
   onBack: () => void;
 }) {
-  const { data: agents = [] } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
+  const { data: agents = [], isLoading: agentsLoading, isError: agentsError } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const [isLoading, setIsLoading] = useState(false);
 
   const selectAgent = async (agent: Agent) => {
@@ -195,6 +191,15 @@ function AgentSelectorPopup({
           </div>
         </div>
         <div className="space-y-1 max-h-80 overflow-y-auto">
+          {agentsLoading && (
+            <p className="text-xs text-muted-foreground px-3 py-2">Loading agents…</p>
+          )}
+          {agentsError && !agentsLoading && (
+            <p className="text-xs text-destructive px-3 py-2">Couldn't load agents. Check your connection and go back to try again.</p>
+          )}
+          {!agentsLoading && !agentsError && agents.length === 0 && (
+            <p className="text-xs text-muted-foreground px-3 py-2">No agents exist yet. Ask a manager to add agents first.</p>
+          )}
           {agents.map((agent) => (
             <button
               key={agent.id}
@@ -256,9 +261,10 @@ export default function App() {
 
   // Idle timeout for agent mode — every user interaction resets a 4-minute countdown.
   // When the timer fires, the session is cleared in both sessionStorage and React state,
-  // dropping the user back to view-only. We also touch sessionStorage on each activity
-  // so that tabs opened in the background don't silently expire while the user is active
-  // in another tab (both tabs share sessionStorage and both reset the lastActivity stamp).
+  // dropping the user back to view-only. We also touch the sessionStorage lastActivity
+  // stamp on each interaction so a reload mid-session doesn't immediately expire.
+  // Note: sessionStorage is per-tab (not shared across tabs), so each tab tracks its
+  // own idle countdown independently.
   const resetIdle = useCallback(() => {
     if (accessMode !== "agent") return;
     touchAgentSession();
@@ -303,15 +309,20 @@ export default function App() {
 
   return (
     <AgentSessionContext.Provider value={agentSession}>
-      <AdminProvider>
+      <AdminProvider value={accessMode === "admin"}>
         <Router hook={useHashLocation}>
           <div className="flex h-dvh overflow-hidden bg-background">
             <Sidebar
               agentSession={agentSession}
+              isAdmin={accessMode === "admin"}
               isOnBreak={isOnBreak}
               onAgentSignOff={() => {
                 clearAgentSession();
                 setAgentSession(null);
+                setAccessMode(null);
+              }}
+              onAdminSignOff={() => {
+                clearAdminToken();
                 setAccessMode(null);
               }}
             />

@@ -136,7 +136,11 @@ export default function Dashboard() {
     params.set("day", String(record.dayOfWeek));
     if (record.coverStartUtc != null) params.set("focusHour", String(record.coverStartUtc));
     params.set("focusAgentId", String(record.agentId));
-    window.location.href = `${window.location.pathname}?${params.toString()}#/overtime`;
+    // Client-side navigation (no full reload): stash the deep-link params in the
+    // query string via history, then change only the hash so wouter re-renders
+    // the target route in place — keeping the SPA cache/SSE connection intact.
+    window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash || "#/"}`);
+    window.location.hash = "#/overtime";
   };
 
   const { data: agents    = NO_AGENTS } = useQuery<Agent[]>({ queryKey: ["/api/agents"], refetchInterval: 30_000, staleTime: Infinity });
@@ -163,11 +167,17 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
     },
+    onError: (error) => {
+      toast({ title: "Failed to reset day", description: errorMessageFromUnknown(error), variant: "destructive" });
+    },
   });
 
   const breakStartMutation = useMutation({
     mutationFn: (agentId: number) => apiRequest("POST", `/api/agents/${agentId}/break/start`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agents"] }),
+    onError: (error) => {
+      toast({ title: "Failed to start break", description: errorMessageFromUnknown(error), variant: "destructive" });
+    },
   });
 
   const breakEndMutation = useMutation({
@@ -176,6 +186,9 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
     },
+    onError: (error) => {
+      toast({ title: "Failed to end break", description: errorMessageFromUnknown(error), variant: "destructive" });
+    },
   });
 
   const bulkDeleteOTMutation = useMutation({
@@ -183,6 +196,9 @@ export default function Dashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to delete overtime records", description: errorMessageFromUnknown(error), variant: "destructive" });
     },
   });
 
@@ -407,7 +423,9 @@ export default function Dashboard() {
   const zeroCoverageHours  = coverage.filter(c => c === 0).length;
   const gapRanges          = findGapRanges(coverage);
   const gapSlices          = expandGapRangesToSlices(gapRanges);
-  const peakCoverageHour   = coverage.indexOf(Math.max(...coverage));
+  // -1 when the day has zero coverage, so the KPI can show "—" instead of a
+  // misleading 00:00 (indexOf(0) === 0 on an all-zero array).
+  const peakCoverageHour   = Math.max(...coverage) > 0 ? coverage.indexOf(Math.max(...coverage)) : -1;
   const totalOvertimeHours = agentSummaries.reduce((a, s) => a + s.overtimeHours, 0);
   // Only count hours that haven't been claimed yet as "up for grabs"
   const totalReleasedHours = agentSummaries.reduce((a, s) => a + Math.max(0, s.releasedHours - s.coveredOutHours), 0);
@@ -939,7 +957,7 @@ export default function Dashboard() {
               <div className="w-full md:w-64 lg:w-72 xl:w-80 flex flex-col border-t md:border-t-0 md:border-l border-border overflow-y-auto shrink-0 md:min-h-0 max-h-[42vh] md:max-h-none">
                 <div className="grid grid-cols-3 border-b border-border shrink-0">
                   <KpiCell label="No Cover" value={`${zeroCoverageHours}h`} warn={zeroCoverageHours > 0} />
-                  <KpiCell label="Peak Hr"  value={peakCoverageHour.toString().padStart(2, "0") + ":00"} />
+                  <KpiCell label="Peak Hr"  value={peakCoverageHour >= 0 ? peakCoverageHour.toString().padStart(2, "0") + ":00" : "—"} />
                   <KpiCell label="Overtime" value={totalOvertimeHours > 0 ? `+${formatDuration(totalOvertimeHours)}` : "+0"} accent={totalOvertimeHours > 0} />
                 </div>
 

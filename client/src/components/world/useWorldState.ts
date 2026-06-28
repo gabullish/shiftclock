@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Agent, Shift } from "@shared/schema";
 import type { RoomId } from "./rooms.config";
 import { getAgentOffDays } from "@/lib/dashboardUtils";
+import { getQueryFn } from "@/lib/queryClient";
 
 export interface AgentWorldData {
   agent: Agent;
@@ -46,10 +47,16 @@ export function useWorldState(): AgentWorldData[] {
     queryKey: ["/api/shifts"],
     refetchInterval: 15_000,
   });
-  const { data: logs = [] } = useQuery<any[]>({
+  // /api/agent-logs requires an agent or admin session. The world view is also
+  // reachable in view-only mode, so use on401:"returnNull" to degrade gracefully
+  // (no sick/vacation room states for view-only) instead of throwing and breaking
+  // the whole page.
+  const { data: logsData } = useQuery<any[] | null>({
     queryKey: ["/api/agent-logs"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
     refetchInterval: 10_000,
   });
+  const logs = logsData ?? [];
 
   const today = new Date().toISOString().split("T")[0];
 

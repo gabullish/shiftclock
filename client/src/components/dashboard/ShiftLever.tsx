@@ -12,6 +12,7 @@ import {
   formatUtcHour,
   formatDuration,
   normaliseEndUtc,
+  displayHour,
   MAX_LEVER_DRIFT_HOURS,
   MIN_SHIFT_DURATION_HOURS,
   MAX_OT_EXTENSION_HOURS,
@@ -76,8 +77,16 @@ export function ShiftLever({
     const guardedStart       = Math.max(startUtc - MAX_LEVER_DRIFT_HOURS, start);
     const guardedEnd         = Math.min(otCap, Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, end));
     const durationCappedEnd  = Math.min(guardedEnd, guardedStart + maxTotalActive);
-    const finalEnd           = Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, durationCappedEnd);
-    return clampShiftWindow(guardedStart, finalEnd);
+    let finalEnd             = Math.max(guardedStart + MIN_SHIFT_DURATION_HOURS, durationCappedEnd);
+    let finalStart           = guardedStart;
+    // Keep the active window on the clock — the server rejects activeEnd <= 0.
+    // An aggressive early-start drag can collapse the end past midnight; slide the
+    // window forward so the end stays valid without exceeding the duration cap.
+    if (finalEnd < MIN_SHIFT_DURATION_HOURS) {
+      finalEnd   = MIN_SHIFT_DURATION_HOURS;
+      finalStart = Math.max(finalStart, finalEnd - maxTotalActive);
+    }
+    return clampShiftWindow(finalStart, finalEnd);
   };
 
   const commitWindow = (start: number, end: number) => {
@@ -102,17 +111,29 @@ export function ShiftLever({
     commitWindow(activeStart + delta, activeEnd);
   };
 
-  const setBreakAt = (nextBreak: number | null) => {
+  // Breaks are STORED as a 0–24 display hour (the server normalises and both the
+  // clock and timeline render in that frame). Internally we clamp/move in the
+  // shift's ABSOLUTE frame (which can run 24–48 for overnight shifts), then wrap
+  // to a display hour on save. breakToAbsolute reverses that for stored values.
+  const breakToAbsolute = (storedBreak: number) => {
+    let abs = storedBreak;
+    while (abs < activeStart)       abs += 24;
+    while (abs >= activeStart + 24) abs -= 24;
+    return abs;
+  };
+
+  const setBreakAt = (nextBreakAbs: number | null) => {
     if (!canEdit) return;
-    if (nextBreak == null) { onBreakChange(shift.id, null); return; }
+    if (nextBreakAbs == null) { onBreakChange(shift.id, null); return; }
     const min     = activeStart;
     const max     = activeEnd - 0.5;
     if (max < min) return;
-    const snapped = Math.round(nextBreak * 2) / 2;
-    onBreakChange(shift.id, Math.max(min, Math.min(max, snapped)));
+    const snapped = Math.round(nextBreakAbs * 2) / 2;
+    const clamped = Math.max(min, Math.min(max, snapped));
+    onBreakChange(shift.id, displayHour(clamped));
   };
 
-  const moveBreakBy    = (delta: number) => { if (shift.breakStart != null) setBreakAt(shift.breakStart + delta); };
+  const moveBreakBy    = (delta: number) => { if (shift.breakStart != null) setBreakAt(breakToAbsolute(shift.breakStart) + delta); };
   const setBreakDefault = () => {
     const duration = Math.max(0.5, activeEnd - activeStart);
     setBreakAt(activeStart + Math.max(0, (duration - 0.5) / 2));

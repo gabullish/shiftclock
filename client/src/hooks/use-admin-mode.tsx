@@ -1,9 +1,4 @@
-import { createContext, useContext, useMemo } from "react";
-import { getEffectiveAdminToken } from "@/lib/adminAccess";
-
-function isAdminAuthenticated(): boolean {
-  return Boolean(getEffectiveAdminToken());
-}
+import { createContext, useContext } from "react";
 
 export const AdminContext = createContext<boolean>(false);
 
@@ -11,8 +6,9 @@ export function useAdminMode(): boolean {
   return useContext(AdminContext);
 }
 
-// Provider reads once on mount (token doesn't change during session)
-export function AdminProvider({ children }: { children: React.ReactNode }) {
-  const isAdmin = useMemo(() => isAdminAuthenticated(), []);
-  return <AdminContext.Provider value={isAdmin}>{children}</AdminContext.Provider>;
+// Admin status is owned by <App> (it tracks accessMode) and passed in, so the
+// whole tree reacts immediately to sign-in / sign-out instead of reading the
+// token once on mount.
+export function AdminProvider({ value, children }: { value: boolean; children: React.ReactNode }) {
+  return <AdminContext.Provider value={value}>{children}</AdminContext.Provider>;
 }

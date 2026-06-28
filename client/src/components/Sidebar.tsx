@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { AlignLeft, CalendarRange, CircleDot, Clock, Users, LayoutDashboard, ScrollText, LogOut, Globe } from "lucide-react";
+import { AlignLeft, CalendarRange, CircleDot, Clock, Users, LayoutDashboard, ScrollText, LogOut, Globe, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentSession } from "@/lib/agentAccess";
 
@@ -21,13 +21,23 @@ const VIEW_ITEMS = [
 export default function Sidebar({
   agentSession,
   onAgentSignOff,
+  isAdmin,
+  onAdminSignOff,
   isOnBreak,
 }: {
   agentSession?: AgentSession | null;
   onAgentSignOff?: () => void;
+  isAdmin?: boolean;
+  onAdminSignOff?: () => void;
   isOnBreak?: boolean;
 }) {
   const [location] = useLocation();
+
+  // The Activity tab requires an agent or manager session (the underlying
+  // /api/agent-logs route is auth-gated). Hide it for view-only users instead
+  // of linking them to a page that silently falls back to the Overtime tab.
+  const canSeeActivity = Boolean(isAdmin || agentSession);
+  const visibleNavItems = navItems.filter(item => item.href !== "/activity" || canSeeActivity);
 
   const [viewMode, setViewMode] = useState<"clock" | "timeline">(
     () => (localStorage.getItem("shiftclock:viewMode") as "clock" | "timeline") ?? "clock"
@@ -75,7 +85,7 @@ export default function Sidebar({
 
       {/* Nav */}
       <nav className="flex-1 flex flex-col gap-1 p-2 lg:p-3 pt-3">
-        {navItems.map(({ href, label, icon: Icon }) => (
+        {visibleNavItems.map(({ href, label, icon: Icon }) => (
           <React.Fragment key={href}>
             <Link
               href={href}
@@ -120,6 +130,8 @@ export default function Sidebar({
       <div className="p-2 sm:p-3 border-t border-border space-y-2">
         {agentSession ? (
           <AgentIndicator session={agentSession} onSignOff={onAgentSignOff} isOnBreak={isOnBreak} />
+        ) : isAdmin ? (
+          <AdminIndicator onSignOff={onAdminSignOff} />
         ) : (
           <LiveUTCClock />
         )}
@@ -159,6 +171,29 @@ function AgentIndicator({ session, onSignOff, isOnBreak }: { session: AgentSessi
   );
 }
 
+
+function AdminIndicator({ onSignOff }: { onSignOff?: () => void }) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <ShieldCheck size={14} className="shrink-0 text-primary" />
+      <div className="hidden lg:flex flex-1 items-center justify-between min-w-0 gap-1">
+        <div className="min-w-0">
+          <p className="text-[10px] leading-none font-semibold truncate text-primary">MANAGER</p>
+          <p className="text-xs font-medium text-foreground truncate mt-0.5">Full access</p>
+        </div>
+      </div>
+      {onSignOff && (
+        <button
+          onClick={onSignOff}
+          title="Sign out of manager mode"
+          className="shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+        >
+          <LogOut size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
 
 function LiveUTCClock() {
   const [time, setTime] = React.useState(new Date());

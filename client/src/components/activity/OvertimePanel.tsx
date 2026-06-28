@@ -101,6 +101,13 @@ export function OvertimePanel({
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
       queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
     },
+    onError: (err) => {
+      toast({
+        title: "Couldn't update overtime status",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
   });
 
   const claimMutation = useMutation({
@@ -181,6 +188,13 @@ export function OvertimePanel({
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
       setConfirmClear(false);
       toast({ title: "Overtime log cleared" });
+    },
+    onError: (err) => {
+      toast({
+        title: "Couldn't clear overtime log",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
     },
   });
 
@@ -291,7 +305,10 @@ export function OvertimePanel({
     params.set("scope", "multi");
     params.set("focusHour", String(focusHour));
     params.set("focusAgentId", String(rec.agentId));
-    window.location.href = `${window.location.pathname}?${params.toString()}#/`;
+    // Client-side navigation (no full reload): stash params in the query string,
+    // then change only the hash so wouter re-renders the dashboard in place.
+    window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash || "#/overtime"}`);
+    window.location.hash = "#/";
   };
 
   return (
