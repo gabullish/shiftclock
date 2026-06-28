@@ -922,7 +922,10 @@ export default function Dashboard() {
           ) : (
             /* ── Clock mode: centred layout + right panel ── */
             <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
-              <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 overflow-hidden min-w-0 relative min-h-[220px] md:min-h-0">
+              <div className="flex-1 flex flex-col items-center overflow-y-auto overscroll-contain p-3 sm:p-4 min-w-0 relative min-h-[220px] md:min-h-0">
+                {/* m-auto centres the clock+chips when they fit, and allows scrolling
+                    (instead of overlapping) when the viewport is short. */}
+                <div className="m-auto flex flex-col items-center gap-3 w-full">
                 {!hasShiftsToday ? (
                   <EmptyState
                     isWeekend={isWeekend}
@@ -955,7 +958,7 @@ export default function Dashboard() {
                 )}
 
                 {hasShiftsToday && (
-                  <div className="flex flex-wrap gap-1.5 justify-center mt-3 max-w-2xl" style={{ pointerEvents: "none" }}>
+                  <div className="flex flex-wrap gap-1.5 justify-center max-w-2xl w-full">
                     <button onClick={toggleAll}
                       className="text-xs px-2.5 py-1 min-h-[30px] rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all flex items-center"
                       style={{ pointerEvents: "auto" }}>
@@ -993,6 +996,7 @@ export default function Dashboard() {
                     })}
                   </div>
                 )}
+                </div>
               </div>
 
               {/* Right panel */}

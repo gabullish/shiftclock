@@ -85,13 +85,20 @@ export function ClockVisualizer({
 
   const gapRanges = findGapRanges(coverage);
 
+  // Frame the viewBox around the FULL drawn content (rings + ticks + labels reach
+  // ~HEAT_R+35 from centre), so the SVG's layout box equals its visual footprint.
+  // Without this the clock overflowed its box and overlapped the agent chips below.
+  const VB_PAD  = HEAT_R + 36;
+  const VB_MIN  = CX - VB_PAD;
+  const VB_SIZE = VB_PAD * 2;
+
   return (
     <div className="relative flex items-center justify-center w-full">
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${SIZE} ${SIZE}`}
+        viewBox={`${VB_MIN} ${VB_MIN} ${VB_SIZE} ${VB_SIZE}`}
         className="overflow-visible"
-        style={{ width: `min(${SIZE}px, 100%)`, height: "auto", filter: "drop-shadow(0 0 30px rgba(0,0,0,0.8))" }}
+        style={{ width: `min(${VB_SIZE}px, 100%, 62vh)`, height: "auto", filter: "drop-shadow(0 0 30px rgba(0,0,0,0.8))" }}
         onMouseLeave={() => { setHighlighted(null); setTooltipInfo(null); }}
       >
         <circle cx={CX} cy={CY} r={HEAT_R + 4} fill="none" stroke="hsl(224 14% 16%)" strokeWidth="1" opacity="0.6" />
