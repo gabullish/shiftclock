@@ -24,6 +24,28 @@ export interface GapRange { start: number; end: number; }
 
 export interface GapSlice { startUtc: number; endUtc: number; }
 
+/** Whether a time slot is already over, happening now, or still upcoming. */
+export type Tense = "past" | "now" | "future";
+
+/**
+ * Classifies a slot on `date` (hours startUtc..endUtc) relative to the live UTC
+ * moment (`todayDate` + `utcHour`). Drives whether coverage is *claimed* (future/now,
+ * goes through the approval line) or *logged retroactively* (past, recorded as done).
+ */
+export function classifySlotTense(
+  date: string,
+  startUtc: number,
+  endUtc: number,
+  todayDate: string,
+  utcHour: number,
+): Tense {
+  if (date < todayDate) return "past";
+  if (date > todayDate) return "future";
+  if (endUtc <= utcHour) return "past";
+  if (startUtc > utcHour) return "future";
+  return "now";
+}
+
 export interface TooltipInfo {
   agent: Agent;
   shift: Shift;

@@ -29,6 +29,7 @@ import {
   findGapRanges, expandGapRangesToSlices,
   getAgentOffDays,
   errorMessageFromUnknown,
+  classifySlotTense,
   type LeverState, type TooltipInfo,
 } from "@/lib/dashboardUtils";
 import { KpiCell }             from "@/components/dashboard/KpiCell";
@@ -110,6 +111,8 @@ export default function Dashboard() {
 
   const todayDateStr = new Date().toISOString().slice(0, 10);
   const isSelectedDateToday = selectedDate === todayDateStr;
+  const dayTense: "past" | "today" | "future" =
+    selectedDate < todayDateStr ? "past" : selectedDate > todayDateStr ? "future" : "today";
   const canClaimCoverage = isAdmin || Boolean(agentSession);
 
   // Persist view mode so the sidebar can restore it on next mount
@@ -550,14 +553,18 @@ export default function Dashboard() {
       dayOfWeek: number;
       coverStartUtc?: number;
       coverEndUtc?: number;
+      retroactive?: boolean;
     }) =>
       apiRequest("POST", "/api/overtime/assign", body),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
       setAssignModal(null);
       playSuccess();
+      toast(variables?.retroactive
+        ? { title: "Retroactive coverage logged", description: "Recorded as completed and added to the activity log." }
+        : { title: "Added to the coverage line", description: "Waiting for manager approval." });
     },
     onError: (error) => {
       const message = errorMessageFromUnknown(error);
@@ -609,15 +616,10 @@ export default function Dashboard() {
       return d.toISOString().slice(0, 10);
     })() : selectedDate;
 
-    const isPast = claimDate < todayDateStr || (claimDate === todayDateStr && slotEnd <= utcHour);
+    const tense = classifySlotTense(claimDate, slotStart, slotEnd, todayDateStr, utcHour);
+    const isPast = tense === "past";
 
     if (!isAdmin && agentSession) {
-      if (isPast) {
-        toast({
-          title: "⚠️ Retroactive coverage",
-          description: "This slot is in the past. Logging it anyway for your records.",
-        });
-      }
       assignOvertimeMutation.mutate({
         fromShiftId: shift.id,
         toAgentId: agentSession.agentId,
@@ -626,6 +628,7 @@ export default function Dashboard() {
         dayOfWeek: claimDayOfWeek,
         coverStartUtc: slotStart,
         coverEndUtc: slotEnd,
+        retroactive: isPast,
       });
       return;
     }
@@ -648,17 +651,12 @@ export default function Dashboard() {
     if (assignOvertimeMutation.isPending) return;
     playSoftClick();
 
-    // Detect if this gap is entirely in the past:
-    // - any date before today, OR today with the gap end already passed
-    const isPast = date < todayDateStr || (isSelectedDateToday && endUtc <= utcHour);
+    // Past gaps are logged retroactively (recorded as done); now/future gaps open
+    // the claim line for manager approval.
+    const tense = classifySlotTense(date, startUtc, endUtc, todayDateStr, utcHour);
+    const isPast = tense === "past";
 
     if (!isAdmin && agentSession) {
-      if (isPast) {
-        toast({
-          title: "⚠️ Retroactive coverage",
-          description: "This gap is in the past. Logging it anyway for your records.",
-        });
-      }
       assignOvertimeMutation.mutate({
         toAgentId: agentSession.agentId,
         hours: endUtc - startUtc,
@@ -666,6 +664,7 @@ export default function Dashboard() {
         dayOfWeek,
         coverStartUtc: startUtc,
         coverEndUtc: endUtc,
+        retroactive: isPast,
       });
       return;
     }
@@ -854,6 +853,7 @@ export default function Dashboard() {
             <div className="flex-1 flex flex-col overflow-hidden min-h-0">
               <UnifiedTimeline
                 scope={isMulti ? "multi" : "day"}
+                dayTense={dayTense}
                 agents={agents}
                 allShifts={allShifts}
                 otRecords={otRecords}
@@ -905,6 +905,7 @@ export default function Dashboard() {
                     tooltipInfo={tooltipInfo}
                     setTooltipInfo={setTooltipInfo}
                     selectedDay={selectedDay}
+                    dayTense={dayTense}
                     agentSessionId={agentSession?.agentId ?? null}
                     onAssignOvertime={openAssignModal}
                     onAssignGap={openGapAssignModal}
@@ -1067,6 +1068,8 @@ export default function Dashboard() {
                     pendingClaims={pendingCoverageClaims}
                     agents={agents}
                     onOpenOvertime={openOvertimeForRecord}
+                    utcHour={utcHour}
+                    todayDate={todayDateStr}
                   />
                 </div>
               </div>
@@ -1086,6 +1089,7 @@ export default function Dashboard() {
             return allShifts.some(s => s.agentId === a.id && s.dayOfWeek === assignModal.dayOfWeek);
           })}
           onAssign={(toAgentId) => {
+            const retroactive = assignModal.isPast === true;
             if (assignModal.kind === "shift") {
               assignOvertimeMutation.mutate({
                 fromShiftId: assignModal.shift.id,
@@ -1095,6 +1099,7 @@ export default function Dashboard() {
                 dayOfWeek: assignModal.dayOfWeek,
                 coverStartUtc: assignModal.startUtc,
                 coverEndUtc: assignModal.endUtc,
+                retroactive,
               });
               return;
             }
@@ -1106,6 +1111,7 @@ export default function Dashboard() {
               dayOfWeek: assignModal.dayOfWeek,
               coverStartUtc: assignModal.startUtc,
               coverEndUtc: assignModal.endUtc,
+              retroactive,
             });
           }}
           onClose={() => setAssignModal(null)}

@@ -8,7 +8,7 @@ import {
   shiftDuration, displayHour, formatUtcHour, formatDuration,
   shiftLabel, getActiveClaimForShift, isCoverageClaim, shiftHasOverride,
 } from "@/lib/shiftUtils";
-import { findGapRanges, getUTCDay, type LeverState, type TooltipInfo } from "@/lib/dashboardUtils";
+import { findGapRanges, type LeverState, type TooltipInfo } from "@/lib/dashboardUtils";
 
 // ── SVG geometry helpers (only used here) ────────────────────────────────────
 function hourToAngle(hour: number) { return (hour / 24) * 360 - 90; }
@@ -40,7 +40,7 @@ function hexToRgba(hex: string, alpha: number) {
 export function ClockVisualizer({
   agents, shifts, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
   leverState, utcHour, coverage, otRecords,
-  tooltipInfo, setTooltipInfo, selectedDay, onAssignOvertime, onAssignGap, onOpenOvertime,
+  tooltipInfo, setTooltipInfo, selectedDay, dayTense, onAssignOvertime, onAssignGap, onOpenOvertime,
 }: {
   agents: Agent[]; shifts: Shift[]; isAdmin: boolean; agentSessionId: number | null; visible: Set<number>;
   highlighted: number | null; setHighlighted: (id: number | null) => void;
@@ -48,6 +48,7 @@ export function ClockVisualizer({
   coverage: number[]; otRecords: OvertimeLog[];
   tooltipInfo: TooltipInfo | null; setTooltipInfo: (v: TooltipInfo | null) => void;
   selectedDay: number;
+  dayTense: "past" | "today" | "future";
   onAssignOvertime: (shift: Shift, agent: Agent, freedHours: number, segStart?: number, segEnd?: number, segDayOffset?: number) => void;
   onAssignGap: (startUtc: number, endUtc: number) => void;
   onOpenOvertime: (record: OvertimeLog) => void;
@@ -61,8 +62,9 @@ export function ClockVisualizer({
   const HEAT_R = BASE_R + agents.length * (RING_W + GAP) + 10;
   const svgRef = useRef<SVGSVGElement>(null);
 
-  const todayUTCDay = getUTCDay();
-  const isToday     = selectedDay === todayUTCDay;
+  // dayTense is computed from the selected DATE (accurate across multiple weeks),
+  // unlike a weekday-only check which would treat any same-weekday as "today".
+  const isToday     = dayTense === "today";
   const now         = new Date();
   const secAngle    = (now.getUTCSeconds() / 60) * 360 - 90;
 
@@ -389,6 +391,23 @@ export function ClockVisualizer({
           );
         })}
 
+        {/* Past shadow — dims hours that have already elapsed so it's obvious what
+            is done vs. upcoming. Today: a wedge from 00:00 to the current hour.
+            A fully past day: the whole face. A future day: no shadow. Drawn above
+            the rings but below the hand + labels, and non-interactive. */}
+        {dayTense !== "future" && (() => {
+          const sweepTo = dayTense === "past" ? 24 : Math.min(24, Math.max(0, utcHour));
+          if (sweepTo <= 0) return null;
+          if (sweepTo >= 24) {
+            return <circle cx={CX} cy={CY} r={HEAT_R} fill="hsl(224 40% 3%)" fillOpacity={0.5} pointerEvents="none" />;
+          }
+          const p0   = polarToCartesian(CX, CY, HEAT_R, hourToAngle(0));
+          const pNow = polarToCartesian(CX, CY, HEAT_R, hourToAngle(sweepTo));
+          const largeArc = sweepTo > 12 ? 1 : 0;
+          const d = `M ${CX} ${CY} L ${p0.x} ${p0.y} A ${HEAT_R} ${HEAT_R} 0 ${largeArc} 1 ${pNow.x} ${pNow.y} Z`;
+          return <path d={d} fill="hsl(224 40% 3%)" fillOpacity={0.45} pointerEvents="none" />;
+        })()}
+
         {/* Seconds hand — thin ghost line, only on today */}
         {isToday && (() => {
           const secTip  = polarToCartesian(CX, CY, HEAT_R + 14, secAngle);
@@ -401,8 +420,8 @@ export function ClockVisualizer({
           );
         })()}
 
-        {/* UTC hour hand */}
-        {(() => {
+        {/* UTC hour hand — only on today; "now" has no meaning on a past/future day */}
+        {isToday && (() => {
           const angle = hourToAngle(utcHour);
           const tip   = polarToCartesian(CX, CY, HEAT_R + 12, angle);
           const base  = polarToCartesian(CX, CY, 10, angle);

@@ -1028,6 +1028,40 @@ export async function registerRoutes(httpServer: Server, app: Express) {
 
     const assignedHours = slotEndUtc - slotStartUtc;
 
+    // Retroactive path: the slot is in the PAST, so this records coverage that
+    // already happened rather than opening a claim line. No approval queue, no
+    // competition — write it straight as approved and log who recorded it.
+    // Allowed for agents and admins alike (the log captures accountability).
+    if (req.body.retroactive === true) {
+      const retroIso = new Date().toISOString();
+      const otLog = await storage.createOvertimeLog(toAgentId, date, {
+        overtimeHours: assignedHours,
+        coverStartUtc: slotStartUtc,
+        coverEndUtc: slotEndUtc,
+        origin,
+        fromShiftId: sourceShiftId,
+        dayOfWeek: resolvedDayOfWeek,
+        coveredByAgentId: sourceAgentId,
+        status: "approved",
+        statusUpdatedAt: retroIso,
+      });
+      await storage.createAgentLog({
+        agentId: toAgentId,
+        date,
+        type: "shift-claim",
+        coverPct: null,
+        coveredByAgentId: sourceAgentId,
+        notes: null,
+        createdAt: retroIso,
+        actionType: "retroactive-coverage",
+        description: sourceAgentName
+          ? `${toAgent.name} logged retroactive coverage of ${assignedHours.toFixed(1)}h from ${sourceAgentName}'s ${date} shift.`
+          : `${toAgent.name} logged retroactive coverage of ${assignedHours.toFixed(1)}h open-gap on ${date}.`,
+      });
+      broadcast(["overtime", "agent-logs"]);
+      return res.json({ ok: true, retroactive: true, overtimeLog: otLog });
+    }
+
     // Safeguard: agent cannot claim coverage that overlaps their own active shift hours
     if (!admin && sessionAgentId) {
       const claimingShifts = (await storage.getShifts()).filter(

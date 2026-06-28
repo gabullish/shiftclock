@@ -30,8 +30,10 @@ export function UnifiedTimeline({
   scope, agents, allShifts, otRecords, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, selectedDate, focusHour, onSelectDay,
   toggleVisible, toggleAll, onAssignOvertime, onAssignGap, onOpenOvertime,
+  dayTense,
 }: {
   scope: "day" | "multi";
+  dayTense: "past" | "today" | "future";
   agents: Agent[];
   allShifts: Shift[];
   otRecords: OvertimeLog[];
@@ -125,6 +127,14 @@ export function UnifiedTimeline({
   const nowCanvasPx = scope === "multi"
     ? ((todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex)) * 24 + utcHour) * PX_PER_HOUR
     : utcHour * PX_PER_HOUR;
+
+  // Width of the "past shadow" overlay that dims elapsed time. Multi-day uses the
+  // real now-line position (covers whole past days + today's elapsed hours). Day
+  // scope keys off the selected date's tense: whole canvas if the day is over,
+  // none if it's a future day, up to the current hour if it's today.
+  const pastShadowW = scope === "multi"
+    ? nowCanvasPx
+    : dayTense === "past" ? CANVAS_W : dayTense === "future" ? 0 : utcHour * PX_PER_HOUR;
 
   const gridHours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
 
@@ -569,6 +579,12 @@ export function UnifiedTimeline({
 
           {/* Canvas */}
           <div style={{ position: "relative", width: CANVAS_W, flexShrink: 0 }}>
+
+            {/* Past shadow — dims elapsed time so past vs. upcoming is obvious.
+                Above the bars (zIndex 5) but below the ruler (10) and now-line. */}
+            {pastShadowW > 0 && (
+              <div aria-hidden style={{ position: "absolute", top: 0, left: 0, width: pastShadowW, height: CANVAS_H, background: "hsl(224 40% 3% / 0.4)", zIndex: 5, pointerEvents: "none" }} />
+            )}
 
             {/* Ruler */}
             <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: RULER_H, zIndex: 10, borderBottom: "1px solid hsl(var(--border) / 0.6)" }}>

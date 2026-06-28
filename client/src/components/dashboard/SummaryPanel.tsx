@@ -3,7 +3,7 @@
 import { ExternalLink } from "lucide-react";
 import type { Agent, Shift, OvertimeLog } from "@shared/schema";
 import { formatDuration, formatUtcHour } from "@/lib/shiftUtils";
-import { formatWeekdayWithDate, type AgentSummary, type GapSlice } from "@/lib/dashboardUtils";
+import { formatWeekdayWithDate, classifySlotTense, type AgentSummary, type GapSlice } from "@/lib/dashboardUtils";
 
 export function SummaryPanel({
   agentSummaries,
@@ -19,6 +19,8 @@ export function SummaryPanel({
   pendingClaims,
   agents,
   onOpenOvertime,
+  utcHour,
+  todayDate,
 }: {
   agentSummaries: AgentSummary[];
   selectedDay: number;
@@ -33,6 +35,8 @@ export function SummaryPanel({
   pendingClaims: OvertimeLog[];
   agents: Agent[];
   onOpenOvertime: (record: OvertimeLog) => void;
+  utcHour: number;
+  todayDate: string;
 }) {
   const agentMap      = new Map<number, Agent>(agents.map(a => [a.id, a]));
   const coveredByName = (id: number | null) => (id != null ? agentMap.get(id)?.name : null);
@@ -50,15 +54,21 @@ export function SummaryPanel({
           </p>
           {canClaimCoverage && gapSlices.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {gapSlices.slice(0, 8).map((gap) => (
-                <button
-                  key={`${gap.startUtc}-${gap.endUtc}`}
-                  onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
-                  className="text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"
-                >
-                  {"Join line "}{formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
-                </button>
-              ))}
+              {gapSlices.slice(0, 8).map((gap) => {
+                const past = classifySlotTense(selectedDate, gap.startUtc, gap.endUtc, todayDate, utcHour) === "past";
+                return (
+                  <button
+                    key={`${gap.startUtc}-${gap.endUtc}`}
+                    onClick={() => onAssignGap(gap.startUtc, gap.endUtc)}
+                    title={past ? "Record who covered this past gap" : "Open this gap for coverage"}
+                    className={past
+                      ? "text-[10px] px-2 py-1 rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-300/90 hover:bg-amber-500/15 transition-colors"
+                      : "text-[10px] px-2 py-1 rounded-md border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/15 transition-colors"}
+                  >
+                    {past ? "Log " : "Open line "}{formatUtcHour(gap.startUtc)}-{formatUtcHour(gap.endUtc)}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

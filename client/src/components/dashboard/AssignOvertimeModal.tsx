@@ -48,7 +48,7 @@ export function AssignOvertimeModal({ source, agents, onAssign, onClose }: {
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div>
-            <p className="text-sm font-semibold">Assign Overtime</p>
+            <p className="text-sm font-semibold">{source.isPast ? "Log Retroactive Coverage" : "Assign Coverage"}</p>
             <p className="text-[11px] text-muted-foreground mt-0.5">
               {source.kind === "shift" ? (
                 <>
@@ -77,7 +77,7 @@ export function AssignOvertimeModal({ source, agents, onAssign, onClose }: {
         )}
         <div className="p-2 max-h-64 overflow-y-auto">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider px-2 pb-1.5">
-            Select an agent to receive this overtime
+            {source.isPast ? "Select who actually covered this" : "Select an agent to receive this overtime"}
           </p>
           {agents.length === 0 ? (
             <p className="text-[11px] text-muted-foreground px-3 py-4 text-center">
