@@ -1342,7 +1342,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(400).json({ message: "date must be YYYY-MM-DD" });
     }
 
-    const ALLOWED_LOG_TYPES = ["sick", "vacation", "partial", "overtime-taken", "shift-claim", "shift-claim-cancelled", "overtime-status", "schedule_change", "break-start", "break-end"] as const;
+    const ALLOWED_LOG_TYPES = ["sick", "vacation", "partial", "overtime-taken", "shift-claim", "shift-claim-cancelled", "overtime-status", "schedule_change", "break", "break-start", "break-end"] as const;
     if (!ALLOWED_LOG_TYPES.includes(type)) {
       return res.status(400).json({ message: `Invalid log type. Allowed: ${ALLOWED_LOG_TYPES.join(", ")}` });
     }
