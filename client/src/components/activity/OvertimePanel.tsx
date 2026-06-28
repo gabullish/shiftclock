@@ -437,7 +437,7 @@ export function OvertimePanel({
                           <button
                             onClick={() => void handleUndoLine(rec.id)}
                             disabled={activeUndoId === rec.id || cancelClaimMutation.isPending}
-                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive transition-colors"
+                            className="flex items-center gap-1 text-[10px] font-medium px-2.5 py-1 rounded-md border border-border bg-card text-muted-foreground hover:text-destructive hover-elevate active-elevate-2 transition-colors"
                             title="Cancel your claim"
                           >
                             <Undo2 size={10} /> {activeUndoId === rec.id ? "Undoing…" : "Undo"}
@@ -446,7 +446,7 @@ export function OvertimePanel({
                           <button
                             onClick={() => void handleJoinLine(rec.id)}
                             disabled={activeJoinId === rec.id || claimMutation.isPending}
-                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="flex items-center gap-1 text-[10px] font-medium px-2.5 py-1 rounded-md border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 hover-elevate active-elevate-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                           >
                             {activeJoinId === rec.id ? "Joining…" : "Join line"}
                           </button>

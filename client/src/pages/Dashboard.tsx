@@ -1018,7 +1018,7 @@ export default function Dashboard() {
                         {isAdmin && (
                           <button
                             onClick={() => setAbsenceModal({})}
-                            className="text-[10px] flex items-center gap-1 transition-colors select-none text-muted-foreground hover:text-foreground"
+                            className="text-[10px] flex items-center gap-1 rounded-md border border-border/70 bg-card px-2 py-1 select-none text-muted-foreground hover-elevate active-elevate-2 transition-colors"
                             title="Mark an agent sick or on vacation for a date range"
                           >
                             <Plane size={10} />
@@ -1028,7 +1028,7 @@ export default function Dashboard() {
                         {isAdmin && (
                           <button
                             onClick={handleUndoDay}
-                            className="text-[10px] flex items-center gap-1 transition-colors select-none text-muted-foreground hover:text-foreground"
+                            className="text-[10px] flex items-center gap-1 rounded-md border border-border/70 bg-card px-2 py-1 select-none text-muted-foreground hover-elevate active-elevate-2 transition-colors"
                             title="Reset levers and pending OT for this day"
                           >
                             <RotateCcw size={10} />

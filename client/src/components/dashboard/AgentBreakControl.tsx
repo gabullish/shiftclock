@@ -26,29 +26,29 @@ export function AgentBreakControl({ isOnBreak, startedAt, onBreakStart, onBreakE
       <button
         onClick={isOnBreak ? onBreakEnd : onBreakStart}
         className={cn(
-          "w-full text-xs py-2 min-h-[36px] rounded border transition-colors flex items-center justify-center gap-1",
+          "w-full text-xs font-medium py-2 min-h-[36px] rounded-lg border transition-colors flex items-center justify-center gap-1 hover-elevate active-elevate-2",
           isOnBreak
-            ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
-            : "border-border text-muted-foreground hover:text-foreground"
+            ? "border-amber-400/50 bg-amber-400/15 text-amber-200"
+            : "border-amber-400/30 bg-amber-400/10 text-amber-200/90"
         )}
       >
         {isOnBreak ? `☕ ${elapsed}m · I'm back` : "☕ Take break"}
       </button>
       {!isOnBreak && (
-        <>
+        <div className="flex gap-1">
           <button
             onClick={onLogSick}
-            className="text-[10px] text-muted-foreground hover:text-foreground border border-border rounded px-2 py-1 transition-colors w-full"
+            className="flex-1 text-[10px] font-medium rounded-lg border border-rose-400/30 bg-rose-400/10 text-rose-200/90 px-2 py-1.5 hover-elevate active-elevate-2 transition-colors"
           >
-            🤒 Log sick day
+            🤒 Sick
           </button>
           <button
             onClick={onLogVacation}
-            className="text-[10px] text-muted-foreground hover:text-foreground border border-border rounded px-2 py-1 transition-colors w-full"
+            className="flex-1 text-[10px] font-medium rounded-lg border border-sky-400/30 bg-sky-400/10 text-sky-200/90 px-2 py-1.5 hover-elevate active-elevate-2 transition-colors"
           >
-            🏖️ Log vacation
+            🏖️ Vacation
           </button>
-        </>
+        </div>
       )}
     </div>
   );

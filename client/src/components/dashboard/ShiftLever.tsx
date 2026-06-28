@@ -25,6 +25,11 @@ import { getUTCDay, type LeverState } from "@/lib/dashboardUtils";
 // the bar covers a full two-day window to allow overnight/early-AM shifts.
 const BAR_MAX = 48;
 
+// Shared control-button styling — defined surface + soft border + the app's warm
+// hover/active elevate, instead of flat gray, so routine controls read modern.
+const NUDGE_BTN = "min-h-[28px] px-2.5 rounded-md border border-border/70 bg-card text-[10px] font-medium text-foreground/80 hover-elevate active-elevate-2 transition-colors";
+const BREAK_BTN = "px-2 py-1 rounded-md border border-amber-400/25 bg-amber-400/10 text-[9px] font-medium text-amber-200/90 hover-elevate active-elevate-2 transition-colors";
+
 export function ShiftLever({
   agent, shift, leverState, onLeverPreview, onLeverCommit,
   onBreakChange, highlighted, onHighlight, onUnhighlight,
@@ -334,8 +339,8 @@ export function ShiftLever({
       {/* ── Start/end controls ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
-          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Earlier start">← 30m</button>}
-          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Later start">30m →</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(-0.5); }} className={NUDGE_BTN} title="Earlier start">← 30m</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustStart(0.5); }}  className={NUDGE_BTN} title="Later start">30m →</button>}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeStart)}</span>
           {hitDriftFloor && <span className="text-[9px] text-amber-400/80" title="Maximum 8h before shift start">max -8h</span>}
         </div>
@@ -343,8 +348,8 @@ export function ShiftLever({
         <div className="flex items-center gap-1">
           {hitOTCap && <span className="text-[9px] text-amber-400/80" title="Maximum 2h past scheduled end">max +2h</span>}
           <span className="text-[10px] font-mono text-muted-foreground mx-1">{formatUtcHour(activeEnd)}</span>
-          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Earlier end">← 30m</button>}
-          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className="text-[10px] px-2 py-1 min-h-[28px] rounded bg-muted hover:bg-accent transition-colors" title="Later end">30m →</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(-0.5); }} className={NUDGE_BTN} title="Earlier end">← 30m</button>}
+          {canEdit && <button onClick={() => { playSoftClick(); adjustEnd(0.5); }}  className={NUDGE_BTN} title="Later end">30m →</button>}
         </div>
       </div>
 
@@ -379,12 +384,12 @@ export function ShiftLever({
       {canEdit && (
         <div className="mt-1.5 flex items-center gap-1 text-[9px]">
           {shift.breakStart == null ? (
-            <button onClick={() => { playSoftClick(); setBreakDefault(); }} className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Set 30m break near center of current shift">☕ Set break</button>
+            <button onClick={() => { playSoftClick(); setBreakDefault(); }} className={BREAK_BTN} title="Set 30m break near center of current shift">☕ Set break</button>
           ) : (
             <>
-              <button onClick={() => { playSoftClick(); moveBreakBy(-0.5); }} className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Move break earlier by 30m">☕ ←</button>
-              <button onClick={() => { playSoftClick(); moveBreakBy(0.5);  }} className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Move break later by 30m">☕ →</button>
-              <button onClick={() => { playSoftClick(); setBreakAt(null);  }} className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent transition-colors" title="Clear break">Clear break</button>
+              <button onClick={() => { playSoftClick(); moveBreakBy(-0.5); }} className={BREAK_BTN} title="Move break earlier by 30m">☕ ←</button>
+              <button onClick={() => { playSoftClick(); moveBreakBy(0.5);  }} className={BREAK_BTN} title="Move break later by 30m">☕ →</button>
+              <button onClick={() => { playSoftClick(); setBreakAt(null);  }} className={BREAK_BTN} title="Clear break">Clear break</button>
             </>
           )}
         </div>
