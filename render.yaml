@@ -2,10 +2,10 @@ services:
   - type: web
     name: shiftclock
     runtime: node
-    # --include=dev forces build-only deps (vite, tailwind plugins, esbuild config)
-    # to install even though NODE_ENV=production would normally skip them, then
-    # builds the client + server bundle fresh so deploys never serve a stale dist.
-    buildCommand: npm install --include=dev && npm run build
+    # All build-time deps (vite, tailwind plugins incl. @tailwindcss/typography,
+    # esbuild) live in "dependencies", so a production install builds fine.
+    # Builds the client + server bundle fresh so deploys never serve a stale dist.
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV

@@ -2,6 +2,9 @@ node_modules
 .DS_Store
 server/public
 vite.config.ts.*
+
+# Local secrets — NEVER commit (Render API key, generated passwords, etc.)
+.secrets/
 *.tar.gz
 *.db
 *.db-shm
