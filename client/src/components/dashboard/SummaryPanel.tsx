@@ -103,8 +103,22 @@ export function SummaryPanel({
       )}
 
       <div className="space-y-1">
-        {agentSummaries.map(({ agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentShifts }) => {
+        {agentSummaries.map(({ agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentShifts, absenceType }) => {
           if (baseHours === 0) return null;
+          if (absenceType) {
+            const isVac = absenceType === "vacation";
+            return (
+              <div key={agent.id} className="flex items-start gap-2 text-[10px]">
+                <div className="w-1.5 h-1.5 rounded-full mt-1 shrink-0" style={{ backgroundColor: agent.color, opacity: 0.5 }} />
+                <div className="flex-1">
+                  <span className="font-medium text-foreground/70 line-through">{agent.name}</span>
+                  <span className={isVac ? "ml-1 text-sky-300" : "ml-1 text-emerald-300"}>
+                    {isVac ? "🏖️ on vacation" : "🏥 out sick"} · {formatDuration(baseHours)} freed
+                  </span>
+                </div>
+              </div>
+            );
+          }
           const uncoveredHours = Math.max(0, releasedHours - coveredOutHours);
           const coveredName    = coveredByAgentId != null ? agentMap.get(coveredByAgentId)?.name : null;
           const breakShift     = agentShifts.find(s => s.breakStart != null);

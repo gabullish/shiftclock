@@ -1,6 +1,14 @@
 // Shared types and pure utility functions used across Dashboard components.
 // No React, no state, no side-effects — safe to import anywhere.
-import type { Agent, Shift } from "@shared/schema";
+import type { Agent, Shift, Absence } from "@shared/schema";
+
+/**
+ * The absence covering `date` for `agentId`, if any. ISO YYYY-MM-DD compares
+ * lexicographically (= chronologically), and the span is inclusive on both ends.
+ */
+export function activeAbsence(absences: Absence[], agentId: number, date: string): Absence | undefined {
+  return absences.find(a => a.agentId === agentId && a.startDate <= date && date <= a.endDate);
+}
 
 // ─── Day/label arrays ────────────────────────────────────────────────────────
 
@@ -64,6 +72,7 @@ export type AgentSummary = {
   coveredOutHours: number;
   coveredByAgentId: number | null;
   shifts: Shift[];
+  absenceType: string | null;
 };
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────

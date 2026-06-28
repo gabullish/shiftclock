@@ -75,7 +75,19 @@ export async function initDb() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS absences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_shifts_agent_day ON shifts(agent_id, day_of_week);
+    CREATE INDEX IF NOT EXISTS idx_absences_agent ON absences(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_absences_dates ON absences(start_date, end_date);
     CREATE INDEX IF NOT EXISTS idx_overtime_agent_date_status ON overtime_log(agent_id, date, status);
     CREATE INDEX IF NOT EXISTS idx_overtime_from_shift_status ON overtime_log(from_shift_id, status);
     CREATE INDEX IF NOT EXISTS idx_claims_opportunity ON overtime_claims(opportunity_id, status);

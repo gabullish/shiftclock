@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { agents, shifts, overtimeLog, agentLogs, overtimeClaims } from "@shared/schema";
-import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog, AgentLog, InsertAgentLog, OvertimeClaim, InsertOvertimeClaim } from "@shared/schema";
+import { agents, shifts, overtimeLog, agentLogs, overtimeClaims, absences } from "@shared/schema";
+import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog, AgentLog, InsertAgentLog, OvertimeClaim, InsertOvertimeClaim, Absence, InsertAbsence } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 
 export interface IStorage {
@@ -61,6 +61,11 @@ export interface IStorage {
   startLiveBreak(agentId: number): Promise<Agent | undefined>;
   endLiveBreak(agentId: number): Promise<Agent | undefined>;
 
+  // Absences (sick / vacation spans)
+  getAbsences(): Promise<Absence[]>;
+  createAbsence(data: InsertAbsence): Promise<Absence>;
+  deleteAbsence(id: number): Promise<void>;
+
   // Backup / restore
   exportAll(): Promise<{ agents: Agent[]; shifts: Shift[]; overtime: OvertimeLog[]; logs: AgentLog[] }>;
   importAll(data: {
@@ -93,6 +98,7 @@ export const storage: IStorage = {
       await tx.delete(shifts).where(eq(shifts.agentId, id));
       await tx.delete(overtimeLog).where(eq(overtimeLog.agentId, id));
       await tx.delete(agentLogs).where(eq(agentLogs.agentId, id));
+      await tx.delete(absences).where(eq(absences.agentId, id));
       await tx.delete(agents).where(eq(agents.id, id));
     });
   },
@@ -335,6 +341,16 @@ export const storage: IStorage = {
     await db.delete(overtimeClaims).where(eq(overtimeClaims.opportunityId, opportunityId));
   },
 
+  async getAbsences() {
+    return await db.select().from(absences);
+  },
+  async createAbsence(data) {
+    return await db.insert(absences).values(data).returning().then(r => r[0]);
+  },
+  async deleteAbsence(id) {
+    await db.delete(absences).where(eq(absences.id, id));
+  },
+
   async startLiveBreak(agentId) {
     return await db.update(agents).set({ breakActiveAt: new Date().toISOString() })
       .where(eq(agents.id, agentId)).returning().then(r => r[0]);
@@ -360,6 +376,7 @@ export const storage: IStorage = {
       await tx.delete(overtimeClaims);
       await tx.delete(overtimeLog);
       await tx.delete(agentLogs);
+      await tx.delete(absences);
       await tx.delete(shifts);
       await tx.delete(agents);
 

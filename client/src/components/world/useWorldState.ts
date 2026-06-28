@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import type { Agent, Shift } from "@shared/schema";
+import type { Agent, Shift, Absence } from "@shared/schema";
 import type { RoomId } from "./rooms.config";
-import { getAgentOffDays } from "@/lib/dashboardUtils";
-import { getQueryFn } from "@/lib/queryClient";
+import { getAgentOffDays, activeAbsence } from "@/lib/dashboardUtils";
 
 export interface AgentWorldData {
   agent: Agent;
@@ -36,9 +35,9 @@ function isOnShift(agent: Agent, shifts: Shift[]): boolean {
 
 export function useWorldState(): AgentWorldData[] {
   // Tight polling for real-time office visualization:
-  //   agents: 5 s  — catches break start/end almost immediately
-  //   shifts: 15 s — shift boundaries change at most once a day
-  //   logs:   10 s — sick/vacation logs added infrequently but need to propagate quickly
+  //   agents:    5 s — catches break start/end almost immediately
+  //   shifts:   15 s — shift boundaries change at most once a day
+  //   absences: 30 s — sick/vacation spans change infrequently
   const { data: agents = [] } = useQuery<Agent[]>({
     queryKey: ["/api/agents"],
     refetchInterval: 5_000,
@@ -47,25 +46,21 @@ export function useWorldState(): AgentWorldData[] {
     queryKey: ["/api/shifts"],
     refetchInterval: 15_000,
   });
-  // /api/agent-logs requires an agent or admin session. The world view is also
-  // reachable in view-only mode, so use on401:"returnNull" to degrade gracefully
-  // (no sick/vacation room states for view-only) instead of throwing and breaking
-  // the whole page.
-  const { data: logsData } = useQuery<any[] | null>({
-    queryKey: ["/api/agent-logs"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    refetchInterval: 10_000,
+  const { data: absences = [] } = useQuery<Absence[]>({
+    queryKey: ["/api/absences"],
+    refetchInterval: 30_000,
   });
-  const logs = logsData ?? [];
 
   const today = new Date().toISOString().split("T")[0];
 
   return agents.map(agent => {
+    // Live break wins (someone actively on break right now).
     if (agent.breakActiveAt) return { agent, state: "breakroom" };
 
-    const todayLogs = logs.filter((l: any) => l.agentId === agent.id && l.date === today);
-    if (todayLogs.some((l: any) => l.type === "sick")) return { agent, state: "clinic" };
-    if (todayLogs.some((l: any) => l.type === "vacation")) return { agent, state: "beach" };
+    // Sick / vacation come from absence spans covering today.
+    const absence = activeAbsence(absences, agent.id, today);
+    if (absence?.type === "sick") return { agent, state: "clinic" };
+    if (absence?.type === "vacation") return { agent, state: "beach" };
 
     if (isOnShift(agent, shifts)) return { agent, state: "office" };
 

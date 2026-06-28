@@ -124,3 +124,27 @@ export const overtimeClaims = sqliteTable(
 export const insertOvertimeClaimSchema = createInsertSchema(overtimeClaims).omit({ id: true });
 export type InsertOvertimeClaim = z.infer<typeof insertOvertimeClaimSchema>;
 export type OvertimeClaim = typeof overtimeClaims.$inferSelect;
+
+// Absences — a sick/vacation span for an agent. startDate..endDate inclusive (ISO
+// YYYY-MM-DD). Drives the World view (clinic/beach) and frees the agent's coverage
+// on those days. Replaces the old single-day sick/vacation activity logs.
+export const absences = sqliteTable(
+  "absences",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    agentId: integer("agent_id").notNull(),
+    type: text("type").notNull(),          // sick | vacation
+    startDate: text("start_date").notNull(), // ISO YYYY-MM-DD (inclusive)
+    endDate: text("end_date").notNull(),     // ISO YYYY-MM-DD (inclusive)
+    note: text("note"),
+    createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+  },
+  (table) => ({
+    absencesAgentIdx: index("idx_absences_agent").on(table.agentId),
+    absencesDateIdx: index("idx_absences_dates").on(table.startDate, table.endDate),
+  })
+);
+
+export const insertAbsenceSchema = createInsertSchema(absences).omit({ id: true });
+export type InsertAbsence = z.infer<typeof insertAbsenceSchema>;
+export type Absence = typeof absences.$inferSelect;

@@ -1374,6 +1374,87 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
+    // --- Absences (sick / vacation spans) ---
+    // Public read (like agents/shifts) so the World view + coverage work for everyone.
+    app.get("/api/absences", async (_req, res) => {
+      res.json(await storage.getAbsences());
+    });
+
+    // Create an absence. Managers can set it for anyone; agents only for themselves.
+    app.post("/api/absences", async (req, res) => {
+      const admin = isAdminRequest(req);
+      const sessionAgentId = getAgentSession(req);
+      if (!admin && !sessionAgentId) {
+        return res.status(401).json({ message: "Sign in as agent or manager" });
+      }
+      const { agentId, type, startDate, endDate, note } = req.body as {
+        agentId?: number; type?: string; startDate?: string; endDate?: string; note?: string;
+      };
+      const targetId = Number(agentId);
+      if (!Number.isFinite(targetId) || targetId <= 0) {
+        return res.status(400).json({ message: "Valid agentId required" });
+      }
+      if (!admin && sessionAgentId !== targetId) {
+        return res.status(403).json({ message: "You can only set your own absence" });
+      }
+      if (type !== "sick" && type !== "vacation") {
+        return res.status(400).json({ message: "type must be 'sick' or 'vacation'" });
+      }
+      if (!isIsoDate(startDate) || !isIsoDate(endDate)) {
+        return res.status(400).json({ message: "startDate and endDate must be YYYY-MM-DD" });
+      }
+      if (endDate < startDate) {
+        return res.status(400).json({ message: "endDate must be on or after startDate" });
+      }
+      const agent = await storage.getAgent(targetId);
+      if (!agent) return res.status(404).json({ message: "Agent not found" });
+
+      const absence = await storage.createAbsence({
+        agentId: targetId,
+        type,
+        startDate,
+        endDate,
+        note: typeof note === "string" ? note : null,
+      });
+
+      const label = type === "vacation" ? "on vacation" : "out sick";
+      const span = startDate === endDate ? startDate : `${startDate} – ${endDate}`;
+      await storage.createAgentLog({
+        agentId: targetId, date: startDate, type,
+        coverPct: null, coveredByAgentId: null, notes: note ?? null,
+        createdAt: new Date().toISOString(),
+        actionType: "absence-added",
+        description: `${agent.name} is ${label} (${span}).`,
+      });
+      broadcast(["absences", "agent-logs"]);
+      res.json(absence);
+    });
+
+    // Cancel an absence. Manager, or the agent who owns it.
+    app.delete("/api/absences/:id", async (req, res) => {
+      const id = Number(req.params.id);
+      const admin = isAdminRequest(req);
+      const sessionAgentId = getAgentSession(req);
+      const existing = (await storage.getAbsences()).find(a => a.id === id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      if (!admin && sessionAgentId !== existing.agentId) {
+        return res.status(403).json({ message: "You can only cancel your own absence" });
+      }
+      await storage.deleteAbsence(id);
+      const agent = await storage.getAgent(existing.agentId);
+      if (agent) {
+        await storage.createAgentLog({
+          agentId: existing.agentId, date: new Date().toISOString().slice(0, 10), type: existing.type,
+          coverPct: null, coveredByAgentId: null, notes: null,
+          createdAt: new Date().toISOString(),
+          actionType: "absence-removed",
+          description: `${agent.name}'s ${existing.type} (${existing.startDate}${existing.startDate === existing.endDate ? "" : ` – ${existing.endDate}`}) was cancelled.`,
+        });
+      }
+      broadcast(["absences", "agent-logs"]);
+      res.json({ ok: true });
+    });
+
     // --- Backup / Restore ---
     app.get("/api/export", requireAdmin, async (_req, res) => {
       const data = await storage.exportAll();

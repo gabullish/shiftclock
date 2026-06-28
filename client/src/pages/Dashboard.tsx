@@ -3,10 +3,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Agent, Shift, OvertimeLog } from "@shared/schema";
+import type { Agent, Shift, OvertimeLog, Absence } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Lock, ChevronLeft, ChevronRight } from "lucide-react";
+import { RotateCcw, Lock, ChevronLeft, ChevronRight, Plane } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/use-soothing-sounds";
@@ -30,6 +30,7 @@ import {
   getAgentOffDays,
   errorMessageFromUnknown,
   classifySlotTense,
+  activeAbsence,
   type LeverState, type TooltipInfo,
 } from "@/lib/dashboardUtils";
 import { KpiCell }             from "@/components/dashboard/KpiCell";
@@ -37,6 +38,7 @@ import { AgentBreakControl }   from "@/components/dashboard/AgentBreakControl";
 import { EmptyState }          from "@/components/dashboard/EmptyState";
 import { SummaryPanel }        from "@/components/dashboard/SummaryPanel";
 import { AssignOvertimeModal } from "@/components/dashboard/AssignOvertimeModal";
+import { AbsenceModal }        from "@/components/dashboard/AbsenceModal";
 import { ShiftLever }          from "@/components/dashboard/ShiftLever";
 import { ClockVisualizer }     from "@/components/dashboard/ClockVisualizer";
 import { UnifiedTimeline }     from "@/components/dashboard/UnifiedTimeline";
@@ -46,6 +48,7 @@ import { UnifiedTimeline }     from "@/components/dashboard/UnifiedTimeline";
 const NO_AGENTS:  Agent[]       = [];
 const NO_SHIFTS:  Shift[]       = [];
 const NO_OT:      OvertimeLog[] = [];
+const NO_ABSENCES: Absence[]    = [];
 
 export default function Dashboard() {
   const isAdmin = useAdminMode();
@@ -108,6 +111,7 @@ export default function Dashboard() {
   const [timelineScope,  setTimelineScope]  = useState<"day" | "multi">(initScope);
   const [focusHour] = useState<number | null>(initFocusHour);
   const [tooltipInfo,    setTooltipInfo]    = useState<TooltipInfo | null>(null);
+  const [absenceModal,   setAbsenceModal]   = useState<{ presetType?: "sick" | "vacation" } | null>(null);
 
   const todayDateStr = new Date().toISOString().slice(0, 10);
   const isSelectedDateToday = selectedDate === todayDateStr;
@@ -149,6 +153,16 @@ export default function Dashboard() {
   const { data: agents    = NO_AGENTS } = useQuery<Agent[]>({ queryKey: ["/api/agents"], refetchInterval: 30_000, staleTime: Infinity });
   const { data: allShifts = NO_SHIFTS } = useQuery<Shift[]>({ queryKey: ["/api/shifts"], refetchInterval: 15_000, staleTime: Infinity });
   const { data: otRecords = NO_OT     } = useQuery<OvertimeLog[]>({ queryKey: ["/api/overtime"], refetchInterval: 15_000, staleTime: Infinity });
+  const { data: absences  = NO_ABSENCES } = useQuery<Absence[]>({ queryKey: ["/api/absences"], refetchInterval: 30_000, staleTime: Infinity });
+
+  // Agents whose sick/vacation span covers the selected day. Their shifts are
+  // dropped from coverage so the freed hours surface as claimable/loggable gaps.
+  const absenceByAgent = new Map<number, Absence>();
+  for (const a of agents) {
+    const ab = activeAbsence(absences, a.id, selectedDate);
+    if (ab) absenceByAgent.set(a.id, ab);
+  }
+  const isAbsentToday = (agentId: number) => absenceByAgent.has(agentId);
 
   const updateShiftMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Shift> & { date?: string } }) =>
@@ -352,7 +366,7 @@ export default function Dashboard() {
   };
 
   const coverageInput = todayShifts
-    .filter(s => visible.has(s.agentId))
+    .filter(s => visible.has(s.agentId) && !isAbsentToday(s.agentId))
     .map(s => {
       const ls = leverState[s.id];
       return {
@@ -420,7 +434,7 @@ export default function Dashboard() {
       activeHours += claimHours;
       overtimeHours += claimHours;
     }
-    return { agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentTodayShifts };
+    return { agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentTodayShifts, absenceType: absenceByAgent.get(agent.id)?.type ?? null };
   });
 
   const zeroCoverageHours  = coverage.filter(c => c === 0).length;
@@ -593,6 +607,33 @@ export default function Dashboard() {
         description: errorMessageFromUnknown(error),
         variant: "destructive",
       });
+    },
+  });
+
+  const createAbsenceMutation = useMutation({
+    mutationFn: (body: { agentId: number; type: "sick" | "vacation"; startDate: string; endDate: string }) =>
+      apiRequest("POST", "/api/absences", body),
+    onSuccess: (_d, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/absences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      setAbsenceModal(null);
+      playSuccess();
+      toast({ title: vars.type === "vacation" ? "Vacation set" : "Sick leave set", description: "Their shifts on those days are now open for coverage." });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to set absence", description: errorMessageFromUnknown(error), variant: "destructive" });
+    },
+  });
+
+  const cancelAbsenceMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/absences/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/absences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
+      toast({ title: "Absence cancelled" });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to cancel absence", description: errorMessageFromUnknown(error), variant: "destructive" });
     },
   });
 
@@ -973,16 +1014,28 @@ export default function Dashboard() {
                           </span>
                         )}
                       </div>
-                      {isAdmin && (
-                        <button
-                          onClick={handleUndoDay}
-                          className="text-[10px] flex items-center gap-1 transition-colors select-none text-muted-foreground hover:text-foreground"
-                          title="Reset levers and pending OT for this day"
-                        >
-                          <RotateCcw size={10} />
-                          Reset day
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {isAdmin && (
+                          <button
+                            onClick={() => setAbsenceModal({})}
+                            className="text-[10px] flex items-center gap-1 transition-colors select-none text-muted-foreground hover:text-foreground"
+                            title="Mark an agent sick or on vacation for a date range"
+                          >
+                            <Plane size={10} />
+                            Mark absent
+                          </button>
+                        )}
+                        {isAdmin && (
+                          <button
+                            onClick={handleUndoDay}
+                            className="text-[10px] flex items-center gap-1 transition-colors select-none text-muted-foreground hover:text-foreground"
+                            title="Reset levers and pending OT for this day"
+                          >
+                            <RotateCcw size={10} />
+                            Reset day
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {agentSession && (() => {
@@ -995,20 +1048,8 @@ export default function Dashboard() {
                           startedAt={startedAt}
                           onBreakStart={() => breakStartMutation.mutate(agentSession.agentId)}
                           onBreakEnd={() => breakEndMutation.mutate(agentSession.agentId)}
-                          onLogSick={() => logActivityMutation.mutate({
-                            agentId: agentSession.agentId,
-                            date: selectedDate,
-                            type: "sick",
-                            actionType: "sick-day",
-                            description: `${own?.name ?? "Agent"} logged a sick day on ${selectedDate}.`,
-                          })}
-                          onLogVacation={() => logActivityMutation.mutate({
-                            agentId: agentSession.agentId,
-                            date: selectedDate,
-                            type: "vacation",
-                            actionType: "vacation-day",
-                            description: `${own?.name ?? "Agent"} logged vacation on ${selectedDate}.`,
-                          })}
+                          onLogSick={() => setAbsenceModal({ presetType: "sick" })}
+                          onLogVacation={() => setAbsenceModal({ presetType: "vacation" })}
                         />
                       );
                     })()}
@@ -1115,6 +1156,20 @@ export default function Dashboard() {
             });
           }}
           onClose={() => setAssignModal(null)}
+        />
+      )}
+
+      {absenceModal && (isAdmin || agentSession) && (
+        <AbsenceModal
+          agents={agents}
+          lockedAgentId={isAdmin ? null : (agentSession?.agentId ?? null)}
+          presetType={absenceModal.presetType}
+          defaultStart={selectedDate}
+          todayDate={todayDateStr}
+          absences={absences}
+          onCreate={(data) => createAbsenceMutation.mutate(data)}
+          onCancelAbsence={(id) => cancelAbsenceMutation.mutate(id)}
+          onClose={() => setAbsenceModal(null)}
         />
       )}
     </TooltipProvider>
