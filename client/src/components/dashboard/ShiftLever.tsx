@@ -78,6 +78,7 @@ export function ShiftLever({
   const maxTotalActive = baseDuration + MAX_OT_EXTENSION_HOURS;
 
   const [showWaivePrompt, setShowWaivePrompt] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const applyGuards = (start: number, end: number) => {
     const guardedStart       = Math.max(startUtc - MAX_LEVER_DRIFT_HOURS, start);
@@ -153,13 +154,20 @@ export function ShiftLever({
     currentStart: number; currentEnd: number;
   } | null>(null);
 
-  const onMouseDown = (e: React.MouseEvent, type: "start" | "end" | "move") => {
+  // Pointer Events + pointer capture: the gesture keeps working when the pointer
+  // leaves the window or the element, works for touch/pen, and can't get "stuck"
+  // (pointercancel/up always fire on the captured element). Replaces the old
+  // window mouse listeners.
+  const onPointerDown = (e: React.PointerEvent, type: "start" | "end" | "move") => {
     if (!canEdit) return;
     e.preventDefault();
     playDragWhoosh();
+    const el = e.currentTarget as HTMLElement;
+    try { el.setPointerCapture(e.pointerId); } catch { /* capture best-effort */ }
+    setIsDragging(true);
     dragging.current = { type, startX: e.clientX, startVal: activeStart, startEnd: activeEnd, currentStart: activeStart, currentEnd: activeEnd };
 
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       if (!dragging.current || !barRef.current) return;
       const rect  = barRef.current.getBoundingClientRect();
       const delta = ((ev.clientX - dragging.current.startX) / rect.width) * BAR_MAX;
@@ -179,14 +187,18 @@ export function ShiftLever({
       onLeverPreview(shift.id, next.activeStart, next.activeEnd);
     };
 
-    const onUp = () => {
+    const finish = () => {
       if (dragging.current) onLeverCommit(shift.id, dragging.current.currentStart, dragging.current.currentEnd);
       dragging.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      setIsDragging(false);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", finish);
+      el.removeEventListener("pointercancel", finish);
+      try { el.releasePointerCapture(e.pointerId); } catch { /* already released */ }
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", finish);
+    el.addEventListener("pointercancel", finish);
   };
 
   return (
@@ -288,14 +300,14 @@ export function ShiftLever({
             background: "repeating-linear-gradient(90deg,rgba(255,140,0,0.6) 0px,rgba(255,140,0,0.6) 3px,transparent 3px,transparent 6px)",
           }} />
         )}
-        <div className="absolute h-full rounded-sm transition-none" style={{
+        <div className={cn("absolute h-full rounded-sm touch-none", isDragging ? "transition-none" : "transition-[left,width] duration-200 ease-out")} style={{
           left: `${actLeft}%`,
           width: `${Math.max(1, Math.min(actWidth, resolved.hasOvertime ? actWidth : baseWidth))}%`,
           backgroundColor: agent.color,
           opacity: resolved.hasOvertime ? 0.9 : resolved.hasShrink ? 0.55 : 0.75,
           boxShadow: resolved.hasOvertime ? `0 0 6px white, 0 0 10px ${agent.color}` : undefined,
-          cursor: canEdit ? "grab" : "default",
-        }} onMouseDown={e => onMouseDown(e, "move")} />
+          cursor: canEdit ? (isDragging ? "grabbing" : "grab") : "default",
+        }} onPointerDown={e => onPointerDown(e, "move")} />
         {activeStart < startUtc && (
           <div className="absolute h-full rounded-sm" style={{
             left: `${(activeStart / BAR_MAX) * 100}%`,
@@ -325,14 +337,14 @@ export function ShiftLever({
           </div>
         )}
         {canEdit && (
-          <div className="absolute top-0 bottom-0 w-2 rounded-l-sm hover:opacity-100 opacity-0 bg-white/30 cursor-col-resize z-10"
+          <div className={cn("absolute top-0 bottom-0 w-2 rounded-l-sm hover:opacity-100 bg-white/30 cursor-col-resize z-10 touch-none", isDragging ? "opacity-100 transition-opacity duration-150" : "opacity-0 transition-[opacity,left] duration-200 ease-out")}
             style={{ left: `${actLeft}%` }}
-            onMouseDown={e => onMouseDown(e, "start")} />
+            onPointerDown={e => onPointerDown(e, "start")} />
         )}
         {canEdit && (
-          <div className="absolute top-0 bottom-0 w-2 rounded-r-sm hover:opacity-100 opacity-0 bg-white/30 cursor-col-resize z-10"
+          <div className={cn("absolute top-0 bottom-0 w-2 rounded-r-sm hover:opacity-100 bg-white/30 cursor-col-resize z-10 touch-none", isDragging ? "opacity-100 transition-opacity duration-150" : "opacity-0 transition-[opacity,left] duration-200 ease-out")}
             style={{ left: `calc(${actLeft}% + ${Math.max(1, actWidth)}% - 8px)` }}
-            onMouseDown={e => onMouseDown(e, "end")} />
+            onPointerDown={e => onPointerDown(e, "end")} />
         )}
       </div>
 
@@ -367,15 +379,15 @@ export function ShiftLever({
                 setShowWaivePrompt(false);
                 toast({ title: `${agent.name}'s shift waived`, description: "Freed hours are now up for grabs in the coverage view.", duration: 5000 });
               }}
-              className="px-2 py-0.5 rounded bg-amber-500/25 text-amber-200 hover:bg-amber-500/40 transition-colors"
+              className="px-2.5 py-1 rounded-md border border-amber-400/40 bg-amber-400/20 text-amber-100 font-medium hover-elevate active-elevate-2 transition-colors"
               title="Release hours — others can claim them"
             >Waive shift</button>
             <button
               onClick={() => { commitWindow(activeStart, activeStart + MIN_SHIFT_DURATION_HOURS); setShowWaivePrompt(false); }}
-              className="px-2 py-0.5 rounded bg-muted text-muted-foreground hover:bg-accent transition-colors"
+              className="px-2.5 py-1 rounded-md border border-border/70 bg-card text-foreground/80 font-medium hover-elevate active-elevate-2 transition-colors"
               title="Stay for minimum 30m coverage"
             >Keep 30m</button>
-            <button onClick={() => setShowWaivePrompt(false)} className="px-2 py-0.5 rounded bg-muted text-muted-foreground hover:bg-accent transition-colors">Cancel</button>
+            <button onClick={() => setShowWaivePrompt(false)} className="px-2.5 py-1 rounded-md border border-border/70 bg-card text-muted-foreground hover-elevate active-elevate-2 transition-colors">Cancel</button>
           </div>
         </div>
       )}

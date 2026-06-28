@@ -138,6 +138,9 @@ html { color-scheme: dark; }
     inset: 0px;
     border-radius: inherit;
     z-index: 999;
+    /* Fade the hover/press overlay in and out so every elevate control feels smooth. */
+    background-color: transparent;
+    transition: background-color 0.15s ease;
   }
 
   .hover-elevate:hover:not(.no-default-hover-elevate)::after,
@@ -189,5 +192,17 @@ html { color-scheme: dark; }
   /* Number tabular */
   .tabular-nums {
     font-variant-numeric: tabular-nums lining-nums;
+  }
+}
+
+/* Respect users who prefer reduced motion — collapse transitions/animations so
+   the UI stays snappy and usable without motion. Drag still works (it's not a
+   CSS animation), just without the eased follow-through. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }
