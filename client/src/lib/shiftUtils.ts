@@ -241,6 +241,21 @@ export function resolveBreak(
  * Returns shift progress percentages for "today" real-time rendering.
  * Returns {pct:0, otPct:0} if called for a non-current day.
  */
+/**
+ * Maps the current hour-of-day (0–24) into a shift's internal frame so it can be
+ * compared against [activeStart, normActiveEnd]. Handles:
+ *   • previous-day extension (activeStart < 0): pre-midnight hours map negative.
+ *   • overnight tail (normActiveEnd > 24): ONLY the genuine post-midnight tail
+ *     (utcHour < normActiveEnd − 24) maps up a day. The evening *before* an
+ *     overnight shift starts must NOT map up, or it overshoots the end and the
+ *     shift wrongly reads as 100% done.
+ */
+function normalizeHourToShift(activeStart: number, normActiveEnd: number, utcHour: number): number {
+  if (activeStart < 0 && utcHour >= 24 + activeStart) return utcHour - 24;
+  if (normActiveEnd > 24 && utcHour < normActiveEnd - 24) return utcHour + 24;
+  return utcHour;
+}
+
 export function shiftProgress(
   startUtc: number,
   endUtc: number,
@@ -254,18 +269,10 @@ export function shiftProgress(
   const actDur   = shiftDuration(activeStart, normActiveEnd);
   if (baseDur <= 0) return { pct: 0, otPct: 0 };
 
-  // Compute elapsed hours within the active window. utcHour is the current
-  // hour-of-day (0–24); map it into the shift's frame so progress is monotonic:
-  //   • activeStart < 0  → shift was pulled into the previous day. The pre-midnight
-  //     hours (utcHour ≥ 24+activeStart) belong to the negative part of the frame.
-  //   • overnight tail    → after midnight on an end>24 shift, shift utcHour up a day.
+  // Compute elapsed hours within the active window, mapping the current hour-of-day
+  // into the shift's internal frame (see normalizeHourToShift).
   let elapsed = 0;
-  let normHour = utcHour;
-  if (activeStart < 0 && utcHour >= 24 + activeStart) {
-    normHour = utcHour - 24; // pre-midnight portion of a previous-day-extended shift
-  } else if (utcHour < activeStart && normActiveEnd > 24) {
-    normHour = utcHour + 24; // next-day tail of an overnight shift
-  }
+  const normHour = normalizeHourToShift(activeStart, normActiveEnd, utcHour);
 
   const normAS  = activeStart;
   const normAE  = normActiveEnd;
@@ -282,6 +289,49 @@ export function shiftProgress(
     pct:   Math.round((normalElapsed / baseDur) * 100),
     otPct: otTotal > 0 ? Math.round((otElapsed / otTotal) * 100) : 0,
   };
+}
+
+export type ShiftPhase = "upcoming" | "on-shift" | "done";
+export interface ShiftStatusInfo {
+  phase: ShiftPhase;
+  pct: number;            // base progress, 0–100
+  otPct: number;
+  minutesUntilStart: number; // 0 unless upcoming
+  startHour: number;      // active start hour-of-day (for "Starts HH:MM")
+}
+
+/**
+ * Resolves whether a shift (for "today") is upcoming, in progress, or done right
+ * now — the words the 24h ring can't express on its own. activeStart/activeEnd
+ * are the resolved (lever-adjusted) bounds.
+ */
+export function shiftStatus(
+  startUtc: number,
+  endUtc: number,
+  activeStart: number,
+  activeEnd: number,
+  utcHour: number,
+): ShiftStatusInfo {
+  const normActiveEnd = normaliseEndUtc(activeStart, activeEnd);
+  const normHour = normalizeHourToShift(activeStart, normActiveEnd, utcHour);
+  const { pct, otPct } = shiftProgress(startUtc, endUtc, activeStart, activeEnd, utcHour);
+  if (normHour < activeStart) {
+    return { phase: "upcoming", pct: 0, otPct: 0, minutesUntilStart: Math.round((activeStart - normHour) * 60), startHour: activeStart };
+  }
+  if (normHour >= normActiveEnd) {
+    return { phase: "done", pct: 100, otPct, minutesUntilStart: 0, startHour: activeStart };
+  }
+  return { phase: "on-shift", pct, otPct, minutesUntilStart: 0, startHour: activeStart };
+}
+
+/** Compact "in 2h 20m" / "in 45m" string for an upcoming shift. */
+export function formatCountdown(totalMinutes: number): string {
+  const m = Math.max(0, Math.round(totalMinutes));
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h === 0) return `${mm}m`;
+  if (mm === 0) return `${h}h`;
+  return `${h}h ${mm}m`;
 }
 
 // ─── Coverage ─────────────────────────────────────────────────────────────────

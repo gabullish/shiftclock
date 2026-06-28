@@ -5,6 +5,7 @@ import { useRef } from "react";
 import type { Agent, Shift, OvertimeLog } from "@shared/schema";
 import {
   normaliseEndUtc, resolveShift, segmentShift, shiftProgress,
+  shiftStatus, formatCountdown,
   shiftDuration, displayHour, formatUtcHour, formatDuration,
   shiftLabel, getActiveClaimForShift, isCoverageClaim, shiftHasOverride,
 } from "@/lib/shiftUtils";
@@ -480,6 +481,20 @@ export function ClockVisualizer({
           <div className="text-muted-foreground text-[10px]">
             {formatDuration(shiftDuration(tooltipInfo.shift.startUtc, normaliseEndUtc(tooltipInfo.shift.startUtc, tooltipInfo.shift.endUtc)))} shift
           </div>
+          {isToday && (() => {
+            const sh = tooltipInfo.shift;
+            const ls = leverState[sh.id];
+            const as_ = ls?.activeStart ?? sh.startUtc;
+            const ae  = ls?.activeEnd   ?? normaliseEndUtc(sh.startUtc, sh.endUtc);
+            const st = shiftStatus(sh.startUtc, sh.endUtc, as_, ae, utcHour);
+            const txt = st.phase === "on-shift"
+              ? `On shift · ${st.pct}%`
+              : st.phase === "upcoming"
+                ? `Starts ${formatUtcHour(st.startHour)} · in ${formatCountdown(st.minutesUntilStart)}`
+                : "Done for today";
+            const cls = st.phase === "on-shift" ? "text-foreground" : st.phase === "upcoming" ? "text-sky-300" : "text-muted-foreground";
+            return <div className={`text-[10px] mt-0.5 font-medium ${cls}`}>{txt}</div>;
+          })()}
           {tooltipInfo.pct > 0 && (
             <div className="mt-1 pt-1 border-t border-border">
               <div className="flex items-center gap-1.5 text-[10px]">

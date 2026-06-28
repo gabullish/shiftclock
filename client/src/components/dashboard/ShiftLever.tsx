@@ -8,7 +8,8 @@ import type { Agent, Shift } from "@shared/schema";
 import {
   clampShiftWindow,
   resolveShift,
-  shiftProgress,
+  shiftStatus,
+  formatCountdown,
   formatUtcHour,
   formatDuration,
   normaliseEndUtc,
@@ -55,9 +56,9 @@ export function ShiftLever({
   const { activeStart, activeEnd } = leverState;
   const resolved  = resolveShift(startUtc, endUtc, activeStart, activeEnd, shift.breakStart ?? null);
   const isToday   = selectedDay === getUTCDay();
-  const { pct, otPct } = isToday
-    ? shiftProgress(startUtc, endUtc, activeStart, activeEnd, utcHour)
-    : { pct: 0, otPct: 0 };
+  const status  = isToday ? shiftStatus(startUtc, endUtc, activeStart, activeEnd, utcHour) : null;
+  const pct     = status?.pct ?? 0;
+  const otPct   = status?.otPct ?? 0;
 
   const normEnd        = normaliseEndUtc(startUtc, endUtc);
   const baseLeft       = (startUtc    / BAR_MAX) * 100;
@@ -198,9 +199,20 @@ export function ShiftLever({
         <div className="flex items-center gap-2">
           <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
           <span className="text-xs font-medium truncate max-w-[80px]">{agent.name}</span>
-          {isToday && pct > 0 && (
+          {status?.phase === "on-shift" && (
             <span className="text-[11px] px-1 py-0.5 rounded font-mono font-bold"
               style={{ backgroundColor: agent.color + "25", color: agent.color }}>{pct}%</span>
+          )}
+          {status?.phase === "upcoming" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-sky-500/15 text-sky-300"
+              title={`Shift starts at ${formatUtcHour(status.startHour)} UTC`}>
+              starts {formatUtcHour(status.startHour)} · in {formatCountdown(status.minutesUntilStart)}
+            </span>
+          )}
+          {status?.phase === "done" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground">
+              done for today
+            </span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
