@@ -65,7 +65,7 @@ export default function Sidebar({
   return (
     <aside className="w-14 sm:w-16 lg:w-56 flex flex-col border-r border-border bg-sidebar shrink-0 h-dvh overflow-hidden">
       {/* Logo */}
-      <div className="h-14 flex items-center px-2.5 sm:px-3 lg:px-5 border-b border-border shrink-0">
+      <div className="h-14 flex items-center justify-between px-2.5 sm:px-3 lg:px-5 border-b border-border shrink-0">
         <div className="flex items-center gap-2.5">
           {/* SVG Logo */}
           <svg viewBox="0 0 28 28" width="28" height="28" aria-label="Shiftmaxxing logo" fill="none">
@@ -81,6 +81,7 @@ export default function Sidebar({
           </svg>
           <span className="hidden lg:block text-sm font-semibold tracking-tight text-foreground">Shiftmaxxing</span>
         </div>
+        <HeaderClock />
       </div>
 
       {/* Nav */}
@@ -195,14 +196,36 @@ function AdminIndicator({ onSignOff }: { onSignOff?: () => void }) {
   );
 }
 
-function LiveUTCClock() {
+function useUtcTime() {
   const [time, setTime] = React.useState(new Date());
   React.useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+  return time;
+}
 
-  const utc = time.toUTCString().slice(17, 25);
+function HeaderClock() {
+  const time = useUtcTime();
+  const hh = time.getUTCHours().toString().padStart(2, "0");
+  const mm = time.getUTCMinutes().toString().padStart(2, "0");
+  const ss = time.getUTCSeconds().toString().padStart(2, "0");
+
+  return (
+    <div className="hidden lg:flex flex-col items-end shrink-0">
+      <span className="text-[10px] text-muted-foreground leading-none tracking-wider uppercase">UTC</span>
+      <span className="text-sm font-mono font-bold text-primary tabular-nums leading-tight tracking-tight">
+        {hh}:{mm}<span className="text-muted-foreground">:{ss}</span>
+      </span>
+    </div>
+  );
+}
+
+function LiveUTCClock() {
+  const time = useUtcTime();
+  const hh = time.getUTCHours().toString().padStart(2, "0");
+  const mm = time.getUTCMinutes().toString().padStart(2, "0");
+  const ss = time.getUTCSeconds().toString().padStart(2, "0");
 
   return (
     <div className="flex items-center gap-2">
@@ -211,7 +234,7 @@ function LiveUTCClock() {
       </div>
       <div className="hidden lg:block">
         <p className="text-[10px] text-muted-foreground leading-none">UTC NOW</p>
-        <p className="text-xs font-mono font-bold text-primary tabular-nums mt-0.5">{utc}</p>
+        <p className="text-xs font-mono font-bold text-primary tabular-nums mt-0.5">{hh}:{mm}:{ss}</p>
       </div>
     </div>
   );

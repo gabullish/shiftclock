@@ -54,7 +54,7 @@ const NO_ABSENCES: Absence[]    = [];
 export default function Dashboard() {
   const isAdmin = useAdminMode();
   const agentSession = useAgentSession();
-  const { playSoftClick, playDragWhoosh, playSuccess, playBreakStart } = useSoothingSounds();
+  const { playSoftClick, playDragWhoosh, playSuccess, playBreakStart, playBreakReturn } = useSoothingSounds();
 
   const initDate = () => {
     const params = new URLSearchParams(window.location.search);
@@ -246,8 +246,8 @@ export default function Dashboard() {
     onBreak.forEach((a, i) =>
       setTimeout(() => { toast({ title: `☕ ${a.name} is on break`, duration: 4000 }); playBreakStart(); }, i * 300)
     );
-    if (back.length === 1) toast({ title: `✓ ${back[0].name} is back`, duration: 3000 });
-    else if (back.length > 1) toast({ title: `✓ ${back.map(a => a.name).join(", ")} are back`, duration: 3000 });
+    if (back.length === 1) { toast({ title: `✓ ${back[0].name} is back`, duration: 3000 }); playBreakReturn(); }
+    else if (back.length > 1) { toast({ title: `✓ ${back.map(a => a.name).join(", ")} are back`, duration: 3000 }); playBreakReturn(); }
     prevBreakRef.current = new Map(agents.map(a => [a.id, a.breakActiveAt ?? null]));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, agentSession?.agentId]);
@@ -922,6 +922,7 @@ export default function Dashboard() {
                 agents={agents}
                 allShifts={allShifts}
                 otRecords={otRecords}
+                absences={absences}
                 isAdmin={isAdmin}
                 agentSessionId={agentSession?.agentId ?? null}
                 visible={visible}
@@ -1082,7 +1083,7 @@ export default function Dashboard() {
                       );
                     })()}
 
-                    {leverSummaries.map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
+                    {leverSummaries.map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours, absenceType }) => (
                       <ShiftLever
                         key={agent.id}
                         agent={agent}
@@ -1110,6 +1111,7 @@ export default function Dashboard() {
                         selectedDay={selectedDay}
                         playSoftClick={playSoftClick}
                         playDragWhoosh={playDragWhoosh}
+                        absenceType={absenceType}
                       />
                     ))}
                     {agentSummaries.filter(s => s.shifts.length === 0).length > 0 && (

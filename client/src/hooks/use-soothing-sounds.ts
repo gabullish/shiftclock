@@ -79,5 +79,16 @@ export const useSoothingSounds = () => {
     });
   };
 
-  return { playSoftClick, playDragWhoosh, playSuccess, playBreakStart };
+  const playBreakReturn = () => {
+    const c = getCtx();
+    [{ f: 340, t: 0 }, { f: 480, t: 0.18 }, { f: 580, t: 0.34 }].forEach(({ f, t }) => {
+      const osc = c.createOscillator(); osc.frequency.value = f;
+      const g   = c.createGain();       g.gain.setValueAtTime(0.11, c.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + t + 0.25);
+      osc.connect(g).connect(c.destination);
+      osc.start(c.currentTime + t); osc.stop(c.currentTime + t + 0.3);
+    });
+  };
+
+  return { playSoftClick, playDragWhoosh, playSuccess, playBreakStart, playBreakReturn };
 };

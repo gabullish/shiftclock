@@ -23,6 +23,7 @@ export function useDragScroll() {
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDragging || !ref.current) return;
+    e.preventDefault(); // suppress text selection while scrolling
     const x    = e.pageX - ref.current.offsetLeft;
     const walk = (x - startX.current) * 2.5;
     if (Math.abs(walk) > DRAG_THRESHOLD) dragged.current = true;

@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { agents, shifts, overtimeLog, agentLogs, overtimeClaims, absences } from "@shared/schema";
 import type { Agent, InsertAgent, Shift, InsertShift, OvertimeLog, InsertOvertimeLog, AgentLog, InsertAgentLog, OvertimeClaim, InsertOvertimeClaim, Absence, InsertAbsence } from "@shared/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, desc } from "drizzle-orm";
 
 export interface IStorage {
   // Agents
@@ -195,7 +195,7 @@ export const storage: IStorage = {
   },
 
   async getAgentLogs() {
-    return await db.select().from(agentLogs);
+    return await db.select().from(agentLogs).orderBy(desc(agentLogs.createdAt));
   },
   async getAgentLogsByAgent(agentId) {
     return await db.select().from(agentLogs).where(eq(agentLogs.agentId, agentId));

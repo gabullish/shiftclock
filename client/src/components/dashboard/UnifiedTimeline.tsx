@@ -4,7 +4,7 @@
 //   "multi" — 7-day rolling window (past 7 + future 6 days)
 import { useState, useEffect, useRef, Fragment } from "react";
 import { Clock } from "lucide-react";
-import type { Agent, Shift, OvertimeLog } from "@shared/schema";
+import type { Agent, Shift, OvertimeLog, Absence } from "@shared/schema";
 import { cn } from "@/lib/utils";
 import { useDragScroll } from "@/hooks/use-drag-scroll";
 import {
@@ -15,7 +15,7 @@ import {
 } from "@/lib/shiftUtils";
 import {
   findGapRanges, getUTCDay, buildDays, parseIsoDate,
-  formatWeekdayLongWithDate, DAY_FULL, type LeverState,
+  formatWeekdayLongWithDate, DAY_FULL, type LeverState, activeAbsence,
 } from "@/lib/dashboardUtils";
 
 // Local colour helper — only used here and in ClockVisualizer
@@ -27,7 +27,7 @@ function hexToRgba(hex: string, alpha: number) {
 }
 
 export function UnifiedTimeline({
-  scope, agents, allShifts, otRecords, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
+  scope, agents, allShifts, otRecords, absences, isAdmin, agentSessionId, visible, highlighted, setHighlighted,
   leverState, utcHour, selectedDay, selectedDate, focusHour, onSelectDay,
   toggleVisible, toggleAll, onAssignOvertime, onAssignGap, onOpenOvertime,
   dayTense,
@@ -37,6 +37,7 @@ export function UnifiedTimeline({
   agents: Agent[];
   allShifts: Shift[];
   otRecords: OvertimeLog[];
+  absences: Absence[];
   isAdmin: boolean;
   agentSessionId: number | null;
   visible: Set<number>;
@@ -543,7 +544,7 @@ export function UnifiedTimeline({
       <div
         ref={scrollRef}
         className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-contain"
-        style={{ scrollBehavior: "auto", cursor: isDragging ? "grabbing" : "grab" }}
+        style={{ scrollBehavior: "auto", cursor: isDragging ? "grabbing" : "grab", userSelect: isDragging ? "none" : undefined }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -746,14 +747,45 @@ export function UnifiedTimeline({
                     <>
                       {renderAgentRow(agent, 0, allShifts.filter(s => s.dayOfWeek === selectedDay))}
                       {renderCoverageBars(agent, 0, selectedDay)}
+                      {/* Absence overlay — full-width tinted stripe for sick/vacation days */}
+                      {(() => {
+                        const ab = activeAbsence(absences, agent.id, selectedDate);
+                        if (!ab) return null;
+                        return (
+                          <div style={{
+                            position: "absolute", left: 0, top: 2, right: 0, height: ROW_H - 4,
+                            borderRadius: 3, pointerEvents: "none", zIndex: 6,
+                            backgroundColor: ab.type === "sick" ? "rgba(239,68,68,0.12)" : "rgba(56,189,248,0.12)",
+                            borderLeft: `3px solid ${ab.type === "sick" ? "rgba(239,68,68,0.5)" : "rgba(56,189,248,0.5)"}`,
+                          }}>
+                            <span style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", fontSize: 9, color: ab.type === "sick" ? "rgba(239,68,68,0.8)" : "rgba(56,189,248,0.8)", fontFamily: "monospace" }}>
+                              {ab.type === "sick" ? "🤒 sick" : "🏖️ vacation"}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </>
                   ) : (
-                    days!.map(day => (
-                      <div key={day.date} style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H }}>
-                        {renderAgentRow(agent, day.dayIndex, allShifts.filter(s => s.dayOfWeek === day.dayOfWeek))}
-                        {renderCoverageBars(agent, day.dayIndex, day.dayOfWeek)}
-                      </div>
-                    ))
+                    days!.map(day => {
+                      const ab = activeAbsence(absences, agent.id, day.date);
+                      return (
+                        <div key={day.date} style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H }}>
+                          {renderAgentRow(agent, day.dayIndex, allShifts.filter(s => s.dayOfWeek === day.dayOfWeek))}
+                          {renderCoverageBars(agent, day.dayIndex, day.dayOfWeek)}
+                          {ab && (
+                            <div style={{
+                              position: "absolute",
+                              left: day.dayIndex * 24 * PX_PER_HOUR,
+                              width: 24 * PX_PER_HOUR,
+                              top: 2, height: ROW_H - 4,
+                              borderRadius: 2, pointerEvents: "none", zIndex: 6,
+                              backgroundColor: ab.type === "sick" ? "rgba(239,68,68,0.10)" : "rgba(56,189,248,0.10)",
+                              borderLeft: `2px solid ${ab.type === "sick" ? "rgba(239,68,68,0.4)" : "rgba(56,189,248,0.4)"}`,
+                            }} />
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               );

@@ -35,7 +35,7 @@ export function ShiftLever({
   onBreakChange, highlighted, onHighlight, onUnhighlight,
   baseHours: _baseHours, overtimeHours: _overtimeHours, releasedHours: _releasedHours,
   canEdit, utcHour, selectedDay,
-  playSoftClick, playDragWhoosh,
+  playSoftClick, playDragWhoosh, absenceType,
 }: {
   agent: Agent;
   shift: Shift | undefined;
@@ -54,6 +54,7 @@ export function ShiftLever({
   selectedDay: number;
   playSoftClick: () => void;
   playDragWhoosh: () => void;
+  absenceType?: "sick" | "vacation" | null;
 }) {
   if (!shift || !leverState) return null;
 
@@ -211,6 +212,19 @@ export function ShiftLever({
       onMouseEnter={onHighlight} onMouseLeave={onUnhighlight}
       data-testid={`lever-agent-${agent.id}`}
     >
+      {/* ── Absence banner ── */}
+      {absenceType && (
+        <div className={cn(
+          "mb-2 px-2.5 py-1.5 rounded-md text-[10px] font-medium flex items-center gap-1.5",
+          absenceType === "sick"
+            ? "bg-rose-500/15 border border-rose-400/30 text-rose-300"
+            : "bg-sky-500/15 border border-sky-400/30 text-sky-300"
+        )}>
+          {absenceType === "sick" ? "🤒" : "🏖️"}
+          <span>{absenceType === "sick" ? "Sick today — shift not covered" : "On vacation — shift not covered"}</span>
+        </div>
+      )}
+
       {/* ── Header row ── */}
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-2">

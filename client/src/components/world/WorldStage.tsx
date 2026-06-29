@@ -142,10 +142,13 @@ function makeAgentSprite(
   const container = new Container();
   const variant   = idx % CHAR_BASE.variants;
   const special   = isSpecial(d.state);
+  const isClinic  = d.state === "clinic";  // use own character for sick, not generic sprite
 
   let initTex: Texture;
   if (custom) {
     initTex = special ? custom.rest : custom.front;
+  } else if (isClinic) {
+    initTex = idleTex(base, variant);  // agent's own character in clinic, not generic sick image
   } else {
     initTex = special ? stateTex(states, d.state, 0) : idleTex(base, variant);
   }
@@ -153,19 +156,20 @@ function makeAgentSprite(
   const body = new Sprite(initTex);
   body.scale.set(
     custom ? (special ? CUSTOM_SPRITE.stateScale : CUSTOM_SPRITE.baseScale)
-           : (special ? CHAR_STATES.renderScale   : CHAR_BASE.renderScale)
+           : (special && !isClinic ? CHAR_STATES.renderScale : CHAR_BASE.renderScale)
   );
   body.anchor.set(
     0.5,
     custom
       ? (special ? CUSTOM_SPRITE.anchorYState : CUSTOM_SPRITE.anchorY)
-      : (special ? 0.85 : 1)
+      : (special && !isClinic ? 0.85 : 1)
   );
+  if (isClinic && !custom) body.tint = 0xccffcc; // subtle pale tint to indicate sickness
 
   const label = new Text({ text: d.agent.name, style: LABEL_STYLE });
   label.anchor.set(0.5, 0);
   label.x = 0;
-  label.y = special ? Math.ceil(CHAR_STATES.cellH * CHAR_STATES.renderScale * 0.15) + 4 : 4;
+  label.y = (special && !isClinic) ? Math.ceil(CHAR_STATES.cellH * CHAR_STATES.renderScale * 0.15) + 4 : 4;
 
   container.addChild(body, label);
 
@@ -404,18 +408,21 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
               sp.isSpecialState = isSpecial(sp.currentRoom);
 
               // Switch to correct idle sprite for new room
-              if (sp.isSpecialState) {
+              const arrivedClinic = sp.currentRoom === "clinic" && !sp.customTextures;
+              if (sp.isSpecialState && !arrivedClinic) {
                 sp.body.texture = sp.customTextures ? sp.customTextures.rest : stateTex(sheets.states, sp.currentRoom, 0);
                 sp.body.scale.set(sp.customTextures ? CUSTOM_SPRITE.stateScale : CHAR_STATES.renderScale);
                 sp.body.anchor.set(0.5, 0.85);
                 sp.body.scale.x = sp.customTextures ? CUSTOM_SPRITE.stateScale : CHAR_STATES.renderScale; // reset mirror
                 sp.label.y = Math.ceil(CHAR_STATES.cellH * CHAR_STATES.renderScale * 0.15) + 4;
               } else {
+                // Normal character (or clinic — use own character, not generic sick image)
                 sp.body.texture = sp.customTextures ? sp.customTextures.front : idleTex(sheets.base, sp.variant);
                 sp.body.scale.set(sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale);
                 sp.body.anchor.set(0.5, sp.customTextures ? CUSTOM_SPRITE.anchorY : 1);
                 sp.body.scale.x = sp.customTextures ? CUSTOM_SPRITE.baseScale : CHAR_BASE.renderScale; // reset mirror
                 sp.label.y = 4;
+                sp.body.tint = arrivedClinic ? 0xccffcc : 0xffffff; // pale tint when sick, clear otherwise
               }
             }
           }
@@ -423,8 +430,8 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
           // ── Idle animations ───────────────────────────────────────────────
           sp.isWalking = false;
 
-          if (sp.isSpecialState) {
-            // Animate clinic/beach frames (custom sprites use static rest texture)
+          if (sp.isSpecialState && sp.currentRoom !== "clinic") {
+            // Animate beach frames; clinic uses the agent's own character instead of generic sprite
             if (!sp.customTextures) {
               sp.body.texture = stateTex(sheets.states, sp.currentRoom, sp.animTick);
             }
@@ -552,9 +559,11 @@ export function WorldStage({ agentData, backgroundImageUrl, onCameraChange }: Wo
           // Reverted to default procedural character
           sp.customTextures = undefined;
           const special = sp.isSpecialState;
-          sp.body.texture = special ? stateTex(sheets.states, sp.currentRoom, 0) : idleTex(sheets.base, sp.variant);
-          sp.body.scale.set(special ? CHAR_STATES.renderScale : CHAR_BASE.renderScale);
-          sp.body.anchor.set(0.5, special ? 0.85 : 1);
+          const revertClinic = sp.currentRoom === "clinic";
+          sp.body.texture = (special && !revertClinic) ? stateTex(sheets.states, sp.currentRoom, 0) : idleTex(sheets.base, sp.variant);
+          sp.body.scale.set((special && !revertClinic) ? CHAR_STATES.renderScale : CHAR_BASE.renderScale);
+          sp.body.anchor.set(0.5, (special && !revertClinic) ? 0.85 : 1);
+          sp.body.tint = revertClinic ? 0xccffcc : 0xffffff;
         }
       }
 
