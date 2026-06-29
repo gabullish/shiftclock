@@ -1490,4 +1490,86 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       res.status(400).json({ message });
     }
   });
+
+  // ── Support Cases ────────────────────────────────────────────────────────────
+  const SUPPORT_SHEET_ID = "1a-VmACkxGzu5MLnuHKPo8Z797JqSHBxEB_XWi_HZXds";
+  let supportCasesCache: { data: unknown[]; fetchedAt: number } | null = null;
+  const SUPPORT_TTL_MS = 60_000;
+
+  function parseSheetCSV(text: string): string[][] {
+    const rows: string[][] = [];
+    let pos = 0;
+    const n = text.length;
+    while (pos < n) {
+      const row: string[] = [];
+      while (pos < n) {
+        if (text[pos] === '"') {
+          let field = "";
+          pos++;
+          while (pos < n) {
+            if (text[pos] === '"') {
+              if (pos + 1 < n && text[pos + 1] === '"') { field += '"'; pos += 2; }
+              else { pos++; break; }
+            } else { field += text[pos]; pos++; }
+          }
+          row.push(field);
+        } else {
+          let field = "";
+          while (pos < n && text[pos] !== "," && text[pos] !== "\r" && text[pos] !== "\n") {
+            field += text[pos]; pos++;
+          }
+          row.push(field);
+        }
+        if (pos < n && text[pos] === ",") { pos++; } else { break; }
+      }
+      if (row.length > 0 && row.some(f => f.trim())) rows.push(row);
+      if (pos < n && text[pos] === "\r") pos++;
+      if (pos < n && text[pos] === "\n") pos++;
+    }
+    return rows;
+  }
+
+  app.get("/api/support-cases", async (_req, res) => {
+    const now = Date.now();
+    if (supportCasesCache && now - supportCasesCache.fetchedAt < SUPPORT_TTL_MS) {
+      return res.json({ cases: supportCasesCache.data, fetchedAt: supportCasesCache.fetchedAt });
+    }
+    try {
+      const url = `https://docs.google.com/spreadsheets/d/${SUPPORT_SHEET_ID}/export?format=csv`;
+      const resp = await fetch(url, {
+        headers: { "User-Agent": "Shiftclock/1.0" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!resp.ok) {
+        if (supportCasesCache) return res.json({ cases: supportCasesCache.data, fetchedAt: supportCasesCache.fetchedAt, stale: true });
+        return res.status(503).json({ message: "Google Sheet not accessible. Share it publicly (anyone with link → Viewer)." });
+      }
+      const text = await resp.text();
+      const rows = parseSheetCSV(text);
+      if (rows.length < 2) {
+        return res.status(503).json({ message: "Sheet returned no data." });
+      }
+      const [, ...dataRows] = rows;
+      const cases = dataRows
+        .filter(row => row[2]?.trim())
+        .map(row => ({
+          dateTime: row[0]?.trim() ?? "",
+          caseId: row[2]?.trim() ?? "",
+          agentName: row[3]?.trim() ?? "",
+          category: row[4]?.trim() ?? "",
+          status: row[5]?.trim() ?? "",
+          message: row[6]?.trim() ?? "",
+          channel: row[7]?.trim() ?? "",
+          threadLink: row[8]?.trim() ?? "",
+          intercomLink: row[9]?.trim() ?? "",
+          note: row[10]?.trim() ?? "",
+        }))
+        .reverse();
+      supportCasesCache = { data: cases, fetchedAt: now };
+      return res.json({ cases, fetchedAt: now });
+    } catch {
+      if (supportCasesCache) return res.json({ cases: supportCasesCache.data, fetchedAt: supportCasesCache.fetchedAt, stale: true });
+      return res.status(503).json({ message: "Failed to fetch support cases from Google Sheets." });
+    }
+  });
 }

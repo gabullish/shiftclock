@@ -12,6 +12,7 @@ import Dashboard from "./pages/Dashboard";
 import Profiles from "./pages/Profiles";
 import ActivityLog from "./pages/ActivityLog";
 import WorldView from "./components/world/WorldView";
+import SupportCases from "./pages/SupportCases";
 import NotFound from "./pages/not-found";
 import Sidebar from "./components/Sidebar";
 import { ConnectionBanner } from "@/components/ConnectionBanner";
@@ -394,6 +395,7 @@ export default function App() {
                 <Route path="/overtime" component={ActivityLog} />
                 <Route path="/profiles" component={Profiles} />
                 <Route path="/world" component={WorldView} />
+                <Route path="/support-cases" component={SupportCases} />
                 <Route component={NotFound} />
               </Switch>
             </main>
