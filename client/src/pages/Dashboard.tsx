@@ -19,6 +19,7 @@ import {
   formatUtcHour,
   formatDuration,
   normaliseEndUtc,
+  shiftStatus,
   getActiveClaimForShift,
   isCoverageClaim,
 } from "@/lib/shiftUtils";
@@ -436,6 +437,29 @@ export default function Dashboard() {
     }
     return { agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentTodayShifts, absenceType: absenceByAgent.get(agent.id)?.type ?? null };
   });
+
+  // Lever rows ordered like a timeline (today): on shift now → soonest upcoming →
+  // later → done, with on-leave agents last. Classified by the SCHEDULED shift
+  // times (not the live lever drag) so the list doesn't reshuffle mid-drag. Other
+  // days fall back to chronological-by-start order.
+  const leverSummaries = (() => {
+    const rows = agentSummaries
+      .filter(s => s.shifts.length > 0)
+      .map(s => {
+        const sh = s.shifts[0];
+        const st = shiftStatus(sh.startUtc, sh.endUtc, sh.startUtc, normaliseEndUtc(sh.startUtc, sh.endUtc), utcHour);
+        const rank = s.absenceType ? 4 : st.phase === "on-shift" ? 0 : st.phase === "upcoming" ? 1 : 3;
+        return { s, st, rank, start: sh.startUtc };
+      });
+    rows.sort((a, b) => {
+      if (!isSelectedDateToday) return a.start - b.start;
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      if (a.rank === 0) return b.st.pct - a.st.pct;                        // on shift: nearest to ending first
+      if (a.rank === 1) return a.st.minutesUntilStart - b.st.minutesUntilStart; // upcoming: soonest first
+      return a.start - b.start;                                            // done / on-leave: chronological
+    });
+    return rows.map(r => r.s);
+  })();
 
   const zeroCoverageHours  = coverage.filter(c => c === 0).length;
   const gapRanges          = findGapRanges(coverage);
@@ -1058,7 +1082,7 @@ export default function Dashboard() {
                       );
                     })()}
 
-                    {agentSummaries.filter(s => s.shifts.length > 0).map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
+                    {leverSummaries.map(({ agent, shifts: agentShifts, overtimeHours, releasedHours, baseHours }) => (
                       <ShiftLever
                         key={agent.id}
                         agent={agent}
