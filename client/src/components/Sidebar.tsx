@@ -81,8 +81,10 @@ export default function Sidebar({
           </svg>
           <span className="hidden lg:block text-sm font-semibold tracking-tight text-foreground">Shiftmaxxing</span>
         </div>
-        <HeaderClock />
       </div>
+
+      {/* Clock bar — always visible, adapts to sidebar width */}
+      <ClockBar />
 
       {/* Nav */}
       <nav className="flex-1 flex flex-col gap-1 p-2 lg:p-3 pt-3">
@@ -127,16 +129,16 @@ export default function Sidebar({
         ))}
       </nav>
 
-      {/* Bottom area: agent indicator or UTC clock */}
-      <div className="p-2 sm:p-3 border-t border-border space-y-2">
-        {agentSession ? (
-          <AgentIndicator session={agentSession} onSignOff={onAgentSignOff} isOnBreak={isOnBreak} />
-        ) : isAdmin ? (
-          <AdminIndicator onSignOff={onAdminSignOff} />
-        ) : (
-          <LiveUTCClock />
-        )}
-      </div>
+      {/* Bottom area: session indicator (clock lives in the top bar now) */}
+      {(agentSession || isAdmin) && (
+        <div className="p-2 sm:p-3 border-t border-border space-y-2">
+          {agentSession ? (
+            <AgentIndicator session={agentSession} onSignOff={onAgentSignOff} isOnBreak={isOnBreak} />
+          ) : (
+            <AdminIndicator onSignOff={onAdminSignOff} />
+          )}
+        </div>
+      )}
     </aside>
   );
 }
@@ -205,36 +207,28 @@ function useUtcTime() {
   return time;
 }
 
-function HeaderClock() {
+function ClockBar() {
   const time = useUtcTime();
   const hh = time.getUTCHours().toString().padStart(2, "0");
   const mm = time.getUTCMinutes().toString().padStart(2, "0");
   const ss = time.getUTCSeconds().toString().padStart(2, "0");
 
   return (
-    <div className="hidden lg:flex flex-col items-end shrink-0">
-      <span className="text-[10px] text-muted-foreground leading-none tracking-wider uppercase">UTC</span>
-      <span className="text-sm font-mono font-bold text-primary tabular-nums leading-tight tracking-tight">
-        {hh}:{mm}<span className="text-muted-foreground">:{ss}</span>
-      </span>
-    </div>
-  );
-}
-
-function LiveUTCClock() {
-  const time = useUtcTime();
-  const hh = time.getUTCHours().toString().padStart(2, "0");
-  const mm = time.getUTCMinutes().toString().padStart(2, "0");
-  const ss = time.getUTCSeconds().toString().padStart(2, "0");
-
-  return (
-    <div className="flex items-center gap-2">
-      <div className="relative w-2 h-2 shrink-0">
-        <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+    <div className="flex items-center justify-center lg:justify-start gap-2 px-2 lg:px-5 py-2 border-b border-border shrink-0">
+      <Clock size={12} className="text-primary/70 shrink-0" />
+      {/* Collapsed: compact HH:MM stacked under a tiny UTC label */}
+      <div className="lg:hidden flex flex-col items-center leading-none">
+        <span className="text-[7px] text-muted-foreground tracking-widest uppercase">UTC</span>
+        <span className="text-[11px] font-mono font-bold text-primary tabular-nums leading-tight mt-0.5">
+          {hh}:{mm}
+        </span>
       </div>
-      <div className="hidden lg:block">
-        <p className="text-[10px] text-muted-foreground leading-none">UTC NOW</p>
-        <p className="text-xs font-mono font-bold text-primary tabular-nums mt-0.5">{hh}:{mm}:{ss}</p>
+      {/* Expanded: full UTC HH:MM:SS on one line */}
+      <div className="hidden lg:flex items-baseline gap-1.5 min-w-0">
+        <span className="text-[10px] text-muted-foreground tracking-wider uppercase shrink-0">UTC</span>
+        <span className="text-sm font-mono font-bold text-primary tabular-nums tracking-tight">
+          {hh}:{mm}<span className="text-muted-foreground">:{ss}</span>
+        </span>
       </div>
     </div>
   );
