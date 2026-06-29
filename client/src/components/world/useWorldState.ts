@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Agent, Shift, Absence } from "@shared/schema";
 import type { RoomId } from "./rooms.config";
 import { getAgentOffDays, activeAbsence } from "@/lib/dashboardUtils";
+import { normaliseEndUtc } from "@/lib/shiftUtils";
 
 export interface AgentWorldData {
   agent: Agent;
@@ -10,24 +11,34 @@ export interface AgentWorldData {
 
 function isOnShift(agent: Agent, shifts: Shift[]): boolean {
   const nowUtc = new Date();
-  const dayOfWeek = nowUtc.getUTCDay();
+  const dow = nowUtc.getUTCDay();
   const utcHour = nowUtc.getUTCHours() + nowUtc.getUTCMinutes() / 60;
 
-  const offDays = getAgentOffDays(agent, nowUtc);
-  if (offDays.includes(dayOfWeek)) return false;
+  // The previous UTC day (and the date it fell on) — needed so an overnight
+  // shift that started yesterday and runs past midnight still counts as "on
+  // shift" during its post-midnight tail. Each day's off-cycle is evaluated
+  // against that day's own date, not always today's.
+  const prevDow = (dow + 6) % 7;
+  const prevDate = new Date(nowUtc);
+  prevDate.setUTCDate(prevDate.getUTCDate() - 1);
 
-  const todayShifts = shifts.filter(s => s.agentId === agent.id && s.dayOfWeek === dayOfWeek);
-  for (const shift of todayShifts) {
+  const todayOff = getAgentOffDays(agent, nowUtc).includes(dow);
+  const prevOff = getAgentOffDays(agent, prevDate).includes(prevDow);
+
+  const agentShifts = shifts.filter(s => s.agentId === agent.id);
+  for (const shift of agentShifts) {
     const start = shift.activeStart ?? shift.startUtc;
-    const end   = shift.activeEnd   ?? shift.endUtc;
-    // Shift is overnight if either end > 24 (normalized as 25, 26, ...)
-    // OR end < start (normalized 0-24 form, e.g. start=22, end=6).
-    const wraps = end > 24 || end < start;
-    if (wraps) {
-      const wrapEnd = end > 24 ? end - 24 : end;
-      if (utcHour >= start || utcHour < wrapEnd) return true;
-    } else {
-      if (utcHour >= start && utcHour < end) return true;
+    const end = normaliseEndUtc(start, shift.activeEnd ?? shift.endUtc);
+
+    // Same-day portion: [start, min(end, 24)). For a 0–24 shift this is the
+    // whole window; for an overnight shift it's only the pre-midnight part.
+    if (shift.dayOfWeek === dow && !todayOff) {
+      if (utcHour >= start && utcHour < Math.min(end, 24)) return true;
+    }
+
+    // Post-midnight tail of yesterday's overnight shift: [0, end - 24).
+    if (shift.dayOfWeek === prevDow && !prevOff && end > 24) {
+      if (utcHour < end - 24) return true;
     }
   }
   return false;

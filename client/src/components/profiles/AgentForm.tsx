@@ -58,8 +58,18 @@ export function AgentForm({
 
   const set = (k: keyof AgentFormData, v: string) => setForm(f => ({ ...f, [k]: v }));
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    // Guard against whitespace-only names (HTML `required` lets " " through).
+    // The success sound now plays from the parent's mutation onSuccess, so it
+    // only fires when the save actually succeeds.
+    const name = form.name.trim();
+    if (!name) return;
+    onSubmit({ ...form, name });
+  };
+
   return (
-    <form onSubmit={(e) => { e.preventDefault(); playSuccess(); onSubmit(form); }} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-1.5">
         <Label className="text-xs">Name</Label>
         <Input

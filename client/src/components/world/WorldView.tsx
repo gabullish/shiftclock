@@ -6,6 +6,7 @@ import { useWorldState } from "@/components/world/useWorldState";
 import { ROOMS, type RoomId } from "@/components/world/rooms.config";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { apiRequest } from "@/lib/queryClient";
+import { toast } from "@/hooks/use-toast";
 
 const STATE_LABELS: Record<RoomId, { icon: string; label: string; color: string }> = {
   office: { icon: "🖥️", label: "On Shift", color: "#6aaef8" },
@@ -59,6 +60,14 @@ export default function WorldView() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/world/background"] });
+      toast({ title: "Map background updated" });
+    },
+    onError: (err) => {
+      toast({
+        title: "Couldn't update the map background",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
     },
   });
 
@@ -70,6 +79,14 @@ export default function WorldView() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/world/background"] });
+      toast({ title: "Map background reset to default" });
+    },
+    onError: (err) => {
+      toast({
+        title: "Couldn't reset the map background",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
     },
   });
 

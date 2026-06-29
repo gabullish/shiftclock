@@ -85,10 +85,8 @@ export const agentLogs = sqliteTable("agent_logs", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   agentId: integer("agent_id").notNull(),
   date: text("date").notNull(),         // ISO date string YYYY-MM-DD
-  // Type: sick | vacation | partial | overtime-taken
+  // Type: sick | vacation | overtime-taken | break | overtime-status | schedule_change
   type: text("type").notNull(),
-  // For partial: how much of the shift was covered (0–100)
-  coverPct: real("cover_pct"),
   // Who picked up the uncovered portion (nullable)
   coveredByAgentId: integer("covered_by_agent_id"),
   notes: text("notes"),

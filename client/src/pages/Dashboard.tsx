@@ -6,7 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift, OvertimeLog, Absence } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Lock, ChevronLeft, ChevronRight, Plane } from "lucide-react";
+import { RotateCcw, Lock, ChevronLeft, ChevronRight, Plane, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/use-soothing-sounds";
@@ -70,6 +70,12 @@ export default function Dashboard() {
     if (dayParam != null) {
       const d = parseInt(dayParam, 10);
       if (d >= 0 && d <= 6) return d;
+    }
+    // If a ?date= is given without ?day=, derive the weekday from it so the
+    // selected weekday (the shift filter key) and selected date stay in sync.
+    const dateParam = params.get("date");
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+      return parseIsoDate(dateParam).getUTCDay();
     }
     return getUTCDay();
   };
@@ -435,7 +441,7 @@ export default function Dashboard() {
       activeHours += claimHours;
       overtimeHours += claimHours;
     }
-    return { agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentTodayShifts, absenceType: absenceByAgent.get(agent.id)?.type ?? null };
+    return { agent, baseHours, activeHours, overtimeHours, releasedHours, coveredOutHours, coveredByAgentId, shifts: agentTodayShifts, absenceType: (absenceByAgent.get(agent.id)?.type ?? null) as "sick" | "vacation" | null };
   });
 
   // Lever rows ordered like a timeline (today): on shift now → soonest upcoming →
@@ -464,6 +470,11 @@ export default function Dashboard() {
   const zeroCoverageHours  = coverage.filter(c => c === 0).length;
   const gapRanges          = findGapRanges(coverage);
   const gapSlices          = expandGapRangesToSlices(gapRanges);
+  // Human-readable list of uncovered windows for the prominent banner, e.g.
+  // "04:00–05:00, 23:00–24:00". Whole-hour ranges from findGapRanges.
+  const gapRangesLabel     = gapRanges
+    .map(r => `${formatUtcHour(r.start)}–${formatUtcHour(r.end)}`)
+    .join(", ");
   // -1 when the day has zero coverage, so the KPI can show "—" instead of a
   // misleading 00:00 (indexOf(0) === 0 on an all-zero array).
   const peakCoverageHour   = Math.max(...coverage) > 0 ? coverage.indexOf(Math.max(...coverage)) : -1;
@@ -479,22 +490,39 @@ export default function Dashboard() {
       record.coverEndUtc != null
   );
 
+  // Previous UTC day — so an overnight shift that started yesterday and runs
+  // past midnight still counts as "online" during its post-midnight tail.
+  const prevDay = (selectedDay + 6) % 7;
+  const prevDate = new Date();
+  prevDate.setUTCDate(prevDate.getUTCDate() - 1);
+  const prevDayShifts = allShifts.filter(s => s.dayOfWeek === prevDay);
+
   const onlineAgents = agents.filter(agent => {
     if (!isSelectedDateToday) return false;
-    // Respect off-day schedule — rotates based on offCycleStart (2-week pattern)
-    const offDays = getAgentOffDays(agent, new Date());
-    if (offDays.includes(selectedDay)) return false;
+    // Respect off-day schedule — rotates based on offCycleStart (2-week pattern).
+    // Each day is evaluated against its own date so the overnight tail is correct.
+    const todayOff = getAgentOffDays(agent, new Date()).includes(selectedDay);
+    const prevOff  = getAgentOffDays(agent, prevDate).includes(prevDay);
 
-    const isOnShift = todayShifts.some(s => {
+    // Same-day portion: [start, min(end, 24)).
+    const onTodayShift = !todayOff && todayShifts.some(s => {
       if (s.agentId !== agent.id) return false;
       const ls    = leverState[s.id];
       const start = ls?.activeStart ?? s.startUtc;
       const end   = ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc);
-      // Use strict < at shift end (exclusive boundary) to match useWorldState
-      if (end <= 24) return utcHour >= start && utcHour < end;
-      return utcHour >= start || utcHour < (end - 24);
+      return utcHour >= start && utcHour < Math.min(end, 24);
     });
-    if (isOnShift) return true;
+    if (onTodayShift) return true;
+
+    // Post-midnight tail of yesterday's overnight shift: [0, end - 24).
+    const onPrevTail = !prevOff && prevDayShifts.some(s => {
+      if (s.agentId !== agent.id) return false;
+      const ls    = leverState[s.id];
+      const start = ls?.activeStart ?? s.startUtc;
+      const end   = ls?.activeEnd   ?? normaliseEndUtc(s.startUtc, s.endUtc);
+      return end > 24 && utcHour < (end - 24);
+    });
+    if (onPrevTail) return true;
 
     return otRecords.some((record) => {
       if (record.agentId !== agent.id) return false;
@@ -524,6 +552,11 @@ export default function Dashboard() {
       return utcHour >= windowStart && utcHour < windowEnd;
     });
   }) : [];
+
+  // Live "everyone's on break" check — uses existing presence data, doesn't
+  // touch the coverage math. If everyone scheduled right now is on break, the
+  // desk is effectively unmanned even though coverage[h] still counts them.
+  const allOnBreakNow = onlineAgents.length > 0 && onlineAgents.every(a => a.breakActiveAt);
 
   const hasShiftsToday = todayShifts.length > 0;
   const isWeekend      = selectedDay === 0 || selectedDay === 6;
@@ -906,6 +939,24 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Coverage warning banner — surfaces holes that would otherwise only
+             show as a small KPI or a red timeline stripe ── */}
+        {!isMulti && isSelectedDateToday && (allOnBreakNow || gapRanges.length > 0) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 sm:px-4 lg:px-6 border-b border-amber-500/30 bg-amber-500/10 text-amber-300 shrink-0">
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider shrink-0">
+              <AlertTriangle size={13} /> Coverage alert
+            </span>
+            {allOnBreakNow && (
+              <span className="text-[11px]">Everyone on shift right now is on break — the desk is unmanned.</span>
+            )}
+            {gapRanges.length > 0 && (
+              <span className="text-[11px]">
+                {zeroCoverageHours}h with no coverage today: <span className="font-mono">{gapRangesLabel}</span>. Drag a lever or assign coverage to fill the gaps.
+              </span>
             )}
           </div>
         )}

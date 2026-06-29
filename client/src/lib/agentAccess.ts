@@ -5,12 +5,13 @@
 //   2. Token + agentId are stored in sessionStorage (tab-scoped, cleared on close).
 //   3. Every API call that needs auth sends `x-agent-session: <token>` header.
 //   4. App.tsx pings `touchAgentSession()` on user interaction; if the tab sits
-//      idle for 4 minutes, the next `getAgentSession()` call expires it in-place.
+//      idle for 15 minutes, the next `getAgentSession()` call expires it in-place.
 //   5. Sign-out or timeout calls `clearAgentSession()` → back to view-only mode.
 //
 // Admins use a separate mechanism (adminAccess.ts) that is password-only (no token).
+// NOTE: keep AGENT_IDLE_TIMEOUT_MS in sync with IDLE_TIMEOUT_MS in App.tsx.
 const AGENT_SESSION_KEY = "shiftclock-agent-session";
-const AGENT_IDLE_TIMEOUT_MS = 4 * 60 * 1000; // 4 minutes
+const AGENT_IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
 export interface AgentSession {
   agentId: number;

@@ -14,7 +14,7 @@ export default function ActivityLog() {
   const isAdmin = useAdminMode();
   const agentSession = useAgentSession();
   const isAgent = Boolean(agentSession);
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const pathOnly = location.split("?")[0];
   const isOvertimeRoute = pathOnly === "/overtime";
   const canSeeActivity = isAdmin || isAgent;
@@ -45,7 +45,12 @@ export default function ActivityLog() {
           {availableTabs.map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => {
+                setTab(t);
+                // Keep the URL (and therefore the sidebar's active highlight)
+                // in sync with the selected tab.
+                navigate(t === "Overtime" ? "/overtime" : "/activity");
+              }}
               className={cn(
                 "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all",
                 tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",

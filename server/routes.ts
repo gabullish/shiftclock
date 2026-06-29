@@ -299,7 +299,6 @@ function normalizeImportPayload(payload: unknown): NormalizedBackup {
         agentId: row.agentId as number,
         date: row.date as string,
         type: row.type as string,
-        coverPct: typeof row.coverPct === "number" ? row.coverPct : null,
         coveredByAgentId: typeof row.coveredByAgentId === "number" ? row.coveredByAgentId : null,
         notes: typeof row.notes === "string" ? row.notes : null,
         createdAt: typeof row.createdAt === "string" ? row.createdAt : new Date().toISOString(),
@@ -448,7 +447,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
             agentId: agent.id,
             date: now.toISOString().slice(0, 10),
             type: "break",
-            coverPct: null,
             coveredByAgentId: null,
             notes: null,
             createdAt: now.toISOString(),
@@ -635,7 +633,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       : `${agent.name} returned from break.`;
 
     await storage.createAgentLog({
-      agentId: id, date, type: "break", coverPct: null, coveredByAgentId: null,
+      agentId: id, date, type: "break", coveredByAgentId: null,
       notes: null, createdAt: new Date().toISOString(),
       actionType: "break-completed",
       description,
@@ -852,7 +850,32 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     // Get current record to know old status before updating
     const existing = (await storage.getOvertimeLogs()).find(r => r.id === id);
     if (!existing) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updateOvertimeLog(id, { status, statusUpdatedAt: new Date().toISOString() });
+
+    // Reconcile any pending claims so the claim queue can never desync from the
+    // opportunity's status. Approving/paying an opportunity that still has people
+    // in line implicitly awards it: honor the claim matching the record's agent,
+    // else the first in line; reject the rest and credit that agent. Denying
+    // clears the queue. Without this, a manager using the plain status dropdown
+    // would leave claims stuck "pending" forever and credit the wrong agent.
+    const pendingClaims = (await storage.getClaimsForOpportunity(id)).filter(c => c.status === "pending");
+    let effectiveAgentId = existing.agentId;
+    if ((status === "approved" || status === "paid") && pendingClaims.length > 0) {
+      const chosen =
+        pendingClaims.find(c => c.agentId === existing.agentId) ??
+        [...pendingClaims].sort((a, b) => a.claimOrder - b.claimOrder)[0];
+      await storage.approveClaimAndRejectOthers(chosen.id, id);
+      effectiveAgentId = chosen.agentId;
+    } else if (status === "denied" && pendingClaims.length > 0) {
+      for (const c of pendingClaims) {
+        await storage.cancelClaim(c.id, c.agentId).catch(() => {});
+      }
+    }
+
+    const updated = await storage.updateOvertimeLog(id, {
+      status,
+      agentId: effectiveAgentId,
+      statusUpdatedAt: new Date().toISOString(),
+    });
     if (!updated) return res.status(404).json({ message: "Not found" });
 
     // When a claimed-from-agent record is approved (and wasn't already), no shift extension needed.
@@ -870,7 +893,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         agentId: updated.agentId,
         date: updated.date,
         type: "overtime-status",
-        coverPct: null,
         coveredByAgentId: null,
         notes: null,
         createdAt: new Date().toISOString(),
@@ -1049,7 +1071,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         agentId: toAgentId,
         date,
         type: "shift-claim",
-        coverPct: null,
         coveredByAgentId: sourceAgentId,
         notes: null,
         createdAt: retroIso,
@@ -1119,7 +1140,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         agentId: toAgentId,
         date,
         type: "shift-claim",
-        coverPct: null,
         coveredByAgentId: sourceAgentId,
         notes: null,
         createdAt: nowIso,
@@ -1141,7 +1161,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       agentId: toAgentId,
       date,
       type: "shift-claim",
-      coverPct: null,
       coveredByAgentId: sourceAgentId,
       notes: null,
       createdAt: nowIso,
@@ -1231,7 +1250,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       agentId,
       date: opportunity.date,
       type: "shift-claim",
-      coverPct: null,
       coveredByAgentId: opportunity.coveredByAgentId ?? null,
       notes: null,
       createdAt: new Date().toISOString(),
@@ -1265,7 +1283,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         agentId,
         date: opportunity.date,
         type: "shift-claim-cancelled",
-        coverPct: null,
         coveredByAgentId: null,
         notes: null,
         createdAt: new Date().toISOString(),
@@ -1298,7 +1315,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         agentId: claim.agentId,
         date: opportunity.date,
         type: "overtime-status",
-        coverPct: null,
         coveredByAgentId: null,
         notes: null,
         createdAt: new Date().toISOString(),
@@ -1328,7 +1344,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.post("/api/agent-logs", async (req, res) => {
-    const { agentId, date, type, coverPct, coveredByAgentId, notes, actionType, description } = req.body;
+    const { agentId, date, type, coveredByAgentId, notes, actionType, description } = req.body;
     if (!agentId || !date || !type) {
       return res.status(400).json({ message: "agentId, date and type are required" });
     }
@@ -1342,7 +1358,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.status(400).json({ message: "date must be YYYY-MM-DD" });
     }
 
-    const ALLOWED_LOG_TYPES = ["sick", "vacation", "partial", "overtime-taken", "shift-claim", "shift-claim-cancelled", "overtime-status", "schedule_change", "break", "break-start", "break-end"] as const;
+    const ALLOWED_LOG_TYPES = ["sick", "vacation", "overtime-taken", "shift-claim", "shift-claim-cancelled", "overtime-status", "schedule_change", "break", "break-start", "break-end"] as const;
     if (!ALLOWED_LOG_TYPES.includes(type)) {
       return res.status(400).json({ message: `Invalid log type. Allowed: ${ALLOWED_LOG_TYPES.join(", ")}` });
     }
@@ -1357,7 +1373,6 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       agentId: targetAgentId,
       date,
       type,
-      coverPct: coverPct ?? null,
       coveredByAgentId: coveredByAgentId ?? null,
       notes: notes ?? null,
       createdAt: new Date().toISOString(),
@@ -1421,7 +1436,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       const span = startDate === endDate ? startDate : `${startDate} – ${endDate}`;
       await storage.createAgentLog({
         agentId: targetId, date: startDate, type,
-        coverPct: null, coveredByAgentId: null, notes: note ?? null,
+        coveredByAgentId: null, notes: note ?? null,
         createdAt: new Date().toISOString(),
         actionType: "absence-added",
         description: `${agent.name} is ${label} (${span}).`,
@@ -1445,7 +1460,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       if (agent) {
         await storage.createAgentLog({
           agentId: existing.agentId, date: new Date().toISOString().slice(0, 10), type: existing.type,
-          coverPct: null, coveredByAgentId: null, notes: null,
+          coveredByAgentId: null, notes: null,
           createdAt: new Date().toISOString(),
           actionType: "absence-removed",
           description: `${agent.name}'s ${existing.type} (${existing.startDate}${existing.startDate === existing.endDate ? "" : ` – ${existing.endDate}`}) was cancelled.`,

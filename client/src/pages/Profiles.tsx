@@ -63,6 +63,7 @@ export default function Profiles() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       setShowCreate(false);
+      playSuccess();
       toast({ title: "Agent created" });
     },
     onError: (err: any) => {
@@ -84,6 +85,7 @@ export default function Profiles() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
       setEditingAgent(null);
+      playSuccess();
       const prev = prevAgentRef.current;
       toast({
         title: "Agent updated",

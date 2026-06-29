@@ -14,6 +14,7 @@ import ActivityLog from "./pages/ActivityLog";
 import WorldView from "./components/world/WorldView";
 import NotFound from "./pages/not-found";
 import Sidebar from "./components/Sidebar";
+import { ConnectionBanner } from "@/components/ConnectionBanner";
 import { AdminProvider } from "@/hooks/use-admin-mode";
 import { AgentSessionContext } from "@/hooks/use-agent-session";
 import { clearAdminToken, getEffectiveAdminToken, saveAdminToken } from "@/lib/adminAccess";
@@ -30,7 +31,8 @@ import type { Agent } from "@shared/schema";
 import { useQuery } from "@tanstack/react-query";
 import { connectSSE } from "@/lib/queryClient";
 
-const IDLE_TIMEOUT_MS = 4 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000;   // keep in sync with AGENT_IDLE_TIMEOUT_MS in agentAccess.ts
+const IDLE_WARNING_MS = 60 * 1000;        // warn this long before the session expires
 const IDLE_EVENTS: Array<keyof WindowEventMap> = ["click", "keydown", "pointerdown", "scroll", "input"];
 
 // Stable empty fallback — avoids new [] reference on every render while agents query is loading.
@@ -60,8 +62,23 @@ function AccessGate({ onSelectMode }: { onSelectMode: (mode: AccessMode, session
     try {
       const res = await fetch("/api/admin/verify", { method: "GET", headers: { "x-admin-token": token } });
       if (!res.ok) {
-        const errorBody = await res.text();
-        toast({ title: "Admin login failed", description: errorBody || `HTTP ${res.status}`, variant: "destructive" });
+        if (res.status === 500) {
+          // The server has no ADMIN_TOKEN configured — guide the operator
+          // instead of surfacing a raw "HTTP 500".
+          toast({
+            title: "Manager login isn't set up yet",
+            description: "The server has no admin password configured. Whoever deployed the app needs to set the ADMIN_TOKEN environment variable.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Wrong manager password",
+            description: agentModeAvailable
+              ? "Double-check the password. If you're an agent, use the Agent button instead."
+              : "Double-check the password and try again.",
+            variant: "destructive",
+          });
+        }
         return;
       }
       saveAdminToken(token);
@@ -121,9 +138,11 @@ function AccessGate({ onSelectMode }: { onSelectMode: (mode: AccessMode, session
     <div className="h-dvh w-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm border border-border rounded-xl bg-card p-5 space-y-4">
         <div>
-          <h1 className="text-base font-semibold">ShiftClock Access</h1>
+          <h1 className="text-base font-semibold">Shiftmaxxing</h1>
           <p className="text-xs text-muted-foreground mt-1">
-            Enter manager or agent password, or continue in view-only mode.
+            {agentModeAvailable
+              ? "Managers and agents have different passwords. Type yours, then tap your role below — or continue view-only."
+              : "Enter the manager password, or continue in view-only mode."}
           </p>
         </div>
 
@@ -132,7 +151,11 @@ function AccessGate({ onSelectMode }: { onSelectMode: (mode: AccessMode, session
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") void enterAsAdmin(); }}
+          onKeyDown={(e) => {
+            // Enter submits as Manager (the primary action). Agents use the
+            // Agent button, which routes through the name picker.
+            if (e.key === "Enter") void enterAsAdmin();
+          }}
         />
 
         <div className="flex flex-col gap-2">
@@ -167,8 +190,9 @@ function AgentSelectorPopup({
 }) {
   const { data: agents = [], isLoading: agentsLoading, isError: agentsError } = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingAgent, setPendingAgent] = useState<Agent | null>(null);
 
-  const selectAgent = async (agent: Agent) => {
+  const confirmAgent = async (agent: Agent) => {
     setIsLoading(true);
     try {
       const session = await signInAsAgent(agentPassword, agent.id);
@@ -180,6 +204,32 @@ function AgentSelectorPopup({
       setIsLoading(false);
     }
   };
+
+  // Confirmation step — prevents accidentally signing in as the wrong person,
+  // which would let you act on someone else's shifts and breaks.
+  if (pendingAgent) {
+    return (
+      <div className="h-dvh w-screen flex items-center justify-center bg-background px-4">
+        <div className="w-full max-w-sm border border-border rounded-xl bg-card p-5 space-y-4 text-center">
+          <div className="w-10 h-10 rounded-full mx-auto" style={{ backgroundColor: pendingAgent.color }} />
+          <div>
+            <h1 className="text-base font-semibold">Sign in as {pendingAgent.name}?</h1>
+            <p className="text-xs text-muted-foreground mt-1">
+              You'll be acting as {pendingAgent.name} ({pendingAgent.role}) — your breaks and shift changes are recorded under this name.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" disabled={isLoading} onClick={() => setPendingAgent(null)}>
+              Not me
+            </Button>
+            <Button className="flex-1" disabled={isLoading} onClick={() => void confirmAgent(pendingAgent)}>
+              {isLoading ? "Signing in…" : `Yes, I'm ${pendingAgent.name}`}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-dvh w-screen flex items-center justify-center bg-background px-4">
@@ -204,7 +254,7 @@ function AgentSelectorPopup({
             <button
               key={agent.id}
               disabled={isLoading}
-              onClick={() => void selectAgent(agent)}
+              onClick={() => setPendingAgent(agent)}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-accent transition-colors text-left disabled:opacity-50"
             >
               <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
@@ -225,6 +275,7 @@ export default function App() {
   const [accessMode, setAccessMode] = useState<AccessMode | null>(() => (getEffectiveAdminToken() ? "admin" : null));
   const [agentSession, setAgentSession] = useState<AgentSession | null>(() => getAgentSession());
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleWarnRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: agentsForStatus = NO_AGENTS } = useQuery<Agent[]>({
     queryKey: ["/api/agents"],
@@ -259,16 +310,23 @@ export default function App() {
     window.history.replaceState(null, "", next);
   }, []);
 
-  // Idle timeout for agent mode — every user interaction resets a 4-minute countdown.
-  // When the timer fires, the session is cleared in both sessionStorage and React state,
-  // dropping the user back to view-only. We also touch the sessionStorage lastActivity
-  // stamp on each interaction so a reload mid-session doesn't immediately expire.
-  // Note: sessionStorage is per-tab (not shared across tabs), so each tab tracks its
-  // own idle countdown independently.
+  // Idle timeout for agent mode — every user interaction resets a 15-minute countdown.
+  // A heads-up toast fires one minute before expiry so the logout is never a silent
+  // surprise. When the timer fires, the session is cleared in both sessionStorage and
+  // React state, dropping the user back to view-only. We also touch the sessionStorage
+  // lastActivity stamp on each interaction so a reload mid-session doesn't immediately
+  // expire. Note: sessionStorage is per-tab, so each tab tracks its own idle countdown.
   const resetIdle = useCallback(() => {
     if (accessMode !== "agent") return;
     touchAgentSession();
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    if (idleWarnRef.current) clearTimeout(idleWarnRef.current);
+    idleWarnRef.current = setTimeout(() => {
+      toast({
+        title: "Still there?",
+        description: "Your agent session will sign out in 1 minute. Move the mouse or press a key to stay in.",
+      });
+    }, IDLE_TIMEOUT_MS - IDLE_WARNING_MS);
     idleTimerRef.current = setTimeout(() => {
       clearAgentSession();
       setAgentSession(null);
@@ -285,6 +343,7 @@ export default function App() {
     return () => {
       IDLE_EVENTS.forEach((ev) => window.removeEventListener(ev, handler));
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      if (idleWarnRef.current) clearTimeout(idleWarnRef.current);
     };
   }, [accessMode, resetIdle]);
 
@@ -311,7 +370,9 @@ export default function App() {
     <AgentSessionContext.Provider value={agentSession}>
       <AdminProvider value={accessMode === "admin"}>
         <Router hook={useHashLocation}>
-          <div className="flex h-dvh overflow-hidden bg-background">
+          <div className="flex flex-col h-dvh overflow-hidden bg-background">
+            <ConnectionBanner />
+            <div className="flex flex-1 min-h-0 overflow-hidden">
             <Sidebar
               agentSession={agentSession}
               isAdmin={accessMode === "admin"}
@@ -336,6 +397,7 @@ export default function App() {
                 <Route component={NotFound} />
               </Switch>
             </main>
+            </div>
           </div>
           <AppFooter />
         </Router>
