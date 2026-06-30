@@ -1,137 +1,77 @@
-# ShiftClock
+# Shiftmaxxing 🕐
 
-Real-time shift management for 24/7 operations teams. Live 24h clock, horizontal timeline, shift levers, overtime approval pipeline, break tracking — no spreadsheets required.
+The little command center for our support team. It shows who's on shift, who's on break, who's covering what, and where every open case stands — all on one screen, all in real time, no spreadsheet archaeology required.
 
----
-
-## What it does
-
-**Dashboard** — pick a day, see every agent's shift on a 24h SVG clock or a scrollable horizontal timeline. Shift levers let you shrink or extend shifts in real time. The clock hand updates live to the current UTC hour.
-
-**Activity Log** — full audit trail of every shift change and overtime event. The overtime panel shows pending/approved/paid records; admins can approve, deny, or mark paid.
-
-**Profiles** — manage agents (name, color, timezone, role), assign break times, and apply weekly shift templates in one click.
+Think of it as mission control for the team's day. There's even a tiny pixel world where everyone walks around. We'll get to that.
 
 ---
 
-## Core mechanics
+## First things first: signing in
 
-**Shift levers** — drag the ends of an agent's bar to shrink or extend. Shrinking marks those hours as freed (up for grabs). Extending logs overtime. Changes persist immediately.
+When you open it, you pick how you're getting in:
 
-**Coverage transfer** — when an agent frees hours, an admin (or the agent themselves) clicks the freed segment on the clock/timeline and assigns those hours to another agent. The receiving agent gets a coverage record that lights up on both views.
+- **Manager** — full control. You can move shifts around, approve overtime, mark people absent, the works. Needs the manager password.
+- **Agent** — that's most of us. Type the agent password, tap your name, confirm it's really you. You can manage *your own* shift and breaks. No fiddling with other people's lanes (on purpose 🙂).
+- **View only** — no password, look but don't touch. Great for throwing it up on a screen.
 
-**Overnight shifts** — shifts crossing midnight (e.g. 23:00–07:00) store `endUtc > 24` internally (e.g. 31). The clock renders them as a wrapping arc; the timeline splits the bar across the day boundary.
-
-**Auth modes** — three access levels: admin (full control), agent (own-lane edit + break toggle), view-only (no password). Each mode is gated at load.
-
----
-
-## Stack
-
-```
-Frontend: React 18, TypeScript, Vite, TailwindCSS, TanStack Query v5, Radix UI, Wouter
-Backend:  Express 5, libSQL/SQLite, Drizzle ORM, Zod
-Deploy:   Render (auto-deploy from main)
-```
+Everything runs on **UTC** — there's a big clock at the top so nobody has to do timezone math in their head at 3am.
 
 ---
 
-## Environment variables
+## The tabs (left menu)
 
-| Variable | Required | Description |
-|---|---|---|
-| `ADMIN_TOKEN` | Yes | Password for manager (admin) mode. Mutating admin endpoints return 500 until set. |
-| `AGENT_PASSWORD` | No | Enables agent login mode. Omit to disable agent accounts (view-only + admin still work). |
-| `TURSO_DATABASE_URL` | Prod | libSQL/Turso database URL. If unset, falls back to a local file (`file:./data.db`). **Required in production** on hosts with ephemeral disk (e.g. Render) so data survives restarts. |
-| `TURSO_AUTH_TOKEN` | Prod | Auth token for the Turso database. Required alongside `TURSO_DATABASE_URL`. |
-| `PORT` | No | HTTP port. Defaults to `5000`. |
+### 🟨 Command
+The main event. Pick a day up top, then see everyone's shift one of three ways:
 
-Copy `.env.example` to `.env` and fill in at minimum `ADMIN_TOKEN`.
+- **Clock** — a 24-hour circle, like a real clock but it's everyone's shifts stacked in rings. The hand shows the current hour, live.
+- **1 Day** — the same info as a straight timeline bar, if circles aren't your thing.
+- **14 Days** — the big-picture two-week view.
 
----
+**Online now** sits at the top — little pills for whoever's on shift this moment. On break? Their pill turns amber with a ☕ and a timer. Tap your own pill to start a break (it asks "you sure?" once so a fat-finger doesn't yeet you onto a break).
 
-## Running locally
+**Shift levers** are the draggable bars for each person. Grab an end and drag to shrink or stretch your shift. Shrink it and the hours you drop become "up for grabs" for someone else. Stretch past your normal end and it logs as overtime (with sensible limits so nobody accidentally signs up for a 19-hour day). Prefer precision? The ±30m buttons do the same thing without the drama.
 
-```bash
-git clone https://github.com/gabullish/shiftclock.git
-cd shiftclock
-npm install
-cp .env.example .env        # add ADMIN_PASSWORD at minimum
-npm run dev                 # starts frontend + backend with hot reload
-```
+**Coverage gaps** show up as red dashes — that's a chunk of the day nobody's covering. Click it to grab the slot (or, if you're a manager, hand it to someone).
 
-```bash
-npm run build               # production Vite build
-npm start                   # serve production build
-npm run check               # TypeScript type check
-npm run db:push             # push schema changes to SQLite
-```
+> **Time travel note:** past days are **read-only** — they're history, you can't rewrite them. Today is live. Future days are a *preview* of the regular weekly schedule, so heads up: editing a future day changes that weekday going forward, not just that one date. The app tells you which mode you're looking at, so you won't get surprised.
 
----
+### 📜 Activity
+The team's diary. Breaks taken, shifts changed, coverage handed off — it all lands here with a timestamp. Filter by last hour / day / week / month, or search the whole thing. Need a clean slate on screen? **Archive** tucks old entries away without actually deleting them (they wait in the Library). Managers can hard-delete too, but it asks twice because gone-gone is gone-gone.
 
-## Auth flow
+### ⏰ Overtime
+Where extra hours and coverage pickups live their lives: **pending → approved → paid**. If two people want the same open slot, they "join the line" and a manager picks. Clean, no Slack arguments.
 
-1. **Admin** — enters `ADMIN_TOKEN` on the lock screen. The token is stored in `sessionStorage` (cleared when the tab closes) and sent as an `x-admin-token` header. No server-side sessions. Sign out from the sidebar to drop back to the lock screen.
+### 👥 Agents
+The roster. Names, colors, roles, timezones, who's off which days, and the standard weekly shift template. Mostly manager territory, but you can tweak your own profile and even upload a custom little sprite for the world (see below 👇).
 
-2. **Agent** — enters `AGENT_PASSWORD` + selects their name. Server validates and returns a short-lived token (`x-agent-session` header). Token is stored in `sessionStorage` and expires after 4 minutes of inactivity. Agents can only edit their own shift lane and toggle their own break.
+### 🌐 World
+Pure joy, honestly. A little pixel-art office where everyone shows up as a character. On shift? You're at a desk. On break? Breakroom with a coffee. Sick? Clinic. On vacation? You're literally at the beach. It's the team's status at a glance, but make it a video game.
 
-3. **View-only** — no password. Everything visible, nothing editable.
+### 🛟 Cases
+A live, tidy view of every support case the team has escalated — pulled straight from the case tracker. Filter by Open / Resolved, search anything, click a case for the full story plus quick links to the Slack thread and Intercom. Updates itself, so just leave it open and check whenever. (Editing case status from here is coming soon — for now it's read-and-track.)
 
 ---
 
-## Deployment (Render)
+## The stuff that makes life easier
 
-`render.yaml` builds the app fresh on every deploy (`npm run build`) and runs `npm start`. The build output (`dist/`) is **not** committed — the platform regenerates it, so a stale checked-in bundle can never silently override the source.
-
-### Make data persist (important)
-
-Render's local disk is **ephemeral** — anything written to `file:./data.db` is wiped on every redeploy and restart, and the app re-seeds 13 default agents. For real data, point ShiftClock at a free hosted [Turso](https://turso.tech) database:
-
-1. Create a free Turso database (one-time, via Turso's dashboard or CLI). You'll get a URL like `libsql://your-db.turso.io` and an auth token.
-2. In the Render dashboard → your service → **Environment**, set:
-   - `TURSO_DATABASE_URL` = the `libsql://…` URL
-   - `TURSO_AUTH_TOKEN` = the auth token
-   - `ADMIN_TOKEN` = your chosen manager password
-   - `AGENT_PASSWORD` = (optional) agent-mode password
-3. Redeploy. The app creates its tables automatically on first boot (`initDb`).
-
-> Alternative: a Render **persistent disk** (paid) mounted as the working dir also works with the default local-file DB — but Turso is free and survives across restarts with no disk to manage.
+- **Breaks track themselves.** Scheduled break time arrives, the app puts you on break and brings you back 30 minutes later — and logs it — even if nobody's looking at the screen.
+- **Sick / Vacation** — mark a day or a whole range. The person's shifts free up automatically and they show up in the clinic/beach in the world.
+- **Overnight shifts** (like 23:00–07:00) just work. The clock wraps the arc around midnight, the timeline splits it across the day. No weird math.
+- **Everything's live.** Someone starts a break or grabs coverage, everyone else's screen updates on its own. No refresh-spamming.
 
 ---
 
-## API summary
+## Quick "how do I…"
 
-```
-GET    /api/agents                    list all agents
-POST   /api/agents                    create agent
-PATCH  /api/agents/:id                update agent fields
-DELETE /api/agents/:id                delete agent
-POST   /api/agents/:id/apply-week     bulk-apply shift template to all weekdays
-POST   /api/agents/:id/break/start    start break (agent auth)
-POST   /api/agents/:id/break/end      end break (agent auth)
-
-GET    /api/shifts                    list all shifts
-POST   /api/shifts                    create shift
-PATCH  /api/shifts/:id                update shift (lever position, break time, etc.)
-DELETE /api/shifts/:id                delete shift
-POST   /api/shifts/reset-day          reset levers + pending OT for a given date
-
-GET    /api/overtime                  list overtime/coverage records
-POST   /api/overtime/assign           create coverage claim (freed hours or open gap)
-PATCH  /api/overtime/:id              update status (pending → approved → paid / denied)
-DELETE /api/overtime                  bulk delete by IDs
-
-GET    /api/agent-logs                activity log entries
-POST   /api/agent-logs                write a log entry
-
-POST   /api/auth/agent-session        validate agent password + agentId, return token
-GET    /api/auth/agent-password-configured   check if AGENT_PASSWORD is set
-```
-
-All timestamps are UTC. Agent timezones are stored for display only — they don't affect scheduling math.
+| I want to… | Do this |
+|---|---|
+| Take a break | Tap your pill in **Online now** (or the break button on your card), confirm |
+| Cover for someone | Find the red gap or freed slot on Command, click it, claim it |
+| Drop part of my shift | Drag your lever in, or use the ◀ 30m button — freed time goes up for grabs |
+| See what happened yesterday | **Activity** tab, or pick a past day on Command (read-only) |
+| Check a support case | **Cases** tab, search or filter, click for details |
+| Find someone right now | **World** tab — desk, breakroom, clinic, or beach |
 
 ---
 
-## GitHub description
-
-> Shift management for 24/7 teams — live clock, timeline, levers, overtime tracking, break alerts.
+That's it. If something's confusing or you wish it did a thing it doesn't, poke Gab. 🛠️
