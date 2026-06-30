@@ -51,6 +51,8 @@ export default function Profiles() {
   const [showCreate, setShowCreate] = useState(false);
   const [showFullImportWarning, setShowFullImportWarning] = useState(false);
   const [pendingFullImportData, setPendingFullImportData] = useState<any>(null);
+  const [showImportWarning, setShowImportWarning] = useState(false);
+  const [pendingImportData, setPendingImportData] = useState<any>(null);
   const prevAgentRef = useRef<{ id: number; data: Partial<AgentFormData> } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
   const fullImportFileRef = useRef<HTMLInputElement>(null);
@@ -323,10 +325,23 @@ export default function Profiles() {
         ...ag,
         shifts: (parsed.shifts ?? []).filter((s: Shift) => s.agentId === ag.id).map(({ id: _id, agentId: _agentId, ...s }: any) => s),
       }));
+      // Stash the parsed payload and confirm before replacing live data.
+      setPendingImportData({ agents: agentsWithShifts });
+      setShowImportWarning(true);
+    } catch {
+      toast({ title: "Import failed — check the file format", variant: "destructive" });
+    }
+    if (importFileRef.current) importFileRef.current.value = "";
+  };
+
+  const performImport = async () => {
+    if (!pendingImportData) return;
+    setShowImportWarning(false);
+    try {
       const res = await fetch("/api/import", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": getEffectiveAdminToken() },
-        body: JSON.stringify({ agents: agentsWithShifts }),
+        body: JSON.stringify(pendingImportData),
       });
       if (!res.ok) {
         const text = (await res.text()) || `HTTP ${res.status}`;
@@ -337,10 +352,10 @@ export default function Profiles() {
       queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
       toast({ title: "Settings restored from backup" });
+      setPendingImportData(null);
     } catch {
       toast({ title: "Import failed — check the file format", variant: "destructive" });
     }
-    if (importFileRef.current) importFileRef.current.value = "";
   };
 
   const handleFullImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -442,17 +457,6 @@ export default function Profiles() {
                 >
                   <Upload size={12} /> Full Import (beta)
                 </button>
-                {dirtyCount > 0 && (
-                  <button
-                    onClick={handleApplyAll}
-                    disabled={applyWeekMutation.isPending}
-                    title={`Apply pending template changes for ${dirtyCount} agent${dirtyCount > 1 ? "s" : ""}`}
-                    className="flex items-center gap-1.5 text-[11px] border rounded-md px-2.5 py-1.5 transition-all animate-pulse disabled:opacity-50 border-amber-400/60 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 ring-1 ring-amber-400/30"
-                  >
-                    <CalendarDays size={12} />
-                    Apply All ({dirtyCount})
-                  </button>
-                )}
               </>
             )}
             {isAdmin && (
@@ -676,6 +680,27 @@ export default function Profiles() {
               className="bg-destructive hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showImportWarning} onOpenChange={setShowImportWarning}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore from backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This replaces the current agents and their shift templates with the
+              contents of the backup file.
+              <br /><br />
+              <strong>Current agent and shift data will be overwritten.</strong> Export a
+              backup first if you want to keep it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex gap-2 justify-end">
+            <AlertDialogCancel onClick={() => setPendingImportData(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={performImport} className="bg-destructive hover:bg-destructive/90">
+              Restore
             </AlertDialogAction>
           </div>
         </AlertDialogContent>

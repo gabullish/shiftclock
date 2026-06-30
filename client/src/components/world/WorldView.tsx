@@ -7,6 +7,7 @@ import { ROOMS, type RoomId } from "@/components/world/rooms.config";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 const STATE_LABELS: Record<RoomId, { icon: string; label: string; color: string }> = {
   office: { icon: "🖥️", label: "On Shift", color: "#6aaef8" },
@@ -22,6 +23,7 @@ export default function WorldView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const isAdmin = useAdminMode();
   const queryClient = useQueryClient();
+  const [showRemoveMapDialog, setShowRemoveMapDialog] = useState(false);
 
   const viewW = containerRef.current?.clientWidth ?? 800;
   const viewH = containerRef.current?.clientHeight ?? 600;
@@ -162,7 +164,7 @@ export default function WorldView() {
             </a>
             {bgData?.imageData && (
               <button
-                onClick={() => removeMutation.mutate()}
+                onClick={() => setShowRemoveMapDialog(true)}
                 disabled={removeMutation.isPending}
                 className="px-2 py-1 text-[10px] font-mono border border-red-500/30 rounded text-red-400/70 hover:text-red-300 hover:border-red-400/50 bg-black/40 disabled:opacity-50"
               >
@@ -182,6 +184,27 @@ export default function WorldView() {
           </div>
         )}
       </div>
+
+      <AlertDialog open={showRemoveMapDialog} onOpenChange={setShowRemoveMapDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove the custom map?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This resets the world background to the default map. You can re-upload a
+              custom map at any time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex gap-2 justify-end">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { setShowRemoveMapDialog(false); removeMutation.mutate(); }}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              Remove map
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

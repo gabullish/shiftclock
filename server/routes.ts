@@ -342,6 +342,64 @@ function broadcast(keys: string[]) {
     try { client.write(payload); } catch { sseClients.delete(client); }
   }
 }
+
+// Auto-manage scheduled breaks:
+//   • Auto-START: breakStart has arrived and agent isn't on break yet
+//   • Auto-END:   break window (breakStart + 30 min) has elapsed → log completion
+// Runs both on every /api/agents poll AND on a server-side interval, so breaks
+// advance and log even when no client is open to trigger a poll. Returns true if
+// any agent's break state changed (so callers can broadcast an invalidation).
+const BREAK_DURATION_H = 0.5; // standard 30-minute break
+async function sweepBreaks(): Promise<boolean> {
+  const now  = new Date();
+  const dow  = now.getUTCDay();
+  const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
+  const allShifts = await storage.getShifts();
+  let changed = false;
+
+  const fmtUTC = (ms: number) => {
+    const d = new Date(ms);
+    return `${d.getUTCHours().toString().padStart(2,"0")}:${d.getUTCMinutes().toString().padStart(2,"0")}`;
+  };
+
+  for (const agent of await storage.getAgents()) {
+    const todayShift = allShifts.find(
+      s => s.agentId === agent.id && s.dayOfWeek === dow && s.breakStart != null,
+    );
+
+    if (agent.breakActiveAt) {
+      // End break after BREAK_DURATION_H has elapsed since it started. Using
+      // absolute elapsed time (not utcH comparison) makes this safe across
+      // midnight wraps when breakStart + duration would exceed 24.
+      const startMs  = Date.parse(agent.breakActiveAt);
+      const elapsedH = (now.getTime() - startMs) / 3_600_000;
+      if (elapsedH >= BREAK_DURATION_H) {
+        const durationMins = Math.round(elapsedH * 60);
+        const description = `${agent.name} was on break · ${durationMins} min  (${fmtUTC(startMs)} – ${fmtUTC(now.getTime())} UTC)`;
+        await storage.endLiveBreak(agent.id);
+        await storage.createAgentLog({
+          agentId: agent.id,
+          date: now.toISOString().slice(0, 10),
+          type: "break",
+          coveredByAgentId: null,
+          notes: null,
+          createdAt: now.toISOString(),
+          actionType: "break-completed",
+          description,
+        });
+        changed = true;
+      }
+    } else if (todayShift?.breakStart != null) {
+      // Auto-start: only trigger inside the [breakStart, breakStart + 30 min]
+      // window. Outside that window, the break is considered skipped.
+      if (utcH >= todayShift.breakStart && utcH < todayShift.breakStart + BREAK_DURATION_H) {
+        await storage.startLiveBreak(agent.id);
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
 // ──────────────────────────────────────────────────────────────────────────────
 
 export async function registerRoutes(httpServer: Server, app: Express) {
@@ -352,6 +410,16 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     console.warn("[routes] AGENT_PASSWORD is not configured. Agent mode will be disabled.");
   }
   await seedDefaultData();
+
+  // Server-side break ticker — advances scheduled breaks (auto start/end + logging)
+  // every 30s regardless of whether any client is polling, so break history stays
+  // accurate even with nobody watching. Broadcasts only when state actually changed.
+  const breakTicker = setInterval(() => {
+    sweepBreaks()
+      .then(changed => { if (changed) broadcast(["agents", "agent-logs"]); })
+      .catch(err => console.error("[break-ticker] sweep failed:", err));
+  }, 30_000);
+  if (typeof breakTicker.unref === "function") breakTicker.unref();
 
   // SSE endpoint — no auth needed (signals only, no data)
   app.get("/api/events", (_req, res) => {
@@ -403,7 +471,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // --- Admin verify ---
-  app.get("/api/admin/verify", (req, res) => {
+  // Rate-limited like the agent-session route — the manager password is the
+  // single highest-value secret, so cap brute-force attempts per IP.
+  app.get("/api/admin/verify", authLimiter, (req, res) => {
     if (!ADMIN_TOKEN) {
       return res.status(500).json({ message: "Server misconfigured: ADMIN_TOKEN is not set" });
     }
@@ -414,55 +484,9 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.get("/api/agents", async (_req, res) => {
-    // Auto-manage scheduled breaks on every poll:
-    //   • Auto-START: breakStart has arrived and agent isn't on break yet
-    //   • Auto-END:   break window (breakStart + 30 min) has passed
-    const now  = new Date();
-    const dow  = now.getUTCDay();
-    const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
-    const BREAK_DURATION_H = 0.5; // standard 30-minute break
-    const allShifts = await storage.getShifts();
-
-    const fmtUTC = (ms: number) => {
-      const d = new Date(ms);
-      return `${d.getUTCHours().toString().padStart(2,"0")}:${d.getUTCMinutes().toString().padStart(2,"0")}`;
-    };
-
-    for (const agent of await storage.getAgents()) {
-      const todayShift = allShifts.find(
-        s => s.agentId === agent.id && s.dayOfWeek === dow && s.breakStart != null,
-      );
-
-      if (agent.breakActiveAt) {
-        // End break after BREAK_DURATION_H has elapsed since it started. Using
-        // absolute elapsed time (not utcH comparison) makes this safe across
-        // midnight wraps when breakStart + duration would exceed 24.
-        const startMs  = Date.parse(agent.breakActiveAt);
-        const elapsedH = (now.getTime() - startMs) / 3_600_000;
-        if (elapsedH >= BREAK_DURATION_H) {
-          const durationMins = Math.round(elapsedH * 60);
-          const description = `${agent.name} was on break · ${durationMins} min  (${fmtUTC(startMs)} – ${fmtUTC(now.getTime())} UTC)`;
-          await storage.endLiveBreak(agent.id);
-          await storage.createAgentLog({
-            agentId: agent.id,
-            date: now.toISOString().slice(0, 10),
-            type: "break",
-            coveredByAgentId: null,
-            notes: null,
-            createdAt: now.toISOString(),
-            actionType: "break-completed",
-            description,
-          });
-        }
-      } else if (todayShift?.breakStart != null) {
-        // Auto-start: only trigger inside the [breakStart, breakStart + 30 min]
-        // window. Outside that window, the break is considered skipped.
-        if (utcH >= todayShift.breakStart && utcH < todayShift.breakStart + BREAK_DURATION_H) {
-          await storage.startLiveBreak(agent.id);
-        }
-      }
-    }
-
+    // Advance scheduled breaks lazily on read (the server-side ticker below also
+    // runs this so state advances with no client open).
+    await sweepBreaks();
     res.json(await storage.getAgents());
   });
 

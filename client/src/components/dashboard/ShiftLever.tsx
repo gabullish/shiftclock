@@ -19,7 +19,7 @@ import {
   MAX_OT_EXTENSION_HOURS,
   WAIVE_PROMPT_THRESHOLD_HOURS,
 } from "@/lib/shiftUtils";
-import { getUTCDay, type LeverState } from "@/lib/dashboardUtils";
+import { type LeverState } from "@/lib/dashboardUtils";
 
 // Width of the virtual 48h bar (hours). Shifts can start before midnight so
 // the bar covers a full two-day window to allow overnight/early-AM shifts.
@@ -34,7 +34,7 @@ export function ShiftLever({
   agent, shift, leverState, onLeverPreview, onLeverCommit,
   onBreakChange, highlighted, onHighlight, onUnhighlight,
   baseHours: _baseHours, overtimeHours: _overtimeHours, releasedHours: _releasedHours,
-  canEdit, utcHour, selectedDay,
+  canEdit, utcHour, selectedDay, isToday: isTodayProp,
   playSoftClick, playDragWhoosh, absenceType,
 }: {
   agent: Agent;
@@ -52,6 +52,7 @@ export function ShiftLever({
   canEdit: boolean;
   utcHour: number;
   selectedDay: number;
+  isToday: boolean;
   playSoftClick: () => void;
   playDragWhoosh: () => void;
   absenceType?: "sick" | "vacation" | null;
@@ -61,7 +62,9 @@ export function ShiftLever({
   const { startUtc, endUtc }     = shift;
   const { activeStart, activeEnd } = leverState;
   const resolved  = resolveShift(startUtc, endUtc, activeStart, activeEnd, shift.breakStart ?? null);
-  const isToday   = selectedDay === getUTCDay();
+  // Live status (progress %, countdown) only makes sense on the actual current
+  // date — not merely the same weekday as today (a past/future Monday is not "now").
+  const isToday   = isTodayProp;
   const status  = isToday ? shiftStatus(startUtc, endUtc, activeStart, activeEnd, utcHour) : null;
   const pct     = status?.pct ?? 0;
   const otPct   = status?.otPct ?? 0;
@@ -384,7 +387,7 @@ export function ShiftLever({
         <div className="mt-1.5 p-2 rounded-md bg-amber-500/10 border border-amber-400/30 text-[10px]">
           <p className="text-amber-300 mb-0.5 leading-tight font-medium">Almost no shift left</p>
           <p className="text-muted-foreground mb-1.5 leading-tight">
-            Waive = release hours for others to claim. Keep 30m = stay with minimal coverage.
+            This shrinks the shift to the 30m minimum and releases the freed hours for others to claim.
           </p>
           <div className="flex gap-1.5">
             <button
@@ -394,13 +397,8 @@ export function ShiftLever({
                 toast({ title: `${agent.name}'s shift waived`, description: "Freed hours are now up for grabs in the coverage view.", duration: 5000 });
               }}
               className="px-2.5 py-1 rounded-md border border-amber-400/40 bg-amber-400/20 text-amber-100 font-medium hover-elevate active-elevate-2 transition-colors"
-              title="Release hours — others can claim them"
-            >Waive shift</button>
-            <button
-              onClick={() => { commitWindow(activeStart, activeStart + MIN_SHIFT_DURATION_HOURS); setShowWaivePrompt(false); }}
-              className="px-2.5 py-1 rounded-md border border-border/70 bg-card text-foreground/80 font-medium hover-elevate active-elevate-2 transition-colors"
-              title="Stay for minimum 30m coverage"
-            >Keep 30m</button>
+              title="Shrink to 30m and release the freed hours for others to claim"
+            >Waive to 30m</button>
             <button onClick={() => setShowWaivePrompt(false)} className="px-2.5 py-1 rounded-md border border-border/70 bg-card text-muted-foreground hover-elevate active-elevate-2 transition-colors">Cancel</button>
           </div>
         </div>

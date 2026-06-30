@@ -5,6 +5,7 @@ import type { Agent, AgentLog } from "@shared/schema";
 import { cn } from "@/lib/utils";
 import { Download, ScrollText, Trash2, Archive, Clock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { toast } from "@/hooks/use-toast";
 
@@ -47,9 +48,8 @@ export function ActivityFeed() {
 
   const isAdmin = useAdminMode();
   const [confirmClear, setConfirmClear] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
-  const deleteTimer = useRef<ReturnType<typeof setTimeout>>();
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [showLibrary, setShowLibrary] = useState(false);
 
@@ -116,14 +116,7 @@ export function ActivityFeed() {
   };
 
   const handleHardDelete = () => {
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      clearTimeout(deleteTimer.current);
-      deleteTimer.current = setTimeout(() => setConfirmDelete(false), 3500);
-      return;
-    }
-    clearTimeout(deleteTimer.current);
-    setConfirmDelete(false);
+    setShowDeleteDialog(false);
     clearLogMutation.mutate();
     localStorage.removeItem(ARCHIVE_KEY);
     setArchivedBefore(null);
@@ -210,15 +203,12 @@ export function ActivityFeed() {
           )}
           {isAdmin && archivedBefore && (
             <button
-              onClick={handleHardDelete}
-              className={cn(
-                "flex items-center gap-1 text-[10px] transition-colors",
-                confirmDelete ? "text-destructive font-semibold" : "text-muted-foreground hover:text-destructive",
-              )}
+              onClick={() => setShowDeleteDialog(true)}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors"
               title="Permanently delete all logs including archived"
             >
               <Trash2 size={11} />
-              {confirmDelete ? "Confirm delete?" : "Delete all"}
+              Delete all
             </button>
           )}
         </div>
@@ -270,6 +260,27 @@ export function ActivityFeed() {
           })}
         </div>
       )}
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete all activity logs?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the entire activity history — including archived
+              entries — from the database for everyone.
+              <br /><br />
+              <strong>This action cannot be undone.</strong> To hide entries without
+              deleting them, use “Archive feed” instead.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex gap-2 justify-end">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleHardDelete} className="bg-destructive hover:bg-destructive/90">
+              Delete all
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

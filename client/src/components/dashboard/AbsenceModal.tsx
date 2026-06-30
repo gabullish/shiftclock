@@ -28,6 +28,8 @@ export function AbsenceModal({
   const [type, setType] = useState<"sick" | "vacation">(presetType ?? "vacation");
   const [start, setStart] = useState<string>(defaultStart);
   const [days, setDays] = useState<number>(presetType === "sick" ? 1 : 5);
+  // Two-step confirm on cancel — a stray click shouldn't drop an absence.
+  const [confirmCancelId, setConfirmCancelId] = useState<number | null>(null);
 
   const endDate = addDaysIso(start, Math.max(1, days) - 1);
   const agentName = (id: number) => agents.find(a => a.id === id)?.name ?? "Agent";
@@ -124,10 +126,17 @@ export function AbsenceModal({
                       </span>
                     </span>
                     {canCancel && (
-                      <button onClick={() => onCancelAbsence(a.id)} title="Cancel absence"
-                        className="shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors">
-                        <Trash2 size={11} />
-                      </button>
+                      confirmCancelId === a.id ? (
+                        <button onClick={() => { setConfirmCancelId(null); onCancelAbsence(a.id); }} title="Confirm cancel"
+                          className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-destructive/20 text-destructive hover:bg-destructive/30 transition-colors">
+                          Confirm?
+                        </button>
+                      ) : (
+                        <button onClick={() => setConfirmCancelId(a.id)} title="Cancel absence"
+                          className="shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors">
+                          <Trash2 size={11} />
+                        </button>
+                      )
                     )}
                   </div>
                 );

@@ -21,6 +21,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { formatUtcHour, isCoverageClaim } from "@/lib/shiftUtils";
 import { agentAuthHeaders } from "@/lib/agentAccess";
@@ -91,8 +92,7 @@ export function OvertimePanel({
 
   const agentMap = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const importFileRef = useRef<HTMLInputElement>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
-  const confirmTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [showClearDialog, setShowClearDialog] = useState(false);
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => apiRequest("PATCH", `/api/overtime/${id}`, { status }),
@@ -186,7 +186,6 @@ export function OvertimePanel({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
       queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-      setConfirmClear(false);
       toast({ title: "Overtime log cleared" });
     },
     onError: (err) => {
@@ -223,13 +222,7 @@ export function OvertimePanel({
   };
 
   const handleClear = () => {
-    if (!confirmClear) {
-      setConfirmClear(true);
-      clearTimeout(confirmTimer.current);
-      confirmTimer.current = setTimeout(() => setConfirmClear(false), 3500);
-      return;
-    }
-    clearTimeout(confirmTimer.current);
+    setShowClearDialog(false);
     clearOvertimeMutation.mutate();
   };
 
@@ -338,14 +331,11 @@ export function OvertimePanel({
             )}
             {canManage && (
               <button
-                onClick={handleClear}
-                className={cn(
-                  "flex items-center gap-1 text-[10px] transition-colors",
-                  confirmClear ? "text-destructive font-semibold" : "text-muted-foreground hover:text-destructive",
-                )}
+                onClick={() => setShowClearDialog(true)}
+                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors"
               >
                 <Trash2 size={11} />
-                {confirmClear ? "Confirm clear?" : "Clear log"}
+                Clear log
               </button>
             )}
           </div>
@@ -506,6 +496,26 @@ export function OvertimePanel({
           </div>
         </div>
       )}
+
+      <AlertDialog open={showClearDialog} onOpenChange={setShowClearDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear the overtime log?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes every overtime record and claim from the database
+              for everyone, including approved and paid entries.
+              <br /><br />
+              <strong>This action cannot be undone.</strong> Consider exporting a backup first.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex gap-2 justify-end">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleClear} className="bg-destructive hover:bg-destructive/90">
+              Clear log
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

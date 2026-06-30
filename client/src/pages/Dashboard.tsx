@@ -6,7 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Agent, Shift, OvertimeLog, Absence } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { RotateCcw, Lock, ChevronLeft, ChevronRight, Plane, AlertTriangle } from "lucide-react";
+import { RotateCcw, Lock, ChevronLeft, ChevronRight, Plane, AlertTriangle, CalendarRange } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminMode } from "@/hooks/use-admin-mode";
 import { useSoothingSounds } from "@/hooks/use-soothing-sounds";
@@ -119,6 +119,18 @@ export default function Dashboard() {
   const [focusHour] = useState<number | null>(initFocusHour);
   const [tooltipInfo,    setTooltipInfo]    = useState<TooltipInfo | null>(null);
   const [absenceModal,   setAbsenceModal]   = useState<{ presetType?: "sick" | "vacation" } | null>(null);
+  const [pendingBreakStartId, setPendingBreakStartId] = useState<number | null>(null);
+  const breakStartConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armBreakStartConfirm = (agentId: number) => {
+    if (breakStartConfirmTimer.current) clearTimeout(breakStartConfirmTimer.current);
+    setPendingBreakStartId(agentId);
+    breakStartConfirmTimer.current = setTimeout(() => setPendingBreakStartId(null), 3000);
+  };
+  const confirmBreakStart = (agentId: number) => {
+    if (breakStartConfirmTimer.current) clearTimeout(breakStartConfirmTimer.current);
+    setPendingBreakStartId(null);
+    breakStartMutation.mutate(agentId);
+  };
 
   const todayDateStr = new Date().toISOString().slice(0, 10);
   const isSelectedDateToday = selectedDate === todayDateStr;
@@ -212,17 +224,6 @@ export default function Dashboard() {
     },
     onError: (error) => {
       toast({ title: "Failed to end break", description: errorMessageFromUnknown(error), variant: "destructive" });
-    },
-  });
-
-  const bulkDeleteOTMutation = useMutation({
-    mutationFn: (ids: number[]) => apiRequest("DELETE", "/api/overtime", { ids }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/overtime"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/agent-logs"] });
-    },
-    onError: (error) => {
-      toast({ title: "Failed to delete overtime records", description: errorMessageFromUnknown(error), variant: "destructive" });
     },
   });
 
@@ -803,9 +804,6 @@ export default function Dashboard() {
     });
   };
 
-  // bulkDeleteOTMutation — wired up for future bulk OT delete action; keep the hook alive
-  void bulkDeleteOTMutation;
-
   return (
     <TooltipProvider>
       <div className="flex flex-col h-full overflow-hidden">
@@ -884,27 +882,36 @@ export default function Dashboard() {
                     : null;
                   const isOwnPill = agentSession?.agentId === agent.id;
                   const canClickPill = isAdmin || isOwnPill;
+                  const awaitingConfirm = !agentOnBreak && pendingBreakStartId === agent.id;
                   const pill = (
                     <div key={agent.id}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all duration-300",
                         agentOnBreak && "ring-1 ring-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.25)]",
+                        awaitingConfirm && "ring-2 ring-amber-400/80 shadow-[0_0_12px_rgba(251,191,36,0.4)]",
                         canClickPill && "cursor-pointer hover:brightness-125"
                       )}
                       style={{
-                        backgroundColor: agentOnBreak ? "rgba(251,191,36,0.12)" : agent.color + "20",
-                        border: `1px solid ${agentOnBreak ? "rgba(251,191,36,0.4)" : agent.color + "40"}`,
-                        color: agentOnBreak ? "rgb(252,211,77)" : agent.color,
+                        backgroundColor: awaitingConfirm ? "rgba(251,191,36,0.2)" : agentOnBreak ? "rgba(251,191,36,0.12)" : agent.color + "20",
+                        border: `1px solid ${awaitingConfirm ? "rgba(251,191,36,0.6)" : agentOnBreak ? "rgba(251,191,36,0.4)" : agent.color + "40"}`,
+                        color: awaitingConfirm ? "rgb(252,211,77)" : agentOnBreak ? "rgb(252,211,77)" : agent.color,
                       }}
                       onClick={canClickPill ? () => {
-                        if (agentOnBreak) breakEndMutation.mutate(agent.id);
-                        else breakStartMutation.mutate(agent.id);
+                        if (agentOnBreak) {
+                          breakEndMutation.mutate(agent.id);
+                        } else if (awaitingConfirm) {
+                          confirmBreakStart(agent.id);
+                        } else {
+                          armBreakStartConfirm(agent.id);
+                        }
                       } : undefined}
-                      title={canClickPill ? (agentOnBreak ? "Click to end break" : "Click to start break") : undefined}
+                      title={canClickPill
+                        ? agentOnBreak ? "Click to end break" : awaitingConfirm ? "Click again to confirm start break" : "Click to start break"
+                        : undefined}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full animate-pulse"
-                        style={{ backgroundColor: agentOnBreak ? "rgb(251,191,36)" : agent.color }} />
-                      {agent.name}
+                      <span className={cn("w-1.5 h-1.5 rounded-full animate-pulse")}
+                        style={{ backgroundColor: agentOnBreak || awaitingConfirm ? "rgb(251,191,36)" : agent.color }} />
+                      {awaitingConfirm ? "Start break?" : agent.name}
                       {agentOnBreak && breakElapsed !== null && (
                         <span className="opacity-80">☕ {breakElapsed}m</span>
                       )}
@@ -923,18 +930,24 @@ export default function Dashboard() {
                   const minsUntil = bShift?.breakStart != null
                     ? Math.max(0, Math.round((bShift.breakStart - utcHour) * 60))
                     : null;
+                  const canStart = isAdmin || agentSession?.agentId === agent.id;
+                  const awaitingConfirm = pendingBreakStartId === agent.id;
                   return (
                     <div key={agent.id}
                       className={cn(
                         "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-400 animate-pulse",
-                        (isAdmin || agentSession?.agentId === agent.id) && "cursor-pointer hover:bg-amber-500/20"
+                        awaitingConfirm && "ring-2 ring-amber-400/80 shadow-[0_0_12px_rgba(251,191,36,0.4)] bg-amber-500/20",
+                        canStart && "cursor-pointer hover:bg-amber-500/20"
                       )}
-                      onClick={(isAdmin || agentSession?.agentId === agent.id) ? () => breakStartMutation.mutate(agent.id) : undefined}
-                      title={(isAdmin || agentSession?.agentId === agent.id) ? "Click to start break now" : undefined}
+                      onClick={canStart ? () => {
+                        if (awaitingConfirm) confirmBreakStart(agent.id);
+                        else armBreakStartConfirm(agent.id);
+                      } : undefined}
+                      title={canStart ? (awaitingConfirm ? "Click again to confirm start break" : "Click to start break now") : undefined}
                     >
                       <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: agent.color }} />
-                      {agent.name}
-                      {minsUntil !== null && <span className="opacity-70">in {minsUntil}m</span>}
+                      {awaitingConfirm ? "Start break?" : agent.name}
+                      {!awaitingConfirm && minsUntil !== null && <span className="opacity-70">in {minsUntil}m</span>}
                     </div>
                   );
                 })}
@@ -1095,7 +1108,7 @@ export default function Dashboard() {
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        {isAdmin && (
+                        {isAdmin && dayTense !== "past" && (
                           <button
                             onClick={() => setAbsenceModal({})}
                             className="text-[10px] flex items-center gap-1 rounded-md border border-border/70 bg-card px-2 py-1 select-none text-muted-foreground hover-elevate active-elevate-2 transition-colors"
@@ -1105,7 +1118,7 @@ export default function Dashboard() {
                             Mark absent
                           </button>
                         )}
-                        {isAdmin && (
+                        {isAdmin && dayTense !== "past" && (
                           <button
                             onClick={handleUndoDay}
                             className="text-[10px] flex items-center gap-1 rounded-md border border-border/70 bg-card px-2 py-1 select-none text-muted-foreground hover-elevate active-elevate-2 transition-colors"
@@ -1118,7 +1131,23 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {agentSession && (() => {
+                    {/* Tense banner — the schedule is a living weekly template, so be
+                        explicit about whether you're looking at frozen history, the
+                        live day, or a projection that edits the recurring template. */}
+                    {dayTense === "past" && (
+                      <div className="mb-2 px-2.5 py-1.5 rounded-md bg-muted/50 border border-border text-[10px] text-muted-foreground flex items-center gap-1.5">
+                        <Lock size={10} className="shrink-0" />
+                        Viewing history — this day is read-only. What actually happened is recorded in the Activity log.
+                      </div>
+                    )}
+                    {dayTense === "future" && (isAdmin || agentSession) && (
+                      <div className="mb-2 px-2.5 py-1.5 rounded-md bg-sky-500/10 border border-sky-400/25 text-[10px] text-sky-300/90 flex items-center gap-1.5">
+                        <CalendarRange size={10} className="shrink-0" />
+                        Projected from the weekly schedule. Lever or break edits here change the recurring {selectedDayShortLabel} template — every future {selectedDayShortLabel}, not just this date.
+                      </div>
+                    )}
+
+                    {agentSession && isSelectedDateToday && (() => {
                       const own = agents.find(a => a.id === agentSession.agentId);
                       const isOnBreak = Boolean(own?.breakActiveAt);
                       const startedAt = own?.breakActiveAt ? new Date(own.breakActiveAt).getTime() : null;
@@ -1157,9 +1186,10 @@ export default function Dashboard() {
                         baseHours={baseHours}
                         overtimeHours={overtimeHours}
                         releasedHours={releasedHours}
-                        canEdit={canEditAgentLane(agent.id)}
+                        canEdit={canEditAgentLane(agent.id) && dayTense !== "past"}
                         utcHour={utcHour}
                         selectedDay={selectedDay}
+                        isToday={isSelectedDateToday}
                         playSoftClick={playSoftClick}
                         playDragWhoosh={playDragWhoosh}
                         absenceType={absenceType}
