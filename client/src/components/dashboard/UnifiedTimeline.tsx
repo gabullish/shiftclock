@@ -84,9 +84,9 @@ export function UnifiedTimeline({
 
   useEffect(() => {
     if (!scrollRef.current) return;
-    if (hasAppliedDeepLinkFocus.current) return;
 
-    if (scope === "multi" && focusHour != null && selectedDate) {
+    // Deep-link focus (clicking an OT record jumps to its slot) — apply once.
+    if (scope === "multi" && focusHour != null && selectedDate && !hasAppliedDeepLinkFocus.current) {
       const targetIndex = days?.findIndex((d) => d.date === selectedDate) ?? -1;
       if (targetIndex >= 0) {
         const focusPx = (targetIndex * 24 + focusHour) * PX_PER_HOUR;
@@ -97,19 +97,24 @@ export function UnifiedTimeline({
       }
     }
 
-    if (scope === "multi") {
-      const anchorIndex = todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex);
-      const nowPx = (anchorIndex * 24 + utcHour) * PX_PER_HOUR;
-      const w     = scrollRef.current.clientWidth;
-      scrollRef.current.scrollLeft = Math.max(0, nowPx - w / 2 + LABEL_W);
-    } else {
-      const nowPx = utcHour * PX_PER_HOUR;
-      const w     = scrollRef.current.clientWidth - LABEL_W;
-      if (nowPx > w * 0.6) {
-        scrollRef.current.scrollLeft = Math.max(0, nowPx - w * 0.3);
+    // Otherwise centre on "now" every time we enter/return to this scope. Defer
+    // a frame when the container hasn't been laid out yet (clientWidth 0) so the
+    // 14-day view lands on the present moment instead of the far-left edge.
+    const centre = () => {
+      const node = scrollRef.current;
+      if (!node) return;
+      if (scope === "multi") {
+        const anchorIndex = todayIndex >= 0 ? todayIndex : Math.max(0, selectedIndex);
+        const nowPx = (anchorIndex * 24 + utcHour) * PX_PER_HOUR;
+        node.scrollLeft = Math.max(0, nowPx - node.clientWidth / 2 + LABEL_W);
+      } else {
+        const nowPx = utcHour * PX_PER_HOUR;
+        const w     = node.clientWidth - LABEL_W;
+        if (nowPx > w * 0.6) node.scrollLeft = Math.max(0, nowPx - w * 0.3);
       }
-    }
-    hasAppliedDeepLinkFocus.current = true;
+    };
+    if (scrollRef.current.clientWidth === 0) requestAnimationFrame(centre);
+    else centre();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, focusHour, selectedDate]);
 
