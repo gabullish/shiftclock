@@ -11,8 +11,10 @@ import {
   CheckCircle,
   ChevronDown,
   Clock,
+  Copy,
   DollarSign,
   Download,
+  FileText,
   MoreHorizontal,
   Trash2,
   Undo2,
@@ -22,6 +24,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 import { formatUtcHour, isCoverageClaim } from "@/lib/shiftUtils";
 import { agentAuthHeaders } from "@/lib/agentAccess";
@@ -34,6 +37,49 @@ const STATUS_CONFIG = {
 } as const;
 
 const ALL_STATUSES = ["pending", "approved", "paid", "denied"] as const;
+
+// ── Invoice helper ───────────────────────────────────────────────────────────
+// Builds a copy-paste-friendly, always-current overtime summary for one agent.
+// Paid items (settled, invoice-ready) get ✅; approved-but-not-yet-paid get ⚠️.
+// Reads live records, so it reflects Jakov's latest status changes immediately.
+function recHours(r: OvertimeLog): number {
+  return r.overtimeHours > 0 ? r.overtimeHours : r.releasedHours;
+}
+
+function invoiceLine(r: OvertimeLog): string {
+  const emoji = r.status === "paid" ? "✅" : "⚠️";
+  const slot =
+    r.coverStartUtc != null && r.coverEndUtc != null
+      ? `${formatUtcHour(r.coverStartUtc)}–${formatUtcHour(r.coverEndUtc)} UTC · `
+      : "";
+  return `${emoji} ${r.date} · ${slot}${recHours(r).toFixed(1)}h`;
+}
+
+function buildOvertimeInvoice(agentName: string, agentRecords: OvertimeLog[]): string {
+  const items = agentRecords
+    .filter((r) => r.status === "paid" || r.status === "approved")
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.coverStartUtc ?? 0) - (b.coverStartUtc ?? 0));
+
+  if (items.length === 0) {
+    return `Overtime — ${agentName}\n\nNo approved or paid overtime yet.`;
+  }
+
+  const paid = items.filter((r) => r.status === "paid");
+  const approved = items.filter((r) => r.status === "approved");
+  const sum = (rs: OvertimeLog[]) => rs.reduce((t, r) => t + recHours(r), 0);
+
+  let out = `Overtime — ${agentName}\n\n${items.map(invoiceLine).join("\n")}\n`;
+  out += `\nTotal paid: ${sum(paid).toFixed(1)}h`;
+  if (approved.length) {
+    out += `\nTotal approved (pending payment): ${sum(approved).toFixed(1)}h`;
+    out += `\n\n* ⚠️ items are approved but not yet marked paid — ping Jakov to get them finalized.`;
+  }
+  return out;
+}
+
+function hasInvoiceableOvertime(records: OvertimeLog[], agentId: number): boolean {
+  return records.some((r) => r.agentId === agentId && (r.status === "paid" || r.status === "approved"));
+}
 
 export function OvertimePanel({
   canManage,
@@ -93,6 +139,10 @@ export function OvertimePanel({
   const agentMap = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const importFileRef = useRef<HTMLInputElement>(null);
   const [showClearDialog, setShowClearDialog] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  // null = manager mode (pick any agent); a number = locked to that agent (self-service)
+  const [invoiceLockedId, setInvoiceLockedId] = useState<number | null>(null);
+  const ownInvoiceable = agentSession ? hasInvoiceableOvertime(records, agentSession.agentId) : false;
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => apiRequest("PATCH", `/api/overtime/${id}`, { status }),
@@ -321,6 +371,26 @@ export function OvertimePanel({
             >
               <Download size={11} /> Export
             </button>
+            {/* Agent self-service: grab an invoice-ready list of your OT */}
+            {agentSession && ownInvoiceable && (
+              <button
+                onClick={() => { setInvoiceLockedId(agentSession.agentId); setInvoiceOpen(true); }}
+                className="flex items-center gap-1 text-[10px] font-medium text-primary hover:text-primary/80 transition-colors"
+                title="Copy your overtime for your invoice"
+              >
+                <FileText size={11} /> Invoice text
+              </button>
+            )}
+            {/* Manager: generate the same invoice text for any agent */}
+            {canManage && (
+              <button
+                onClick={() => { setInvoiceLockedId(null); setInvoiceOpen(true); }}
+                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                title="Generate an agent's overtime invoice text"
+              >
+                <FileText size={11} /> Invoice text
+              </button>
+            )}
             {canManage && (
               <button
                 onClick={() => importFileRef.current?.click()}
@@ -516,7 +586,103 @@ export function OvertimePanel({
           </div>
         </AlertDialogContent>
       </AlertDialog>
+
+      <OvertimeInvoiceDialog
+        open={invoiceOpen}
+        onOpenChange={setInvoiceOpen}
+        records={records}
+        agents={agents}
+        lockedAgentId={invoiceLockedId}
+      />
     </div>
+  );
+}
+
+function OvertimeInvoiceDialog({
+  open, onOpenChange, records, agents, lockedAgentId,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  records: OvertimeLog[];
+  agents: Agent[];
+  lockedAgentId: number | null;
+}) {
+  // Agents who actually have something to invoice — used to default the picker.
+  const invoiceableAgents = useMemo(
+    () => agents.filter((a) => hasInvoiceableOvertime(records, a.id)),
+    [agents, records],
+  );
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedId(lockedAgentId ?? invoiceableAgents[0]?.id ?? agents[0]?.id ?? null);
+    setCopied(false);
+  }, [open, lockedAgentId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const agent = agents.find((a) => a.id === selectedId) ?? null;
+  // Recomputed from live `records` on every render, so status changes reflect instantly.
+  const text = agent ? buildOvertimeInvoice(agent.name, records.filter((r) => r.agentId === agent.id)) : "";
+  const locked = lockedAgentId != null;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      toast({ title: "Couldn't copy", description: "Select the text and copy manually.", variant: "destructive" });
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <FileText size={16} className="text-primary" />
+            Overtime for your invoice
+          </DialogTitle>
+        </DialogHeader>
+
+        {/* Manager picks whose overtime to summarize; agents are locked to themselves. */}
+        {!locked && (
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground shrink-0">Agent</label>
+            <select
+              value={selectedId ?? ""}
+              onChange={(e) => setSelectedId(Number(e.target.value))}
+              className="flex-1 text-sm rounded-md border border-border bg-card px-2 py-1.5"
+            >
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}{hasInvoiceableOvertime(records, a.id) ? "" : " — no overtime"}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <pre className="mt-1 max-h-[45vh] overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed font-mono text-foreground/90">
+          {text}
+        </pre>
+
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={copy}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors",
+              copied
+                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-400"
+                : "border-primary/30 bg-primary/10 text-primary hover:bg-primary/20",
+            )}
+          >
+            {copied ? <><CheckCircle size={12} /> Copied!</> : <><Copy size={12} /> Copy to clipboard</>}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
