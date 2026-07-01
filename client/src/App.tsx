@@ -13,6 +13,7 @@ import Profiles from "./pages/Profiles";
 import ActivityLog from "./pages/ActivityLog";
 import WorldView from "./components/world/WorldView";
 import SupportCases from "./pages/SupportCases";
+import PoliceHour from "./components/PoliceHour";
 import NotFound from "./pages/not-found";
 import Sidebar from "./components/Sidebar";
 import { ConnectionBanner } from "@/components/ConnectionBanner";
@@ -405,6 +406,7 @@ export default function App() {
         </Router>
       </AdminProvider>
       <Toaster />
+      <PoliceHour />
     </AgentSessionContext.Provider>
   );
 }

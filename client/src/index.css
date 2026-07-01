@@ -195,6 +195,23 @@ html { color-scheme: dark; }
   }
 }
 
+/* 🚓 Police Hour — flashing cruiser lights + a gently bobbing speech bubble. */
+@keyframes police-flash-r {
+  0%, 49%  { background-color: rgba(239, 68, 68, 0.55); opacity: 0.9; }
+  50%, 100%{ background-color: rgba(239, 68, 68, 0.05); opacity: 0.3; }
+}
+@keyframes police-flash-b {
+  0%, 49%  { background-color: rgba(59, 130, 246, 0.05); opacity: 0.3; }
+  50%, 100%{ background-color: rgba(59, 130, 246, 0.55); opacity: 0.9; }
+}
+@keyframes police-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+.police-flash-red  { animation: police-flash-r 0.7s steps(1, end) infinite; }
+.police-flash-blue { animation: police-flash-b 0.7s steps(1, end) infinite; }
+.police-bob        { animation: police-bob 2s ease-in-out infinite; }
+
 /* Respect users who prefer reduced motion — collapse transitions/animations so
    the UI stays snappy and usable without motion. Drag still works (it's not a
    CSS animation), just without the eased follow-through. */
